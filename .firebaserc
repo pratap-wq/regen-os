@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "regen-os"
-  }
+    "default": "regen-os",
+    "staging": "regen-os"
+  },
+  "targets": {},
+  "etags": {}
 }

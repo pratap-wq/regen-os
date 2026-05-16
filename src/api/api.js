@@ -1,6 +1,7 @@
 const API_URL = import.meta.env.VITE_REGEN_OS_API_URL;
 
-export async function apiCall(payload) {
+export async function apiCall(payload = {}) {
+
   const params = new URLSearchParams();
 
   Object.entries(payload).forEach(([key, value]) => {
@@ -9,7 +10,8 @@ export async function apiCall(payload) {
 
   const url = `${API_URL}?${params.toString()}`;
 
-  window.open(url, "_blank");
+  const res = await fetch(url);
 
-  return { ok: true };
+  return await res.json();
+
 }

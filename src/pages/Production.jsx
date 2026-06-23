@@ -60,13 +60,17 @@ export default function Production() {
   }, []);
 
   async function loadMasters() {
-    const [machineRes, catRes] = await Promise.all([
-      apiCall({ fn: "machines.list" }),
-      apiCall({ fn: "categories.list" }),
-    ]);
+    try {
+      const [machineRes, catRes] = await Promise.all([
+        apiCall({ fn: "machines.list" }),
+        apiCall({ fn: "categories.list" }),
+      ]);
 
-    setMachines(machineRes.rows || []);
-    setCategories(catRes.rows || []);
+      setMachines(machineRes.rows || []);
+      setCategories(catRes.rows || []);
+    } catch (err) {
+      setMessage(err.message);
+    }
   }
 
   function n(v) {
@@ -94,9 +98,7 @@ export default function Production() {
       : "";
 
   const washVariance =
-    n(form.washInputKg) -
-    n(form.washedOutputKg) -
-    washLoss;
+    n(form.washInputKg) - n(form.washedOutputKg) - washLoss;
 
   const sorterRecoverable =
     n(form.whiteSortedKg) +
@@ -110,18 +112,15 @@ export default function Production() {
       : "";
 
   const sorterVariance =
-    n(form.sorterInputKg) -
-    sorterRecoverable -
-    n(form.sorterRejectKg);
+    n(form.sorterInputKg) - sorterRecoverable - n(form.sorterRejectKg);
 
   const overallQualityRating = (
-    (
-      n(form.visualCleanlinessRating) +
+    (n(form.visualCleanlinessRating) +
       n(form.moistureRating) +
       n(form.odourRating) +
       n(form.blackSpecsRating) +
-      n(form.colorConsistencyRating)
-    ) / 5
+      n(form.colorConsistencyRating)) /
+    5
   ).toFixed(2);
 
   function commonQualityPayload() {
@@ -213,7 +212,7 @@ export default function Production() {
       }
 
       setMessage(
-        "Production saved successfully. Extrusion feed must be entered separately in Extrusion Batches."
+        "Production saved. Enter extruder feed, additional material, recovery/rework and FG output in Extrusion Batches."
       );
 
       setForm(blank);
@@ -229,26 +228,13 @@ export default function Production() {
       <h1 style={{ color: "#0f766e", marginBottom: 8 }}>Production Entry</h1>
 
       <div style={infoBox}>
-        This screen records Washline, Colour Sorting, QC and downtime only.
-        Extruder feed composition, recovery material, rework, additives and FG
-        output must be entered in <b>Extrusion Batches</b>.
+        This screen records only <b>Washline</b>, <b>Colour Sorting</b>, QC and
+        downtime. Extruder feed composition, additional material, recovery,
+        rework, additives and FG output must be entered in{" "}
+        <b>Extrusion Batches</b>.
       </div>
 
-      {message && (
-        <div
-          style={{
-            padding: 12,
-            marginBottom: 15,
-            borderRadius: 8,
-            background: "#ecfdf5",
-            border: "1px solid #86efac",
-            color: "#166534",
-            fontWeight: 700,
-          }}
-        >
-          {message}
-        </div>
-      )}
+      {message && <div style={messageBox}>{message}</div>}
 
       <form onSubmit={submit}>
         <FormSection title="Batch Information">
@@ -532,19 +518,7 @@ export default function Production() {
         </FormSection>
 
         <div style={{ marginTop: 25 }}>
-          <button
-            type="submit"
-            disabled={saving}
-            style={{
-              background: "#0f766e",
-              color: "white",
-              border: "none",
-              padding: "12px 24px",
-              borderRadius: 8,
-              fontWeight: 700,
-              cursor: "pointer",
-            }}
-          >
+          <button type="submit" disabled={saving} style={saveButton}>
             {saving ? "Saving..." : "Save Production Entry"}
           </button>
         </div>
@@ -559,6 +533,7 @@ function Field(props) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <label style={labelStyle}>{label}</label>
+
       <input
         {...inputProps}
         readOnly={readOnly}
@@ -578,16 +553,12 @@ function TextAreaField({ label, name, value, onChange }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <label style={labelStyle}>{label}</label>
+
       <textarea
         name={name}
         value={value}
         onChange={onChange}
-        style={{
-          padding: 8,
-          border: "1px solid #d1d5db",
-          borderRadius: 6,
-          minHeight: 80,
-        }}
+        style={textareaStyle}
       />
     </div>
   );
@@ -598,16 +569,7 @@ function SelectField({ label, name, value, onChange, options }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <label style={labelStyle}>{label}</label>
 
-      <select
-        name={name}
-        value={value}
-        onChange={onChange}
-        style={{
-          padding: 8,
-          border: "1px solid #d1d5db",
-          borderRadius: 6,
-        }}
-      >
+      <select name={name} value={value} onChange={onChange} style={selectStyle}>
         <option value="">Select</option>
 
         {(options || []).map((o) => (
@@ -634,4 +596,37 @@ const infoBox = {
   borderRadius: 10,
   marginBottom: 16,
   fontSize: 13,
+};
+
+const messageBox = {
+  padding: 12,
+  marginBottom: 15,
+  borderRadius: 8,
+  background: "#ecfdf5",
+  border: "1px solid #86efac",
+  color: "#166534",
+  fontWeight: 700,
+};
+
+const saveButton = {
+  background: "#0f766e",
+  color: "white",
+  border: "none",
+  padding: "12px 24px",
+  borderRadius: 8,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const selectStyle = {
+  padding: 8,
+  border: "1px solid #d1d5db",
+  borderRadius: 6,
+};
+
+const textareaStyle = {
+  padding: 8,
+  border: "1px solid #d1d5db",
+  borderRadius: 6,
+  minHeight: 80,
 };

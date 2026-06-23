@@ -17,12 +17,9 @@ export default function Production() {
     washSupervisorName: "",
     sorterOperatorName: "",
     sorterSupervisorName: "",
-    extruderOperatorName: "",
-    extruderSupervisorName: "",
 
     machineWash: "",
     machineSorter: "",
-    machineExtruder: "",
 
     washInputMaterial: "",
     washInputKg: "",
@@ -42,21 +39,6 @@ export default function Production() {
     whiteGreyKg: "",
     sorterRejectKg: "",
 
-    primaryMaterial: "",
-    primaryMaterialKg: "",
-    recoveryMaterial: "",
-    recoveryMaterialKg: "",
-    reworkMaterial: "",
-    reworkMaterialKg: "",
-
-    fgOutputKg: "",
-    lumpsKg: "",
-    reworkKg: "",
-    meshRejectKg: "",
-    compactorDustKg: "",
-    floorSpillageKg: "",
-    productionGrade: "",
-
     visualCleanlinessRating: "5",
     moistureRating: "5",
     odourRating: "5",
@@ -66,39 +48,6 @@ export default function Production() {
 
     remarks: "",
   };
-
-  const primaryMaterials = [
-    "White Flakes",
-    "Milky Flakes",
-    "Colour Flakes",
-    "Grey Flakes",
-    "Commodity Flakes",
-    "All Mix Flakes",
-    "White Sorted Flakes",
-    "Colour Sorted Flakes",
-    "Imported Washed Flakes",
-    "Imported Sorted Flakes",
-  ];
-
-  const recoveryMaterials = [
-    "Flotation Tank Regrinds",
-    "Sink Material Regrinds",
-    "Float Material Regrinds",
-    "Colour Sorter Reject Regrinds",
-    "Commodity Regrinds",
-    "Mixed Recovery Material",
-  ];
-
-  const reworkMaterials = [
-    "Extruder Lumps",
-    "Startup Purging",
-    "Screen Change Rejects",
-    "Rework White Granules",
-    "Rework Milky Granules",
-    "Rework Colour Granules",
-    "Rework Grey Granules",
-    "Mixed Reprocess Material",
-  ];
 
   const [form, setForm] = useState(blank);
   const [machines, setMachines] = useState([]);
@@ -131,11 +80,6 @@ export default function Production() {
     });
   }
 
-  const washRecovery =
-    n(form.washInputKg) > 0
-      ? ((n(form.washedOutputKg) / n(form.washInputKg)) * 100).toFixed(2)
-      : "";
-
   const washLoss =
     n(form.dustKg) +
     n(form.sinkMaterialKg) +
@@ -143,6 +87,11 @@ export default function Production() {
     n(form.wrappersKg) +
     n(form.sludgeKg) +
     n(form.raffiaKg);
+
+  const washRecovery =
+    n(form.washInputKg) > 0
+      ? ((n(form.washedOutputKg) / n(form.washInputKg)) * 100).toFixed(2)
+      : "";
 
   const washVariance =
     n(form.washInputKg) -
@@ -164,37 +113,6 @@ export default function Production() {
     n(form.sorterInputKg) -
     sorterRecoverable -
     n(form.sorterRejectKg);
-
-  const totalExtruderInputKg =
-    n(form.primaryMaterialKg) +
-    n(form.recoveryMaterialKg) +
-    n(form.reworkMaterialKg);
-
-  const extruderLoss =
-    n(form.lumpsKg) +
-    n(form.reworkKg) +
-    n(form.meshRejectKg) +
-    n(form.compactorDustKg) +
-    n(form.floorSpillageKg);
-
-  const extruderRecovery =
-    totalExtruderInputKg > 0
-      ? ((n(form.fgOutputKg) / totalExtruderInputKg) * 100).toFixed(2)
-      : "";
-
-  const extruderVariance =
-    totalExtruderInputKg -
-    n(form.fgOutputKg) -
-    extruderLoss;
-
-  const recoveryMaterialPercent =
-    totalExtruderInputKg > 0
-      ? (
-          ((n(form.recoveryMaterialKg) + n(form.reworkMaterialKg)) /
-            totalExtruderInputKg) *
-          100
-        ).toFixed(2)
-      : "";
 
   const overallQualityRating = (
     (
@@ -221,24 +139,6 @@ export default function Production() {
     };
   }
 
-  function extruderMaterialText() {
-    const parts = [];
-
-    if (form.primaryMaterial) {
-      parts.push(`${form.primaryMaterial}: ${form.primaryMaterialKg || 0} Kg`);
-    }
-
-    if (form.recoveryMaterial) {
-      parts.push(`${form.recoveryMaterial}: ${form.recoveryMaterialKg || 0} Kg`);
-    }
-
-    if (form.reworkMaterial) {
-      parts.push(`${form.reworkMaterial}: ${form.reworkMaterialKg || 0} Kg`);
-    }
-
-    return parts.join(" + ");
-  }
-
   async function submit(e) {
     e.preventDefault();
     setSaving(true);
@@ -246,7 +146,6 @@ export default function Production() {
 
     try {
       let washBatchId = "";
-      let sortingBatchId = "";
 
       if (n(form.washInputKg) > 0) {
         const wash = await apiCall({
@@ -264,9 +163,13 @@ export default function Production() {
           sludgeKg: form.sludgeKg,
           raffiaKg: form.raffiaKg,
           estimatedRecoveryPercent: washRecovery,
+          washVarianceKg: washVariance,
           sortingRequired: n(form.sorterInputKg) > 0 ? "YES" : "NO",
           nextProcess: n(form.sorterInputKg) > 0 ? "Colour Sorting" : "Extrusion",
-          status: n(form.sorterInputKg) > 0 ? "READY_FOR_SORTING" : "WASH_COMPLETED",
+          status:
+            n(form.sorterInputKg) > 0
+              ? "READY_FOR_SORTING"
+              : "WASH_COMPLETED",
           operatorName: form.washOperatorName,
           supervisorName: form.washSupervisorName,
           remarks: form.remarks,
@@ -278,7 +181,7 @@ export default function Production() {
       }
 
       if (n(form.sorterInputKg) > 0) {
-        const sorting = await apiCall({
+        await apiCall({
           fn: "sorting.add",
           sourceWashBatchId: washBatchId,
           date: form.date,
@@ -292,6 +195,7 @@ export default function Production() {
           commodityKg: form.commodityKg,
           whiteGreyKg: form.whiteGreyKg,
           rejectedQtyKg: form.sorterRejectKg,
+          sorterVarianceKg: sorterVariance,
           recoveryPercent: sorterRecovery,
           status: "READY_FOR_EXTRUSION",
           nextProcess: "Extrusion",
@@ -301,46 +205,17 @@ export default function Production() {
           createdBy: "Production Screen",
           ...commonQualityPayload(),
         });
-
-        sortingBatchId = sorting.sortingBatchId || "";
       }
 
-      if (totalExtruderInputKg > 0) {
-        await apiCall({
-          fn: "extrusion.add",
-          sourceType: sortingBatchId ? "SORTING" : "DIRECT",
-          sourceSortingBatchId: sortingBatchId,
-          date: form.date,
-          shift: form.shift,
-          machine: form.machineExtruder,
-          inputMaterial: extruderMaterialText(),
-          inputWeightKg: totalExtruderInputKg,
-          primaryMaterial: form.primaryMaterial,
-          primaryMaterialKg: form.primaryMaterialKg,
-          recoveryMaterial: form.recoveryMaterial,
-          recoveryMaterialKg: form.recoveryMaterialKg,
-          reworkMaterial: form.reworkMaterial,
-          reworkMaterialKg: form.reworkMaterialKg,
-          recoveryMaterialPercent,
-          fgOutputKg: form.fgOutputKg,
-          lumpsKg: form.lumpsKg,
-          reworkGranulesKg: form.reworkKg,
-          meshRejectKg: form.meshRejectKg,
-          dustKg: form.compactorDustKg,
-          floorSpillageKg: form.floorSpillageKg,
-          productionGrade: form.productionGrade,
-          recoveryPercent: extruderRecovery,
-          status: "READY_FOR_DISPATCH",
-          nextProcess: "Dispatch",
-          operatorName: form.extruderOperatorName,
-          supervisorName: form.extruderSupervisorName,
-          remarks: form.remarks,
-          createdBy: "Production Screen",
-          ...commonQualityPayload(),
-        });
+      if (n(form.washInputKg) <= 0 && n(form.sorterInputKg) <= 0) {
+        setMessage("Enter wash or sorting data before saving.");
+        return;
       }
 
-      setMessage("Production saved successfully.");
+      setMessage(
+        "Production saved successfully. Extrusion feed must be entered separately in Extrusion Batches."
+      );
+
       setForm(blank);
     } catch (err) {
       setMessage(err.message);
@@ -348,11 +223,16 @@ export default function Production() {
       setSaving(false);
     }
   }
+
   return (
     <div style={{ padding: 20 }}>
-      <h1 style={{ color: "#0f766e", marginBottom: 20 }}>
-        Production Entry
-      </h1>
+      <h1 style={{ color: "#0f766e", marginBottom: 8 }}>Production Entry</h1>
+
+      <div style={infoBox}>
+        This screen records Washline, Colour Sorting, QC and downtime only.
+        Extruder feed composition, recovery material, rework, additives and FG
+        output must be entered in <b>Extrusion Batches</b>.
+      </div>
 
       {message && (
         <div
@@ -362,6 +242,8 @@ export default function Production() {
             borderRadius: 8,
             background: "#ecfdf5",
             border: "1px solid #86efac",
+            color: "#166534",
+            fontWeight: 700,
           }}
         >
           {message}
@@ -426,7 +308,7 @@ export default function Production() {
           />
 
           <Field
-            label="Output Kg"
+            label="Washed Output Kg"
             name="washedOutputKg"
             value={form.washedOutputKg}
             onChange={onChange}
@@ -440,15 +322,45 @@ export default function Production() {
           />
 
           <Field
-            label="Sink Kg"
+            label="Sink Material Kg"
             name="sinkMaterialKg"
             value={form.sinkMaterialKg}
             onChange={onChange}
           />
 
           <Field
-            label="Recovery %"
-            value={washRecovery}
+            label="Micro Plastic Kg"
+            name="microPlasticKg"
+            value={form.microPlasticKg}
+            onChange={onChange}
+          />
+
+          <Field
+            label="Wrappers Kg"
+            name="wrappersKg"
+            value={form.wrappersKg}
+            onChange={onChange}
+          />
+
+          <Field
+            label="Sludge Kg"
+            name="sludgeKg"
+            value={form.sludgeKg}
+            onChange={onChange}
+          />
+
+          <Field
+            label="Raffia Kg"
+            name="raffiaKg"
+            value={form.raffiaKg}
+            onChange={onChange}
+          />
+
+          <Field label="Wash Recovery %" value={washRecovery} readOnly />
+
+          <Field
+            label="Wash Variance Kg"
+            value={washVariance.toFixed(2)}
             readOnly
           />
         </FormSection>
@@ -474,6 +386,13 @@ export default function Production() {
             value={form.machineSorter}
             onChange={onChange}
             options={machines.map((m) => m.machineName)}
+          />
+
+          <Field
+            label="Sorter Input Material"
+            name="sorterInputMaterial"
+            value={form.sorterInputMaterial}
+            onChange={onChange}
           />
 
           <Field
@@ -518,126 +437,96 @@ export default function Production() {
             onChange={onChange}
           />
 
+          <Field label="Sorter Recovery %" value={sorterRecovery} readOnly />
+
           <Field
-            label="Recovery %"
-            value={sorterRecovery}
+            label="Sorter Variance Kg"
+            value={sorterVariance.toFixed(2)}
             readOnly
           />
         </FormSection>
 
-        <FormSection title="Extruder Feed Composition">
+        <FormSection title="QC Ratings">
           <SelectField
-            label="Primary Material"
-            name="primaryMaterial"
-            value={form.primaryMaterial}
+            label="Visual Cleanliness"
+            name="visualCleanlinessRating"
+            value={form.visualCleanlinessRating}
             onChange={onChange}
-            options={primaryMaterials}
-          />
-
-          <Field
-            label="Primary Kg"
-            name="primaryMaterialKg"
-            value={form.primaryMaterialKg}
-            onChange={onChange}
+            options={["1", "2", "3", "4", "5"]}
           />
 
           <SelectField
-            label="Recovery Material"
-            name="recoveryMaterial"
-            value={form.recoveryMaterial}
+            label="Moisture"
+            name="moistureRating"
+            value={form.moistureRating}
             onChange={onChange}
-            options={recoveryMaterials}
-          />
-
-          <Field
-            label="Recovery Kg"
-            name="recoveryMaterialKg"
-            value={form.recoveryMaterialKg}
-            onChange={onChange}
+            options={["1", "2", "3", "4", "5"]}
           />
 
           <SelectField
-            label="Rework Material"
-            name="reworkMaterial"
-            value={form.reworkMaterial}
+            label="Odour"
+            name="odourRating"
+            value={form.odourRating}
             onChange={onChange}
-            options={reworkMaterials}
+            options={["1", "2", "3", "4", "5"]}
+          />
+
+          <SelectField
+            label="Black Specs"
+            name="blackSpecsRating"
+            value={form.blackSpecsRating}
+            onChange={onChange}
+            options={["1", "2", "3", "4", "5"]}
+          />
+
+          <SelectField
+            label="Color Consistency"
+            name="colorConsistencyRating"
+            value={form.colorConsistencyRating}
+            onChange={onChange}
+            options={["1", "2", "3", "4", "5"]}
           />
 
           <Field
-            label="Rework Kg"
-            name="reworkMaterialKg"
-            value={form.reworkMaterialKg}
+            label="Overall Quality Rating"
+            value={overallQualityRating}
+            readOnly
+          />
+
+          <TextAreaField
+            label="QC Remarks"
+            name="qcRemarks"
+            value={form.qcRemarks}
             onChange={onChange}
           />
         </FormSection>
 
-        <FormSection title="Extrusion">
+        <FormSection title="Downtime & Remarks">
           <Field
-            label="Operator"
-            name="extruderOperatorName"
-            value={form.extruderOperatorName}
+            label="Machine Running Hours"
+            name="machineRunningHours"
+            value={form.machineRunningHours}
             onChange={onChange}
           />
 
           <Field
-            label="Supervisor"
-            name="extruderSupervisorName"
-            value={form.extruderSupervisorName}
+            label="Downtime Hours"
+            name="downtimeHours"
+            value={form.downtimeHours}
             onChange={onChange}
           />
 
-          <SelectField
-            label="Machine"
-            name="machineExtruder"
-            value={form.machineExtruder}
-            onChange={onChange}
-            options={machines.map((m) => m.machineName)}
-          />
-
-          <Field
-            label="Total Feed Kg"
-            value={totalExtruderInputKg}
-            readOnly
-          />
-
-          <Field
-            label="FG Output Kg"
-            name="fgOutputKg"
-            value={form.fgOutputKg}
+          <TextAreaField
+            label="Downtime Reason"
+            name="downtimeReason"
+            value={form.downtimeReason}
             onChange={onChange}
           />
 
-          <Field
-            label="Lumps Kg"
-            name="lumpsKg"
-            value={form.lumpsKg}
-            onChange={onChange}
-          />
-
-          <Field
-            label="Rework Kg"
-            name="reworkKg"
-            value={form.reworkKg}
-            onChange={onChange}
-          />
-
-          <Field
-            label="Recovery %"
-            value={extruderRecovery}
-            readOnly
-          />
-
-          <Field
-            label="Reuse %"
-            value={recoveryMaterialPercent}
-            readOnly
-          />
-
-          <Field
-            label="Grade"
-            name="productionGrade"
-            value={form.productionGrade}
+          <TextAreaField
+            label="Remarks"
+            name="remarks"
+            value={form.remarks}
             onChange={onChange}
           />
         </FormSection>
@@ -656,7 +545,7 @@ export default function Production() {
               cursor: "pointer",
             }}
           >
-            {saving ? "Saving..." : "Save Production Batch"}
+            {saving ? "Saving..." : "Save Production Entry"}
           </button>
         </div>
       </form>
@@ -665,31 +554,49 @@ export default function Production() {
 }
 
 function Field(props) {
+  const { label, readOnly, ...inputProps } = props;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <label>{props.label}</label>
+      <label style={labelStyle}>{label}</label>
       <input
-        {...props}
+        {...inputProps}
+        readOnly={readOnly}
         style={{
           padding: 8,
           border: "1px solid #d1d5db",
           borderRadius: 6,
+          background: readOnly ? "#f8fafc" : "white",
+          fontWeight: readOnly ? 700 : 400,
         }}
       />
     </div>
   );
 }
 
-function SelectField({
-  label,
-  name,
-  value,
-  onChange,
-  options,
-}) {
+function TextAreaField({ label, name, value, onChange }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <label>{label}</label>
+      <label style={labelStyle}>{label}</label>
+      <textarea
+        name={name}
+        value={value}
+        onChange={onChange}
+        style={{
+          padding: 8,
+          border: "1px solid #d1d5db",
+          borderRadius: 6,
+          minHeight: 80,
+        }}
+      />
+    </div>
+  );
+}
+
+function SelectField({ label, name, value, onChange, options }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <label style={labelStyle}>{label}</label>
 
       <select
         name={name}
@@ -712,3 +619,19 @@ function SelectField({
     </div>
   );
 }
+
+const labelStyle = {
+  fontSize: 12,
+  fontWeight: 700,
+  color: "#334155",
+};
+
+const infoBox = {
+  background: "#ecfeff",
+  color: "#155e75",
+  border: "1px solid #a5f3fc",
+  padding: 12,
+  borderRadius: 10,
+  marginBottom: 16,
+  fontSize: 13,
+};

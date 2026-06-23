@@ -1,947 +1,709 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
-import { validateDispatch } from "../lib/workflow";
 
 import DataTable from "../components/DataTable";
 import FormSection from "../components/FormSection";
 
 export default function Dispatch() {
+  const today = new Date().toISOString().split("T")[0];
 
-  const [rows, setRows] =
-    useState([]);
-
-  const [
-    extrusionRows,
-    setExtrusionRows,
-  ] = useState([]);
-
-  const [status, setStatus] =
-    useState("");
-
-  const [editingId, setEditingId] =
-    useState(null);
-
-  const today =
-    new Date()
-      .toISOString()
-      .split("T")[0];
-
-  const blankForm = {
-
-    dispatchId: "",
-
-    sourceExtrusionBatchId:
-      "",
-
-    sourceSupplier: "",
-
-    availableFGQty: "",
-
-    date: today,
-
-    customerName: "",
-
-    invoiceNo: "",
-
-    vehicleNo: "",
-
-    driverName: "",
-
-    dispatchStatus:
-      "DISPATCHED",
-
-    grade: "",
-
+  const blankLine = {
+    sourceExtrusionBatchId: "",
     lotNo: "",
-
-    quantityKg: "",
-
-    noOfBags: "",
-
-    ratePerKg: "",
-
-    dispatchLocation: "",
-
+    grade: "",
+    availableKg: "",
+    dispatchQtyKg: "",
     remarks: "",
-
   };
 
-  const [form, setForm] =
-    useState(blankForm);
+  const blankForm = {
+    dispatchId: "",
+    date: today,
+    customerName: "Mold-Tek",
+    customerUnit: "",
+    invoiceNo: "",
+    vehicleNo: "",
+    driverName: "",
+    dispatchStatus: "DISPATCHED",
+    ratePerKg: "",
+    noOfBags: "",
+    dispatchLocation: "",
+    remarks: "",
+    dispatchLines: JSON.stringify([blankLine]),
+    quantityKg: "",
+    grade: "",
+    lotNo: "",
+    sourceExtrusionBatchId: "",
+  };
+
+  const [rows, setRows] = useState([]);
+  const [extrusionRows, setExtrusionRows] = useState([]);
+  const [status, setStatus] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(blankForm);
+  const [dispatchLines, setDispatchLines] = useState([blankLine]);
 
   useEffect(() => {
-
     loadData();
-
   }, []);
 
   async function loadData() {
-
     try {
-
-      const [
-        dispatch,
-        extrusion,
-      ] = await Promise.all([
-
-        apiCall({
-          fn:
-            "dispatch.list",
-        }),
-
-        apiCall({
-          fn:
-            "extrusion.list",
-        }),
-
+      const [dispatch, extrusion] = await Promise.all([
+        apiCall({ fn: "dispatch.list" }),
+        apiCall({ fn: "extrusion.list" }),
       ]);
 
-      setRows(
-        dispatch.rows || []
-      );
-
-      setExtrusionRows(
-        extrusion.rows || []
-      );
-
+      setRows(dispatch.rows || []);
+      setExtrusionRows(extrusion.rows || []);
     } catch (err) {
-
       console.log(err);
-
+      setStatus(err.message);
     }
-
   }
 
-  function getAvailableFG(
-    batchId
-  ) {
+  function parseLines(row) {
+    try {
+      if (row.dispatchLines) {
+        const parsed = JSON.parse(row.dispatchLines);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (err) {
+      console.log(err);
+    }
 
-    const fg =
-      extrusionRows.find(
-        (x) =>
-          String(
-            x.extrusionBatchId
-          ) ===
-          String(batchId)
-      );
+    if (row.sourceExtrusionBatchId) {
+      return [
+        {
+          sourceExtrusionBatchId: row.sourceExtrusionBatchId || "",
+          lotNo: row.lotNo || row.sourceExtrusionBatchId || "",
+          grade: row.grade || "",
+          availableKg: row.availableFGQty || "",
+          dispatchQtyKg: row.quantityKg || "",
+          remarks: "",
+        },
+      ];
+    }
 
-    if (!fg)
-      return 0;
+    return [blankLine];
+  }
 
-    const totalDispatch =
-      rows
-        .filter(
-          (r) =>
-            String(
-              r.sourceExtrusionBatchId
-            ) ===
-              String(batchId) &&
-            r.dispatchStatus !==
-              "DELETED"
-        )
-        .reduce(
-          (sum, r) => {
+  function getDispatchedQtyForBatch(batchId, currentDispatchId = "") {
+    let total = 0;
 
-            return (
-              sum +
-              Number(
-                r.quantityKg || 0
-              )
-            );
+    rows
+      .filter((r) => r.dispatchStatus !== "DELETED")
+      .filter((r) => String(r.dispatchId || "") !== String(currentDispatchId || ""))
+      .forEach((r) => {
+        const lines = parseLines(r);
 
-          },
-          0
-        );
+        lines.forEach((line) => {
+          if (
+            String(line.sourceExtrusionBatchId || "") === String(batchId || "")
+          ) {
+            total += Number(line.dispatchQtyKg || 0);
+          }
+        });
+      });
 
-    return (
-      Number(
-        fg.fgOutputKg || 0
-      ) - totalDispatch
+    return total;
+  }
+
+  function getAvailableFG(batchId, currentDispatchId = editingId || "") {
+    const fg = extrusionRows.find(
+      (x) => String(x.extrusionBatchId) === String(batchId)
     );
 
+    if (!fg) return 0;
+
+    const produced = Number(fg.fgOutputKg || 0);
+    const dispatched = getDispatchedQtyForBatch(batchId, currentDispatchId);
+
+    return Math.max(produced - dispatched, 0);
+  }
+
+  const liveLots = useMemo(() => {
+    return extrusionRows
+      .map((x) => ({
+        ...x,
+        available: getAvailableFG(x.extrusionBatchId),
+      }))
+      .filter((x) => Number(x.available || 0) > 0)
+      .sort((a, b) =>
+        String(a.productionGrade || "").localeCompare(
+          String(b.productionGrade || "")
+        )
+      );
+  }, [extrusionRows, rows, editingId]);
+
+  function getLineTotal(lines = dispatchLines) {
+    return lines.reduce((s, r) => s + Number(r.dispatchQtyKg || 0), 0);
+  }
+
+  function getGradeSummary(lines = dispatchLines) {
+    const map = {};
+
+    lines.forEach((line) => {
+      const grade = line.grade || "NA";
+      map[grade] = (map[grade] || 0) + Number(line.dispatchQtyKg || 0);
+    });
+
+    return Object.entries(map)
+      .map(([grade, qty]) => `${grade}: ${qty} Kg`)
+      .join(" | ");
+  }
+
+  function getLotSummary(lines = dispatchLines) {
+    return lines
+      .filter((x) => x.sourceExtrusionBatchId)
+      .map(
+        (x) =>
+          `${x.lotNo || x.sourceExtrusionBatchId}: ${x.dispatchQtyKg || 0} Kg`
+      )
+      .join(" + ");
+  }
+
+  function autoCalculate(updated, lines = dispatchLines) {
+    const totalQty = getLineTotal(lines);
+    const cleanLines = lines.map((x) => ({
+      ...x,
+      availableKg: Number(x.availableKg || 0),
+      dispatchQtyKg: Number(x.dispatchQtyKg || 0),
+    }));
+
+    updated.quantityKg = totalQty.toFixed(2);
+    updated.dispatchLines = JSON.stringify(cleanLines);
+    updated.grade = getGradeSummary(cleanLines);
+    updated.lotNo = getLotSummary(cleanLines);
+    updated.sourceExtrusionBatchId = cleanLines
+      .map((x) => x.sourceExtrusionBatchId)
+      .filter(Boolean)
+      .join(",");
+
+    return updated;
   }
 
   function onChange(e) {
-
-    let updated = {
-
-      ...form,
-
-      [e.target.name]:
-        e.target.value,
-
-    };
-
-    if (
-      e.target.name ===
-      "sourceExtrusionBatchId"
-    ) {
-
-      const selected =
-        extrusionRows.find(
-          (x) =>
-            String(
-              x.extrusionBatchId
-            ) ===
-            String(
-              e.target.value
-            )
-        );
-
-      if (selected) {
-
-        updated.grade =
-          selected.productionGrade || "";
-
-        updated.lotNo =
-          selected.lotNo ||
-          selected.extrusionBatchId ||
-          "";
-
-        updated.availableFGQty =
-          getAvailableFG(
-            selected.extrusionBatchId
-          );
-
-        updated.quantityKg =
-          updated.availableFGQty;
-
-        updated.sourceSupplier =
-          selected.sourceSupplier || "";
-
-      }
-
-    }
+    const updated = autoCalculate(
+      {
+        ...form,
+        [e.target.name]: e.target.value,
+      },
+      dispatchLines
+    );
 
     setForm(updated);
+  }
 
+  function updateLine(index, key, value) {
+    let updatedLines = dispatchLines.map((line, i) =>
+      i === index ? { ...line, [key]: value } : line
+    );
+
+    if (key === "sourceExtrusionBatchId") {
+      const selected = extrusionRows.find(
+        (x) => String(x.extrusionBatchId) === String(value)
+      );
+
+      if (selected) {
+        updatedLines = updatedLines.map((line, i) => {
+          if (i !== index) return line;
+
+          const available = getAvailableFG(selected.extrusionBatchId);
+
+          return {
+            ...line,
+            sourceExtrusionBatchId: selected.extrusionBatchId,
+            lotNo: selected.lotNo || selected.extrusionBatchId,
+            grade: selected.productionGrade || "",
+            availableKg: available,
+            dispatchQtyKg: "",
+          };
+        });
+      }
+    }
+
+    setDispatchLines(updatedLines);
+    setForm(autoCalculate({ ...form }, updatedLines));
+  }
+
+  function addLine() {
+    const updatedLines = [...dispatchLines, { ...blankLine }];
+    setDispatchLines(updatedLines);
+    setForm(autoCalculate({ ...form }, updatedLines));
+  }
+
+  function removeLine(index) {
+    const updatedLines = dispatchLines.filter((_, i) => i !== index);
+    const finalLines = updatedLines.length > 0 ? updatedLines : [{ ...blankLine }];
+
+    setDispatchLines(finalLines);
+    setForm(autoCalculate({ ...form }, finalLines));
+  }
+
+  function fillFullAvailable(index) {
+    const updatedLines = dispatchLines.map((line, i) =>
+      i === index
+        ? {
+            ...line,
+            dispatchQtyKg: line.availableKg || "",
+          }
+        : line
+    );
+
+    setDispatchLines(updatedLines);
+    setForm(autoCalculate({ ...form }, updatedLines));
   }
 
   async function submit(e) {
-
     e.preventDefault();
 
     try {
+      const cleanLines = dispatchLines.filter(
+        (x) => x.sourceExtrusionBatchId && Number(x.dispatchQtyKg || 0) > 0
+      );
 
-      const valid =
-        validateDispatch({
-
-          fgStock:
-            form.availableFGQty,
-
-          dispatchQty:
-            form.quantityKg,
-
-        });
-
-      if (!valid) {
-
-        setStatus(
-          "Dispatch exceeds available FG stock"
-        );
-
+      if (cleanLines.length === 0) {
+        setStatus("Add at least one FG lot with dispatch quantity.");
         return;
-
       }
+
+      for (const line of cleanLines) {
+        if (Number(line.dispatchQtyKg || 0) > Number(line.availableKg || 0)) {
+          setStatus(
+            `Dispatch exceeds available stock for ${
+              line.lotNo || line.sourceExtrusionBatchId
+            }`
+          );
+          return;
+        }
+      }
+
+      const finalForm = autoCalculate({ ...form }, cleanLines);
 
       let res;
 
       if (editingId) {
-
-        res =
-          await apiCall({
-
-            fn:
-              "dispatch.update",
-
-            ...form,
-
-          });
-
+        res = await apiCall({
+          fn: "dispatch.update",
+          ...finalForm,
+        });
       } else {
-
-        res =
-          await apiCall({
-
-            fn:
-              "dispatch.add",
-
-            ...form,
-
-          });
-
+        res = await apiCall({
+          fn: "dispatch.add",
+          ...finalForm,
+        });
       }
 
       if (res.ok) {
-
-        setStatus(
-          editingId
-            ? "Dispatch Updated"
-            : "Dispatch Saved"
-        );
-
-        setEditingId(
-          null
-        );
-
-        setForm(
-          blankForm
-        );
-
+        setStatus(editingId ? "Dispatch updated" : "Dispatch saved");
+        setEditingId(null);
+        setForm(blankForm);
+        setDispatchLines([{ ...blankLine }]);
         loadData();
-
+      } else {
+        setStatus(res.error || "Error saving dispatch");
       }
-
     } catch (err) {
-
-      setStatus(
-        err.message
-      );
-
+      setStatus(err.message);
     }
-
   }
 
   function editRow(row) {
+    const parsed = parseLines(row);
 
-    setEditingId(
-      row.dispatchId
+    setEditingId(row.dispatchId);
+    setDispatchLines(parsed);
+
+    const updated = autoCalculate(
+      {
+        ...blankForm,
+        ...row,
+        date: row.date ? new Date(row.date).toISOString().split("T")[0] : today,
+      },
+      parsed
     );
 
-    setForm({
-
-      ...blankForm,
-
-      ...row,
-
-      date: row.date
-        ? new Date(
-            row.date
-          )
-            .toISOString()
-            .split("T")[0]
-        : today,
-
-    });
+    setForm(updated);
 
     window.scrollTo({
-
       top: 0,
-
-      behavior:
-        "smooth",
-
+      behavior: "smooth",
     });
-
   }
 
-  async function deleteRow(
-    row
-  ) {
-
-    const confirmed =
-      window.confirm(
-        "Delete dispatch?"
-      );
-
-    if (!confirmed)
-      return;
+  async function deleteRow(row) {
+    const confirmed = window.confirm("Delete dispatch?");
+    if (!confirmed) return;
 
     await apiCall({
-
-      fn:
-        "dispatch.update",
-
-      dispatchId:
-        row.dispatchId,
-
-      dispatchStatus:
-        "DELETED",
-
+      fn: "dispatch.update",
+      dispatchId: row.dispatchId,
+      dispatchStatus: "DELETED",
     });
 
     loadData();
-
   }
 
-  const totalSales =
-    rows.reduce(
-      (sum, r) => {
+  const activeRows = rows.filter((r) => r.dispatchStatus !== "DELETED");
 
-        return (
-          sum +
-          (
-            Number(
-              r.quantityKg || 0
-            ) *
-            Number(
-              r.ratePerKg || 0
-            )
-          )
-        );
+  const totalDispatch = activeRows.reduce(
+    (sum, r) => sum + Number(r.quantityKg || 0),
+    0
+  );
 
-      },
-      0
-    );
-
-  const totalDispatch =
-    rows.reduce(
-      (sum, r) => {
-
-        return (
-          sum +
-          Number(
-            r.quantityKg || 0
-          )
-        );
-
-      },
-      0
-    );
+  const totalSales = activeRows.reduce(
+    (sum, r) =>
+      sum + Number(r.quantityKg || 0) * Number(r.ratePerKg || 0),
+    0
+  );
 
   const avgRealization =
-    totalDispatch > 0
-      ? (
-          totalSales /
-          totalDispatch
-        ).toFixed(2)
-      : 0;
+    totalDispatch > 0 ? (totalSales / totalDispatch).toFixed(2) : "0.00";
 
-  const liveLots =
-    extrusionRows
-      .map((x) => {
+  const currentDispatchQty = getLineTotal(dispatchLines);
+  const currentSalesValue =
+    currentDispatchQty * Number(form.ratePerKg || 0);
 
-        return {
+  const truckTargetKg = 25000;
+  const truckFillPercent =
+    truckTargetKg > 0 ? ((currentDispatchQty / truckTargetKg) * 100).toFixed(1) : 0;
 
-          ...x,
+  const customerSummary = useMemo(() => {
+    const map = {};
 
-          available:
-            getAvailableFG(
-              x.extrusionBatchId
-            ),
+    activeRows.forEach((r) => {
+      const customer = r.customerName || "Unknown";
 
+      if (!map[customer]) {
+        map[customer] = {
+          customer,
+          qty: 0,
+          value: 0,
         };
+      }
 
-      })
-      .filter(
-        (x) =>
-          x.available > 0
-      );
+      map[customer].qty += Number(r.quantityKg || 0);
+      map[customer].value +=
+        Number(r.quantityKg || 0) * Number(r.ratePerKg || 0);
+    });
 
-  const customerSummary =
-    useMemo(() => {
-
-      const map = {};
-
-      rows.forEach((r) => {
-
-        const customer =
-          r.customerName ||
-          "Unknown";
-
-        map[customer] =
-          (
-            map[customer] || 0
-          ) +
-          Number(
-            r.quantityKg || 0
-          );
-
-      });
-
-      return Object.entries(
-        map
-      )
-
-        .sort(
-          (a, b) =>
-            b[1] - a[1]
-        )
-
-        .slice(0, 5);
-
-    }, [rows]);
+    return Object.values(map)
+      .sort((a, b) => b.qty - a.qty)
+      .slice(0, 5);
+  }, [activeRows]);
 
   return (
-
     <div style={pageStyle}>
-
       <div style={headerCard}>
-
-        <h1
-          style={{
-            margin: 0,
-          }}
-        >
-
-          Dispatch Workflow
-
-        </h1>
+        <h1 style={{ margin: 0 }}>Dispatch Workflow</h1>
 
         <div style={subText}>
-
-          Finished goods dispatch & customer traceability
-
+          Multi-lot truck dispatch from FG stock. Supports E1/E2/E3 requests and Mold-Tek unit-wise loading.
         </div>
-
       </div>
 
       <div style={kpiGrid}>
-
-        <KPI
-          title="Dispatch Qty"
-          value={`${totalDispatch.toFixed(
-            0
-          )} Kg`}
-        />
-
-        <KPI
-          title="Sales"
-          value={`₹ ${totalSales.toFixed(
-            0
-          )}`}
-        />
-
-        <KPI
-          title="Avg Realization"
-          value={`₹ ${avgRealization}`}
-        />
-
-        <KPI
-          title="Live Lots"
-          value={liveLots.length}
-        />
-
+        <KPI title="Dispatch Qty" value={`${totalDispatch.toFixed(0)} Kg`} />
+        <KPI title="Sales" value={`₹ ${totalSales.toFixed(0)}`} />
+        <KPI title="Avg Realization" value={`₹ ${avgRealization}`} />
+        <KPI title="Live Lots" value={liveLots.length} />
       </div>
 
       <form
         onSubmit={submit}
         style={{
           display: "flex",
-          flexDirection:
-            "column",
+          flexDirection: "column",
           gap: 16,
         }}
       >
-
-        <FormSection
-          title="FG Source"
-        >
-
-          <Field label="FG Batch">
-
-            <select
-              name="sourceExtrusionBatchId"
-              value={
-                form.sourceExtrusionBatchId
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
-            >
-
-              <option value="">
-                Select
-              </option>
-
-              {liveLots.map(
-                (
-                  x,
-                  i
-                ) => (
-
-                  <option
-                    key={i}
-                    value={
-                      x.extrusionBatchId
-                    }
-                  >
-
-                    {
-                      x.extrusionBatchId
-                    }
-                    {" | "}
-                    {
-                      x.productionGrade
-                    }
-                    {" | "}
-                    {
-                      x.available
-                    }
-                    {" Kg"}
-
-                  </option>
-
-                )
-              )}
-
-            </select>
-
-          </Field>
-
-          <Field label="Grade">
-
-            <input
-              readOnly
-              value={
-                form.grade
-              }
-              style={
-                readonlyStyle
-              }
-            />
-
-          </Field>
-
-          <Field label="Lot No">
-
-            <input
-              readOnly
-              value={
-                form.lotNo
-              }
-              style={
-                readonlyStyle
-              }
-            />
-
-          </Field>
-
-          <Field label="Available FG">
-
-            <input
-              readOnly
-              value={
-                form.availableFGQty
-              }
-              style={
-                readonlyStyle
-              }
-            />
-
-          </Field>
-
-        </FormSection>
-
-        <FormSection
-          title="Customer & Logistics"
-        >
-
+        <FormSection title="Customer & Logistics">
           <Field label="Date">
-
             <input
               type="date"
               name="date"
-              value={
-                form.date
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
+              value={form.date}
+              onChange={onChange}
+              style={inputStyle}
             />
-
           </Field>
 
           <Field label="Customer">
-
             <input
               name="customerName"
-              value={
-                form.customerName
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
+              value={form.customerName}
+              onChange={onChange}
+              style={inputStyle}
             />
+          </Field>
 
+          <Field label="Customer Unit / Destination">
+            <select
+              name="customerUnit"
+              value={form.customerUnit}
+              onChange={onChange}
+              style={inputStyle}
+            >
+              <option value="">Select Unit</option>
+              <option>Mold-Tek Unit 1</option>
+              <option>Mold-Tek Unit 2</option>
+              <option>Mold-Tek Unit 3</option>
+              <option>Mold-Tek Unit 4</option>
+              <option>Mold-Tek Unit 5</option>
+              <option>Other</option>
+            </select>
           </Field>
 
           <Field label="Invoice">
-
             <input
               name="invoiceNo"
-              value={
-                form.invoiceNo
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
+              value={form.invoiceNo}
+              onChange={onChange}
+              style={inputStyle}
             />
-
           </Field>
 
           <Field label="Vehicle">
-
             <input
               name="vehicleNo"
-              value={
-                form.vehicleNo
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
+              value={form.vehicleNo}
+              onChange={onChange}
+              style={inputStyle}
             />
-
           </Field>
 
           <Field label="Driver">
-
             <input
               name="driverName"
-              value={
-                form.driverName
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
+              value={form.driverName}
+              onChange={onChange}
+              style={inputStyle}
             />
-
           </Field>
 
-          <Field label="Location">
-
+          <Field label="Dispatch Location">
             <input
               name="dispatchLocation"
-              value={
-                form.dispatchLocation
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
+              value={form.dispatchLocation}
+              onChange={onChange}
+              placeholder="Example: Mold-Tek Unit 5"
+              style={inputStyle}
             />
-
-          </Field>
-
-        </FormSection>
-
-        <FormSection
-          title="Dispatch Quantity"
-        >
-
-          <Field label="Dispatch Qty Kg">
-
-            <input
-              name="quantityKg"
-              value={
-                form.quantityKg
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
-            />
-
-          </Field>
-
-          <Field label="No Of Bags">
-
-            <input
-              name="noOfBags"
-              value={
-                form.noOfBags
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
-            />
-
-          </Field>
-
-          <Field label="Rate">
-
-            <input
-              name="ratePerKg"
-              value={
-                form.ratePerKg
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
-            />
-
           </Field>
 
           <Field label="Status">
-
             <select
               name="dispatchStatus"
-              value={
-                form.dispatchStatus
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
+              value={form.dispatchStatus}
+              onChange={onChange}
+              style={inputStyle}
             >
-
-              <option>
-                DISPATCHED
-              </option>
-
-              <option>
-                IN_TRANSIT
-              </option>
-
-              <option>
-                DELIVERED
-              </option>
-
+              <option>DISPATCHED</option>
+              <option>IN_TRANSIT</option>
+              <option>DELIVERED</option>
             </select>
-
           </Field>
-
         </FormSection>
 
-        <FormSection
-          title="Remarks"
-          defaultOpen={false}
-        >
-
-          <Field label="Remarks">
-
-            <textarea
-              name="remarks"
-              value={
-                form.remarks
-              }
-              onChange={
-                onChange
-              }
-              style={
-                textareaStyle
-              }
-            />
-
+        <FormSection title="Truck Loading Summary">
+          <Field label="Total Dispatch Qty Kg">
+            <input readOnly value={form.quantityKg} style={readonlyStyle} />
           </Field>
 
+          <Field label="Truck Fill % vs 25T">
+            <input readOnly value={`${truckFillPercent}%`} style={readonlyStyle} />
+          </Field>
+
+          <Field label="Rate / Kg">
+            <input
+              name="ratePerKg"
+              value={form.ratePerKg}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
+
+          <Field label="Sales Value">
+            <input
+              readOnly
+              value={`₹ ${currentSalesValue.toFixed(0)}`}
+              style={readonlyStyle}
+            />
+          </Field>
+
+          <Field label="No Of Bags">
+            <input
+              name="noOfBags"
+              value={form.noOfBags}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
+
+          <Field label="Lot Summary">
+            <textarea readOnly value={form.lotNo} style={textareaStyle} />
+          </Field>
+        </FormSection>
+
+        <FormSection title="FG Lots / Grade Loading">
+          <div style={{ gridColumn: "1 / -1", overflowX: "auto" }}>
+            <table style={lineTable}>
+              <thead>
+                <tr style={lineHeader}>
+                  <th style={lineTh}>FG Lot / Extrusion Batch</th>
+                  <th style={lineTh}>Grade</th>
+                  <th style={lineTh}>Available Kg</th>
+                  <th style={lineTh}>Dispatch Kg</th>
+                  <th style={lineTh}>Remarks</th>
+                  <th style={lineTh}>Action</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {dispatchLines.map((line, index) => (
+                  <tr key={index}>
+                    <td style={lineTd}>
+                      <select
+                        value={line.sourceExtrusionBatchId || ""}
+                        onChange={(e) =>
+                          updateLine(
+                            index,
+                            "sourceExtrusionBatchId",
+                            e.target.value
+                          )
+                        }
+                        style={inputStyle}
+                      >
+                        <option value="">Select FG Lot</option>
+
+                        {liveLots.map((x, i) => (
+                          <option key={i} value={x.extrusionBatchId}>
+                            {x.lotNo || x.extrusionBatchId} |{" "}
+                            {x.productionGrade || "NA"} | {x.available} Kg
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+
+                    <td style={lineTd}>
+                      <input readOnly value={line.grade || ""} style={readonlyStyle} />
+                    </td>
+
+                    <td style={lineTd}>
+                      <input
+                        readOnly
+                        value={line.availableKg || ""}
+                        style={readonlyStyle}
+                      />
+                    </td>
+
+                    <td style={lineTd}>
+                      <input
+                        type="number"
+                        value={line.dispatchQtyKg || ""}
+                        onChange={(e) =>
+                          updateLine(index, "dispatchQtyKg", e.target.value)
+                        }
+                        style={inputStyle}
+                      />
+                    </td>
+
+                    <td style={lineTd}>
+                      <input
+                        value={line.remarks || ""}
+                        onChange={(e) =>
+                          updateLine(index, "remarks", e.target.value)
+                        }
+                        placeholder="Example: E1 5T / Unit 1"
+                        style={inputStyle}
+                      />
+                    </td>
+
+                    <td style={lineTd}>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={() => fillFullAvailable(index)}
+                          style={miniButton}
+                        >
+                          Full
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => removeLine(index)}
+                          style={removeButton}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <button type="button" onClick={addLine} style={addButton}>
+              + Add FG Lot
+            </button>
+          </div>
+        </FormSection>
+
+        <FormSection title="Remarks" defaultOpen={false}>
+          <Field label="Remarks">
+            <textarea
+              name="remarks"
+              value={form.remarks}
+              onChange={onChange}
+              style={textareaStyle}
+            />
+          </Field>
         </FormSection>
 
         <div style={stickyBar}>
-
-          <button
-            type="submit"
-            style={
-              editingId
-                ? updateButton
-                : saveButton
-            }
-          >
-
-            {editingId
-              ? "Update Dispatch"
-              : "Save Dispatch"}
-
+          <button type="submit" style={editingId ? updateButton : saveButton}>
+            {editingId ? "Update Dispatch" : "Save Dispatch"}
           </button>
-
         </div>
-
       </form>
 
-      {status && (
-
-        <div style={statusStyle}>
-
-          {status}
-
-        </div>
-
-      )}
+      {status && <div style={statusStyle}>{status}</div>}
 
       <div style={sectionCard}>
-
-        <div style={sectionTitle}>
-          Top Customers
-        </div>
+        <div style={sectionTitle}>Top Customers</div>
 
         <div style={customerGrid}>
-
-          {customerSummary.map(
-            (c, i) => (
+          {customerSummary.map((c, i) => (
+            <div key={i} style={customerCard}>
+              <div style={{ fontWeight: 700 }}>{c.customer}</div>
 
               <div
-                key={i}
-                style={
-                  customerCard
-                }
+                style={{
+                  marginTop: 6,
+                  color: "#0f766e",
+                  fontWeight: 700,
+                }}
               >
-
-                <div
-                  style={{
-                    fontWeight: 700,
-                  }}
-                >
-
-                  {c[0]}
-
-                </div>
-
-                <div
-                  style={{
-                    marginTop: 6,
-                    color:
-                      "#0f766e",
-                    fontWeight: 700,
-                  }}
-                >
-
-                  {Number(
-                    c[1]
-                  ).toFixed(0)}
-                  {" Kg"}
-
-                </div>
-
+                {Number(c.qty).toFixed(0)} Kg
               </div>
 
-            )
-          )}
-
+              <div style={{ color: "#64748b", fontSize: 12, marginTop: 4 }}>
+                ₹ {Number(c.value).toFixed(0)}
+              </div>
+            </div>
+          ))}
         </div>
-
       </div>
 
       <DataTable
         title="Dispatch History"
-        rows={rows.filter(
-          (r) =>
-            r.dispatchStatus !==
-            "DELETED"
-        )}
+        rows={activeRows}
         searchFields={[
           "dispatchId",
           "customerName",
+          "customerUnit",
           "grade",
           "invoiceNo",
           "vehicleNo",
@@ -951,93 +713,40 @@ export default function Dispatch() {
           {
             key: "date",
             label: "Date",
-            render: (r) =>
-              formatDate(
-                r.date
-              ),
+            render: (r) => formatDate(r.date),
           },
-          {
-            key:
-              "dispatchId",
-            label: "Dispatch",
-          },
-          {
-            key:
-              "customerName",
-            label: "Customer",
-          },
-          {
-            key: "grade",
-            label: "Grade",
-          },
-          {
-            key:
-              "quantityKg",
-            label: "Qty Kg",
-          },
-          {
-            key:
-              "ratePerKg",
-            label: "Rate",
-          },
-          {
-            key:
-              "dispatchStatus",
-            label: "Status",
-          },
+          { key: "dispatchId", label: "Dispatch" },
+          { key: "customerName", label: "Customer" },
+          { key: "customerUnit", label: "Unit" },
+          { key: "grade", label: "Grade Mix" },
+          { key: "lotNo", label: "Lots" },
+          { key: "quantityKg", label: "Qty Kg" },
+          { key: "ratePerKg", label: "Rate" },
+          { key: "dispatchStatus", label: "Status" },
         ]}
         onEdit={editRow}
         onDelete={deleteRow}
       />
-
     </div>
-
   );
-
 }
 
-function Field({
-  label,
-  children,
-}) {
-
+function Field({ label, children }) {
   return (
-
     <div>
-
-      <div style={fieldLabel}>
-        {label}
-      </div>
-
+      <div style={fieldLabel}>{label}</div>
       {children}
-
     </div>
-
   );
-
 }
 
-function KPI({
-  title,
-  value,
-}) {
-
+function KPI({ title, value }) {
   return (
-
     <div style={kpiCard}>
-
-      <div style={kpiTitle}>
-        {title}
-      </div>
-
-      <div style={kpiValue}>
-        {value}
-      </div>
-
+      <div style={kpiTitle}>{title}</div>
+      <div style={kpiValue}>{value}</div>
     </div>
-
   );
-
 }
 
 const pageStyle = {
@@ -1081,8 +790,7 @@ const fieldLabel = {
 
 const kpiGrid = {
   display: "grid",
-  gridTemplateColumns:
-    "repeat(auto-fit,minmax(180px,1fr))",
+  gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))",
   gap: 14,
   marginBottom: 16,
 };
@@ -1108,34 +816,28 @@ const kpiValue = {
 
 const customerGrid = {
   display: "grid",
-  gridTemplateColumns:
-    "repeat(auto-fit,minmax(180px,1fr))",
+  gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))",
   gap: 12,
 };
 
 const customerCard = {
-  border:
-    "1px solid #e5e7eb",
+  border: "1px solid #e5e7eb",
   borderRadius: 10,
   padding: 12,
-  background:
-    "#f8fafc",
+  background: "#f8fafc",
 };
 
 const inputStyle = {
   width: "100%",
   padding: 10,
   borderRadius: 8,
-  border:
-    "1px solid #ccc",
-  boxSizing:
-    "border-box",
+  border: "1px solid #ccc",
+  boxSizing: "border-box",
 };
 
 const readonlyStyle = {
   ...inputStyle,
-  background:
-    "#f8fafc",
+  background: "#f8fafc",
   fontWeight: 700,
 };
 
@@ -1144,13 +846,63 @@ const textareaStyle = {
   height: 80,
 };
 
-const saveButton = {
-  background:
-    "#0f766e",
+const lineTable = {
+  width: "100%",
+  borderCollapse: "collapse",
+  marginBottom: 10,
+  minWidth: 1050,
+};
+
+const lineHeader = {
+  background: "#0f766e",
+  color: "white",
+};
+
+const lineTh = {
+  padding: 10,
+  textAlign: "left",
+};
+
+const lineTd = {
+  padding: 8,
+  borderBottom: "1px solid #e5e7eb",
+};
+
+const addButton = {
+  background: "#2563eb",
   color: "white",
   border: "none",
-  padding:
-    "12px 20px",
+  padding: "9px 14px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const miniButton = {
+  background: "#0f766e",
+  color: "white",
+  border: "none",
+  padding: "8px 10px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const removeButton = {
+  background: "#dc2626",
+  color: "white",
+  border: "none",
+  padding: "8px 10px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const saveButton = {
+  background: "#0f766e",
+  color: "white",
+  border: "none",
+  padding: "12px 20px",
   borderRadius: 8,
   cursor: "pointer",
   fontWeight: 600,
@@ -1158,21 +910,17 @@ const saveButton = {
 
 const updateButton = {
   ...saveButton,
-  background:
-    "#ea580c",
+  background: "#ea580c",
 };
 
 const stickyBar = {
   position: "sticky",
   bottom: 0,
-  background:
-    "white",
+  background: "white",
   padding: 12,
-  borderTop:
-    "1px solid #ddd",
+  borderTop: "1px solid #ddd",
   display: "flex",
-  justifyContent:
-    "flex-end",
+  justifyContent: "flex-end",
   zIndex: 10,
 };
 

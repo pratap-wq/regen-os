@@ -1,280 +1,811 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
 import { apiCall } from "../api/api";
 
+import {
+  pageStyle,
+  sectionCard,
+  sectionTitle,
+  formGrid,
+  inputStyle,
+  textareaStyle,
+  primaryButton,
+  tableCard,
+  tableStyle,
+  thStyle,
+  tdStyle,
+} from "../ui/styles";
+
 export default function FactoryExpenses() {
-  const currentDate = new Date();
 
-  const [rows, setRows] = useState([]);
-  const [status, setStatus] = useState("");
+  const currentDate =
+    new Date();
 
-  const [form, setForm] = useState({
-    month: currentDate.toLocaleString("default", { month: "short" }),
-    year: String(currentDate.getFullYear()),
+  const [rows, setRows] =
+    useState([]);
+
+  const [status, setStatus] =
+    useState("");
+
+  const blankForm = {
+
+    month:
+      currentDate.toLocaleString(
+        "default",
+        {
+          month: "short",
+        }
+      ),
+
+    year: String(
+      currentDate.getFullYear()
+    ),
+
     category: "",
+
     itemName: "",
+
     amount: "",
+
     remarks: "",
-    createdBy: "Pratap",
-  });
+
+    createdBy:
+      "Pratap",
+
+  };
+
+  const [form, setForm] =
+    useState(blankForm);
 
   useEffect(() => {
+
     loadRows();
+
   }, []);
 
   async function loadRows() {
-    try {
-      const res = await apiCall({
-        fn: "factoryExpenses.list",
-      });
 
-      setRows(res.rows || []);
+    try {
+
+      const res =
+        await apiCall({
+
+          fn:
+            "factoryExpenses.list",
+
+        });
+
+      setRows(
+        res.rows || []
+      );
+
     } catch (err) {
+
       console.log(err);
+
     }
+
   }
 
   function onChange(e) {
+
     setForm((p) => ({
+
       ...p,
-      [e.target.name]: e.target.value,
+
+      [e.target.name]:
+        e.target.value,
+
     }));
+
   }
 
   async function submit(e) {
+
     e.preventDefault();
 
     try {
-      const res = await apiCall({
-        fn: "factoryExpense.add",
-        ...form,
-      });
 
-      if (res.ok) {
-        setStatus("Factory expense saved");
+      const res =
+        await apiCall({
 
-        setForm({
-          month: currentDate.toLocaleString("default", { month: "short" }),
-          year: String(currentDate.getFullYear()),
-          category: "",
-          itemName: "",
-          amount: "",
-          remarks: "",
-          createdBy: "Pratap",
+          fn:
+            "factoryExpense.add",
+
+          ...form,
+
         });
 
+      if (res.ok) {
+
+        setStatus(
+          "Factory expense saved successfully"
+        );
+
+        setForm(
+          blankForm
+        );
+
         loadRows();
+
       } else {
-        setStatus(res.error || "Error saving");
+
+        setStatus(
+          res.error ||
+            "Error saving"
+        );
+
       }
+
     } catch (err) {
-      setStatus(err.message);
+
+      setStatus(
+        err.message
+      );
+
     }
+
   }
 
-  const totalExpenses = rows.reduce((sum, r) => {
-    return sum + Number(r.amount || 0);
-  }, 0);
+  const totalExpenses =
+    rows.reduce(
+      (sum, r) => {
+
+        return (
+          sum +
+          Number(
+            r.amount || 0
+          )
+        );
+
+      },
+      0
+    );
+
+  const avgExpense =
+    rows.length > 0
+      ? (
+          totalExpenses /
+          rows.length
+        ).toFixed(0)
+      : 0;
+
+  const categorySummary =
+    useMemo(() => {
+
+      const map = {};
+
+      rows.forEach((r) => {
+
+        const cat =
+          r.category ||
+          "Other";
+
+        if (!map[cat]) {
+
+          map[cat] = 0;
+
+        }
+
+        map[cat] +=
+          Number(
+            r.amount || 0
+          );
+
+      });
+
+      return Object.entries(
+        map
+      ).sort(
+        (a, b) =>
+          b[1] - a[1]
+      );
+
+    }, [rows]);
 
   return (
-    <div style={{ padding: 20 }}>
-      <h1>Factory Expenses</h1>
 
-      <div style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>Monthly Expense Entry</h2>
+    <div style={pageStyle}>
 
-        <form onSubmit={submit} style={formStyle}>
-          <select name="month" value={form.month} onChange={onChange} style={inputStyle}>
-            <option>Jan</option>
-            <option>Feb</option>
-            <option>Mar</option>
-            <option>Apr</option>
-            <option>May</option>
-            <option>Jun</option>
-            <option>Jul</option>
-            <option>Aug</option>
-            <option>Sep</option>
-            <option>Oct</option>
-            <option>Nov</option>
-            <option>Dec</option>
-          </select>
+      {/* HEADER */}
 
-          <select name="year" value={form.year} onChange={onChange} style={inputStyle}>
-            <option>2025</option>
-            <option>2026</option>
-            <option>2027</option>
-          </select>
+      <div style={sectionCard}>
 
-          <select name="category" value={form.category} onChange={onChange} style={inputStyle}>
-            <option value="">Select Category</option>
-            <option>Electricity</option>
-            <option>DG Diesel</option>
-            <option>Consumables</option>
-            <option>Masterbatch</option>
-            <option>Virgin Resin</option>
-            <option>Battery Regrind</option>
-            <option>Additives</option>
-            <option>Maintenance</option>
-            <option>Labour</option>
-            <option>Transport</option>
-            <option>Rent</option>
-            <option>Admin</option>
-            <option>Water</option>
-            <option>Other</option>
-          </select>
+        <div style={sectionTitle}>
 
-          <input
-            name="itemName"
-            value={form.itemName}
-            onChange={onChange}
-            placeholder="Item Name / Description"
-            style={inputStyle}
-          />
+          Factory Expense Control
 
-          <input
-            type="number"
-            name="amount"
-            value={form.amount}
-            onChange={onChange}
-            placeholder="Amount ₹"
-            style={inputStyle}
-          />
-
-          <textarea
-            name="remarks"
-            value={form.remarks}
-            onChange={onChange}
-            placeholder="Remarks"
-            style={textareaStyle}
-          />
-
-          <button type="submit" style={buttonStyle}>
-            Save Expense
-          </button>
-        </form>
-      </div>
-
-      {status && <div style={statusStyle}>{status}</div>}
-
-      <div style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>Monthly Expense Summary</h2>
-
-        <div style={summaryStyle}>
-          Total Factory Expenses: <b>₹ {totalExpenses.toFixed(0)}</b>
         </div>
 
-        <div style={{ overflowX: "auto" }}>
-          <table style={tableStyle}>
+        <div
+          style={{
+            color:
+              "#64748b",
+            fontSize: 13,
+          }}
+        >
+
+          Operational expense tracking,
+          monthly cost governance and
+          manufacturing overhead control
+
+        </div>
+
+      </div>
+
+      {/* KPI */}
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns:
+            "repeat(auto-fit,minmax(220px,1fr))",
+          gap: 14,
+          marginBottom: 16,
+        }}
+      >
+
+        <KPI
+          title="Total Expenses"
+          value={`₹ ${totalExpenses.toFixed(
+            0
+          )}`}
+        />
+
+        <KPI
+          title="Expense Entries"
+          value={rows.length}
+        />
+
+        <KPI
+          title="Average Expense"
+          value={`₹ ${avgExpense}`}
+        />
+
+        <KPI
+          title="Expense Categories"
+          value={
+            categorySummary.length
+          }
+        />
+
+      </div>
+
+      {/* ENTRY */}
+
+      <div style={sectionCard}>
+
+        <div style={sectionTitle}>
+
+          Expense Entry
+
+        </div>
+
+        <form
+          onSubmit={submit}
+          style={formGrid}
+        >
+
+          <Field label="Month">
+
+            <select
+              name="month"
+              value={
+                form.month
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            >
+
+              <option>Jan</option>
+              <option>Feb</option>
+              <option>Mar</option>
+              <option>Apr</option>
+              <option>May</option>
+              <option>Jun</option>
+              <option>Jul</option>
+              <option>Aug</option>
+              <option>Sep</option>
+              <option>Oct</option>
+              <option>Nov</option>
+              <option>Dec</option>
+
+            </select>
+
+          </Field>
+
+          <Field label="Year">
+
+            <select
+              name="year"
+              value={
+                form.year
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            >
+
+              <option>2025</option>
+              <option>2026</option>
+              <option>2027</option>
+
+            </select>
+
+          </Field>
+
+          <Field label="Category">
+
+            <select
+              name="category"
+              value={
+                form.category
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            >
+
+              <option value="">
+                Select Category
+              </option>
+
+              <option>
+                Electricity
+              </option>
+
+              <option>
+                DG Diesel
+              </option>
+
+              <option>
+                Consumables
+              </option>
+
+              <option>
+                Masterbatch
+              </option>
+
+              <option>
+                Virgin Resin
+              </option>
+
+              <option>
+                Battery Regrind
+              </option>
+
+              <option>
+                Additives
+              </option>
+
+              <option>
+                Maintenance
+              </option>
+
+              <option>
+                Labour
+              </option>
+
+              <option>
+                Transport
+              </option>
+
+              <option>
+                Rent
+              </option>
+
+              <option>
+                Admin
+              </option>
+
+              <option>
+                Water
+              </option>
+
+              <option>
+                Other
+              </option>
+
+            </select>
+
+          </Field>
+
+          <Field label="Item / Description">
+
+            <input
+              name="itemName"
+              value={
+                form.itemName
+              }
+              onChange={
+                onChange
+              }
+              placeholder="Description"
+              style={
+                inputStyle
+              }
+            />
+
+          </Field>
+
+          <Field label="Amount">
+
+            <input
+              type="number"
+              name="amount"
+              value={
+                form.amount
+              }
+              onChange={
+                onChange
+              }
+              placeholder="Amount ₹"
+              style={
+                inputStyle
+              }
+            />
+
+          </Field>
+
+          <Field label="Remarks">
+
+            <textarea
+              name="remarks"
+              value={
+                form.remarks
+              }
+              onChange={
+                onChange
+              }
+              placeholder="Remarks"
+              style={
+                textareaStyle
+              }
+            />
+
+          </Field>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems:
+                "end",
+            }}
+          >
+
+            <button
+              type="submit"
+              style={
+                primaryButton
+              }
+            >
+
+              Save Expense
+
+            </button>
+
+          </div>
+
+        </form>
+
+        {status && (
+
+          <div
+            style={{
+              marginTop: 14,
+              fontWeight: 600,
+              color:
+                "#0f766e",
+            }}
+          >
+
+            {status}
+
+          </div>
+
+        )}
+
+      </div>
+
+      {/* SUMMARY */}
+
+      <div style={sectionCard}>
+
+        <div style={sectionTitle}>
+
+          Expense Register
+
+        </div>
+
+        <div style={tableCard}>
+
+          <table
+            style={tableStyle}
+          >
+
             <thead>
-              <tr style={headerRowStyle}>
-                <th style={th}>Month</th>
-                <th style={th}>Year</th>
-                <th style={th}>Category</th>
-                <th style={th}>Item</th>
-                <th style={th}>Amount</th>
-                <th style={th}>Remarks</th>
+
+              <tr>
+
+                <th style={thStyle}>
+                  Month
+                </th>
+
+                <th style={thStyle}>
+                  Year
+                </th>
+
+                <th style={thStyle}>
+                  Category
+                </th>
+
+                <th style={thStyle}>
+                  Item
+                </th>
+
+                <th style={thStyle}>
+                  Amount
+                </th>
+
+                <th style={thStyle}>
+                  Remarks
+                </th>
+
               </tr>
+
             </thead>
 
             <tbody>
-              {rows.map((r, i) => (
-                <tr key={i} style={{ borderBottom: "1px solid #ddd" }}>
-                  <td style={td}>{r.month}</td>
-                  <td style={td}>{r.year}</td>
-                  <td style={td}>{r.category}</td>
-                  <td style={td}>{r.itemName}</td>
-                  <td style={td}>₹ {Number(r.amount || 0).toFixed(0)}</td>
-                  <td style={td}>{r.remarks}</td>
-                </tr>
-              ))}
+
+              {rows.map(
+                (r, i) => (
+
+                  <tr key={i}>
+
+                    <td style={tdStyle}>
+                      {r.month}
+                    </td>
+
+                    <td style={tdStyle}>
+                      {r.year}
+                    </td>
+
+                    <td style={tdStyle}>
+
+                      <b>
+                        {
+                          r.category
+                        }
+                      </b>
+
+                    </td>
+
+                    <td style={tdStyle}>
+                      {
+                        r.itemName
+                      }
+                    </td>
+
+                    <td style={tdStyle}>
+
+                      ₹{" "}
+                      {Number(
+                        r.amount || 0
+                      ).toFixed(
+                        0
+                      )}
+
+                    </td>
+
+                    <td style={tdStyle}>
+                      {
+                        r.remarks
+                      }
+                    </td>
+
+                  </tr>
+
+                )
+              )}
+
             </tbody>
+
           </table>
+
         </div>
+
       </div>
 
-      <div style={noteStyle}>
-        <b>Purpose:</b> Capture power, maintenance, labour, transport, rent, consumables,
-        masterbatch, virgin resin and other factory costs monthly. This keeps batch entries simple
-        and makes dashboard profit/loss more realistic.
+      {/* CATEGORY ANALYTICS */}
+
+      <div style={sectionCard}>
+
+        <div style={sectionTitle}>
+
+          Expense Analytics
+
+        </div>
+
+        <div style={tableCard}>
+
+          <table
+            style={tableStyle}
+          >
+
+            <thead>
+
+              <tr>
+
+                <th style={thStyle}>
+                  Category
+                </th>
+
+                <th style={thStyle}>
+                  Total Expense
+                </th>
+
+              </tr>
+
+            </thead>
+
+            <tbody>
+
+              {categorySummary.map(
+                (
+                  [cat, value],
+                  i
+                ) => (
+
+                  <tr key={i}>
+
+                    <td style={tdStyle}>
+                      {cat}
+                    </td>
+
+                    <td style={tdStyle}>
+
+                      ₹{" "}
+                      {value.toFixed(
+                        0
+                      )}
+
+                    </td>
+
+                  </tr>
+
+                )
+              )}
+
+            </tbody>
+
+          </table>
+
+        </div>
+
       </div>
+
+      {/* NOTE */}
+
+      <div
+        style={{
+          background:
+            "#fff7ed",
+          border:
+            "1px solid #fed7aa",
+          padding: 16,
+          borderRadius: 12,
+          color:
+            "#7c2d12",
+        }}
+      >
+
+        <b>Operational Purpose:</b>
+        <br />
+        This module captures monthly
+        manufacturing overheads and
+        operational costs including:
+        electricity, labour,
+        consumables, additives,
+        transport, maintenance,
+        resin usage and utilities.
+        This enables realistic
+        profitability tracking in
+        RegenOS dashboards.
+
+      </div>
+
     </div>
+
   );
+
 }
 
-const cardStyle = {
-  background: "white",
-  padding: 20,
-  borderRadius: 10,
-  marginBottom: 25,
-  boxShadow: "0 2px 10px rgba(0,0,0,0.08)",
-};
+function Field({
+  label,
+  children,
+}) {
 
-const formStyle = {
-  display: "grid",
-  gap: 10,
-  maxWidth: 700,
-};
+  return (
 
-const inputStyle = {
-  padding: 10,
-  borderRadius: 8,
-  border: "1px solid #ccc",
-};
+    <div>
 
-const textareaStyle = {
-  padding: 10,
-  borderRadius: 8,
-  border: "1px solid #ccc",
-  minHeight: 80,
-};
+      <div
+        style={{
+          marginBottom: 4,
+          fontWeight: 600,
+          color: "#334155",
+          fontSize: 12,
+        }}
+      >
 
-const buttonStyle = {
-  background: "#0f766e",
-  color: "white",
-  border: "none",
-  padding: 14,
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 700,
-};
+        {label}
 
-const statusStyle = {
-  marginBottom: 20,
-  color: "green",
-  fontWeight: 600,
-};
+      </div>
 
-const summaryStyle = {
-  background: "#ecfdf5",
-  padding: 15,
-  borderRadius: 8,
-  marginBottom: 20,
-  color: "#065f46",
-};
+      {children}
 
-const tableStyle = {
-  width: "100%",
-  borderCollapse: "collapse",
-};
+    </div>
 
-const headerRowStyle = {
-  background: "#0f766e",
-  color: "white",
-};
+  );
 
-const th = {
-  padding: 12,
-  textAlign: "left",
-};
+}
 
-const td = {
-  padding: 10,
-};
+function KPI({
+  title,
+  value,
+}) {
 
-const noteStyle = {
-  background: "#fff7ed",
-  border: "1px solid #fed7aa",
-  padding: 15,
-  borderRadius: 10,
-  marginTop: 20,
-  color: "#7c2d12",
-};
+  return (
+
+    <div
+      style={{
+        background:
+          "white",
+        border:
+          "1px solid #e5e7eb",
+        borderRadius: 12,
+        padding: 16,
+      }}
+    >
+
+      <div
+        style={{
+          color:
+            "#64748b",
+          fontSize: 12,
+          marginBottom: 8,
+        }}
+      >
+
+        {title}
+
+      </div>
+
+      <div
+        style={{
+          fontSize: 24,
+          fontWeight: 700,
+          color:
+            "#005d34",
+        }}
+      >
+
+        {value}
+
+      </div>
+
+    </div>
+
+  );
+
+}

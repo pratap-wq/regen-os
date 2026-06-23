@@ -14,21 +14,38 @@ import { auth, logout } from "./firebase";
 import Sidebar from "./components/Sidebar";
 
 import Login from "./pages/Login";
+
+import Production from "./pages/Production";
+import ProductionHistory from "./pages/ProductionHistory";
+import ProductionControlCenter from "./pages/ProductionControlCenter";
+
 import Dashboard from "./pages/Dashboard";
+import ProcurementDashboard from "./pages/ProcurementDashboard";
+import InventoryDashboard from "./pages/InventoryDashboard";
+
 import RMInward from "./pages/RMInward";
 import RMList from "./pages/RMList";
 import Suppliers from "./pages/Suppliers";
+import SupplierEntry from "./pages/SupplierEntry";
+
 import WashBatches from "./pages/WashBatches";
 import ExtrusionBatches from "./pages/ExtrusionBatches";
 import Dispatch from "./pages/Dispatch";
-import MonthlyAudit from "./pages/MonthlyAudit";
+import ColorSorterBatches from "./pages/ColorSorterBatches";
+
 import LiveInventory from "./pages/LiveInventory";
+import MonthlyAudit from "./pages/MonthlyAudit";
+
 import FGRates from "./pages/FGRates";
 import FactoryExpenses from "./pages/FactoryExpenses";
+
 import Consumables from "./pages/Consumables";
-import SupplierEntry from "./pages/SupplierEntry";
 import StoresInward from "./pages/StoresInward";
 import StoresIssue from "./pages/StoresIssue";
+import LiveStoresInventory from "./pages/LiveStoresInventory";
+
+import AlertSettings from "./pages/AlertSettings";
+import AlertCenter from "./pages/AlertCenter";
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -49,11 +66,7 @@ export default function App() {
   }, []);
 
   if (loading) {
-    return (
-      <div style={{ padding: 40, fontSize: 18 }}>
-        Loading Regen OS...
-      </div>
-    );
+    return <div style={loadingStyle}>Loading Regen OS...</div>;
   }
 
   if (!user) {
@@ -62,79 +75,185 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <div
-        style={{
-          display: "flex",
-          minHeight: "100vh",
-          background: "#f3f4f6",
-        }}
-      >
-        <Sidebar />
+      <div style={appShell}>
+        <aside style={sideWrap}>
+          <Sidebar />
+        </aside>
 
-        <div
-          style={{
-            flex: 1,
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
-          <div
-            style={{
-              background: "white",
-              padding: 15,
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              borderBottom: "1px solid #ddd",
-              position: "sticky",
-              top: 0,
-              zIndex: 100,
-            }}
-          >
+        <main style={mainWrap}>
+          <div style={topBar}>
             <div>
-              Logged in: <b>{user.email}</b>
+              <div style={brandTitle}>Regen OS</div>
+
+              <div style={brandSub}>
+                Logged in: <b>{user.email}</b>
+              </div>
             </div>
 
-            <button
-              onClick={logout}
-              style={{
-                background: "#dc2626",
-                color: "white",
-                border: "none",
-                padding: "10px 14px",
-                borderRadius: 8,
-                cursor: "pointer",
-                fontWeight: 600,
-              }}
-            >
+            <button onClick={logout} style={logoutButton}>
               Logout
             </button>
           </div>
 
-          <div style={{ flex: 1, overflow: "auto" }}>
+          <div style={pageWrap}>
             <Routes>
-              <Route path="/" element={<Dashboard />} />
+              <Route path="/" element={<Production />} />
+
+              <Route path="/production" element={<Production />} />
+
+              <Route
+                path="/production-history"
+                element={<ProductionHistory />}
+              />
+
+              <Route
+                path="/production-control-center"
+                element={<ProductionControlCenter />}
+              />
+
+              <Route path="/dashboard" element={<Dashboard />} />
+
+              <Route
+                path="/procurement-dashboard"
+                element={<ProcurementDashboard />}
+              />
+
+              <Route
+                path="/inventory-dashboard"
+                element={<InventoryDashboard />}
+              />
+
               <Route path="/live-inventory" element={<LiveInventory />} />
+
               <Route path="/rm-inward" element={<RMInward />} />
+
               <Route path="/rm-list" element={<RMList />} />
+
               <Route path="/suppliers" element={<Suppliers />} />
-              <Route path="/wash-batches" element={<WashBatches />} />
-              <Route path="/extrusion-batches" element={<ExtrusionBatches />} />
-              <Route path="/dispatch" element={<Dispatch />} />
-              <Route path="/monthly-audit" element={<MonthlyAudit />} />
-              <Route path="/fg-rates" element={<FGRates />} />
-              <Route path="/consumables" element={<Consumables />} />
-              <Route path="/factory-expenses" element={<FactoryExpenses />} />
-              <Route path="*" element={<Navigate to="/" />} />
+
               <Route path="/supplier-entry" element={<SupplierEntry />} />
+
+              <Route path="/wash-batches" element={<WashBatches />} />
+
+              <Route
+                path="/extrusion-batches"
+                element={<ExtrusionBatches />}
+              />
+
+              <Route path="/dispatch" element={<Dispatch />} />
+
+              <Route
+                path="/color-sorter-batches"
+                element={<ColorSorterBatches />}
+              />
+
+              <Route path="/monthly-audit" element={<MonthlyAudit />} />
+
+              <Route path="/fg-rates" element={<FGRates />} />
+
+              <Route
+                path="/factory-expenses"
+                element={<FactoryExpenses />}
+              />
+
+              <Route path="/consumables" element={<Consumables />} />
+
               <Route path="/stores-inward" element={<StoresInward />} />
+
               <Route path="/stores-issue" element={<StoresIssue />} />
 
+              <Route path="/live-stores" element={<LiveStoresInventory />} />
 
+              <Route path="/alert-center" element={<AlertCenter />} />
+
+              <Route path="/alert-settings" element={<AlertSettings />} />
+
+              <Route path="*" element={<Navigate to="/" />} />
             </Routes>
           </div>
-        </div>
+        </main>
       </div>
     </BrowserRouter>
   );
 }
+
+const loadingStyle = {
+  padding: 40,
+  fontSize: 18,
+};
+
+const appShell = {
+  display: "flex",
+  width: "100%",
+  minHeight: "100vh",
+  margin: 0,
+  padding: 0,
+  background: "#f8fafc",
+};
+
+const sideWrap = {
+  width: 250,
+  minWidth: 250,
+  maxWidth: 250,
+  flexShrink: 0,
+  minHeight: "100vh",
+  height: "100vh",
+  overflow: "hidden",
+  margin: 0,
+  padding: 0,
+  zIndex: 200,
+};
+
+const mainWrap = {
+  flex: 1,
+  minWidth: 0,
+  display: "flex",
+  flexDirection: "column",
+  minHeight: "100vh",
+  overflow: "hidden",
+  margin: 0,
+  padding: 0,
+};
+
+const topBar = {
+  background: "white",
+  padding: "12px 22px",
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  borderBottom: "1px solid #e5e7eb",
+  boxShadow: "0 2px 10px rgba(15,23,42,0.04)",
+  flexShrink: 0,
+};
+
+const brandTitle = {
+  fontWeight: 800,
+  fontSize: 18,
+  color: "#0f766e",
+};
+
+const brandSub = {
+  fontSize: 13,
+  color: "#64748b",
+  marginTop: 3,
+};
+
+const logoutButton = {
+  background: "#dc2626",
+  color: "white",
+  border: "none",
+  padding: "10px 16px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const pageWrap = {
+  flex: 1,
+  overflowX: "auto",
+  overflowY: "auto",
+  padding: "16px 20px",
+  width: "100%",
+  boxSizing: "border-box",
+  background: "#f8fafc",
+};

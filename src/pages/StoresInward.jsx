@@ -1,404 +1,671 @@
 import { useEffect, useState } from "react";
+
 import { apiCall } from "../api/api";
 
+import { formatDate } from "../utils/date";
+
+import {
+  pageStyle,
+  sectionCard,
+  sectionTitle,
+  formGrid,
+  inputStyle,
+  textareaStyle,
+  readonlyStyle,
+  primaryButton,
+  tableCard,
+  tableStyle,
+  thStyle,
+  tdStyle,
+} from "../ui/styles";
+
 export default function StoresInward() {
+  const today = new Date().toISOString().split("T")[0];
 
-  const [rows, setRows] = useState([]);
-  const [items, setItems] = useState([]);
-  const [status, setStatus] = useState("");
+  const categories = [
+    "PROCESS CHEMICALS",
+    "EXTRUSION CONSUMABLES",
+    "QUALITY ADDITIVES",
+    "MAINTENANCE",
+    "PACKING",
+    "SAFETY & PPE",
+    "TOOLS & SPARES",
+    "HOUSEKEEPING",
+    "ADMIN / GENERAL",
+  ];
 
-  const [form, setForm] = useState({
-    date: "",
+  const units = ["Kg", "Nos", "Ltr", "Bag", "Box", "Set", "Roll"];
+
+  const blankForm = {
+    date: today,
     itemName: "",
     category: "",
+    unit: "",
     qty: "",
     rate: "",
     totalAmount: "",
     supplier: "",
+    invoiceNo: "",
     remarks: "",
     createdBy: "Pratap",
-  });
+  };
+
+  const blankNewItem = {
+    itemName: "",
+    category: "",
+    unit: "Kg",
+    minLevel: "",
+    reorderLevel: "",
+    preferredSupplier: "",
+    standardRate: "",
+    isActive: "TRUE",
+    remarks: "",
+    createdBy: "Pratap",
+  };
+
+  const [rows, setRows] = useState([]);
+  const [items, setItems] = useState([]);
+  const [status, setStatus] = useState("");
+  const [form, setForm] = useState(blankForm);
+
+  const [showAddItem, setShowAddItem] = useState(false);
+  const [newItem, setNewItem] = useState(blankNewItem);
+  const [savingItem, setSavingItem] = useState(false);
 
   useEffect(() => {
-
     loadData();
-
   }, []);
 
+  async function safeList(fn) {
+    try {
+      const res = await apiCall({ fn });
+      return res.rows || [];
+    } catch (err) {
+      console.log(fn, err);
+      return [];
+    }
+  }
+
   async function loadData() {
+    try {
+      const [inwardRows, consumableRows, storesMasterRows] = await Promise.all([
+        safeList("storesInward.list"),
+        safeList("consumables.list"),
+        safeList("storesMaster.list"),
+      ]);
 
-    const [
-      inward,
-      master,
-    ] = await Promise.all([
+      setRows(inwardRows);
 
-      apiCall({
-        fn: "storesInward.list",
-      }),
+      const mergedMap = {};
 
-      apiCall({
-        fn: "storesMaster.list",
-      }),
+      [...consumableRows, ...storesMasterRows].forEach((x) => {
+        const itemName = x.itemName || x.item || x.name || "";
 
-    ]);
+        if (!itemName) return;
 
-    setRows(inward.rows || []);
-    setItems(master.rows || []);
+        if (String(x.status || "").toUpperCase() === "DELETED") return;
+        if (String(x.isActive || "TRUE").toUpperCase() === "FALSE") return;
 
+        mergedMap[itemName] = {
+          ...x,
+          itemName,
+          category: x.category || "",
+          unit: x.unit || "",
+          standardRate: x.standardRate || x.rate || x.ratePerUnit || "",
+          preferredSupplier:
+            x.preferredSupplier || x.supplier || x.vendor || "",
+        };
+      });
+
+      setItems(Object.values(mergedMap).sort((a, b) =>
+        String(a.itemName).localeCompare(String(b.itemName))
+      ));
+    } catch (err) {
+      console.log(err);
+      setStatus(err.message);
+    }
   }
 
   function onChange(e) {
-
     const updated = {
       ...form,
       [e.target.name]: e.target.value,
     };
 
-    const qty =
-      Number(updated.qty || 0);
-
-    const rate =
-      Number(updated.rate || 0);
-
-    updated.totalAmount =
-      qty * rate;
-
     if (e.target.name === "itemName") {
-
-      const selected =
-        items.find(
-          (x) =>
-            x.itemName ===
-            e.target.value
-        );
+      const selected = items.find((x) => x.itemName === e.target.value);
 
       if (selected) {
-
-        updated.category =
-          selected.category;
-
+        updated.category = selected.category || "";
+        updated.unit = selected.unit || "";
+        updated.rate = selected.standardRate || updated.rate || "";
+        updated.supplier =
+          selected.preferredSupplier || updated.supplier || "";
       }
-
     }
 
-    setForm(updated);
+    const qty = Number(updated.qty || 0);
+    const rate = Number(updated.rate || 0);
+    updated.totalAmount = qty * rate;
 
+    setForm(updated);
+  }
+
+  function onNewItemChange(e) {
+    setNewItem({
+      ...newItem,
+      [e.target.name]: e.target.value,
+    });
+  }
+
+  async function saveNewConsumable(e) {
+    e.preventDefault();
+
+    if (!newItem.itemName) {
+      alert("Item name is required");
+      return;
+    }
+
+    if (!newItem.category) {
+      alert("Category is required");
+      return;
+    }
+
+    try {
+      setSavingItem(true);
+
+      const res = await apiCall({
+        fn: "consumables.add",
+        ...newItem,
+      });
+
+      if (res.ok === false) {
+        alert(res.error || "Could not save consumable");
+        return;
+      }
+
+      setStatus("New consumable item added");
+
+      setForm({
+        ...form,
+        itemName: newItem.itemName,
+        category: newItem.category,
+        unit: newItem.unit,
+        rate: newItem.standardRate || form.rate,
+        supplier: newItem.preferredSupplier || form.supplier,
+      });
+
+      setNewItem(blankNewItem);
+      setShowAddItem(false);
+      await loadData();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSavingItem(false);
+    }
   }
 
   async function submit(e) {
-
     e.preventDefault();
 
-    try {
+    if (!form.date) {
+      alert("Date is mandatory");
+      return;
+    }
 
+    if (!form.itemName) {
+      alert("Select item");
+      return;
+    }
+
+    if (!form.qty) {
+      alert("Enter quantity");
+      return;
+    }
+
+    try {
       const res = await apiCall({
         fn: "storesInward.add",
         ...form,
       });
 
       if (res.ok) {
-
-        setStatus(
-          "Stores inward saved"
-        );
-
-        setForm({
-          date: "",
-          itemName: "",
-          category: "",
-          qty: "",
-          rate: "",
-          totalAmount: "",
-          supplier: "",
-          remarks: "",
-          createdBy: "Pratap",
-        });
-
+        setStatus("Stores inward saved successfully");
+        setForm(blankForm);
         loadData();
-
       } else {
-
-        setStatus(
-          res.error || "Error"
-        );
-
+        setStatus(res.error || "Error");
       }
-
     } catch (err) {
-
       setStatus(err.message);
-
     }
-
   }
 
+  const totalQty = rows.reduce((sum, r) => sum + Number(r.qty || 0), 0);
+
+  const totalValue = rows.reduce(
+    (sum, r) => sum + Number(r.totalAmount || 0),
+    0
+  );
+
+  const avgRate = totalQty > 0 ? (totalValue / totalQty).toFixed(2) : 0;
+
+  const supplierCount = [
+    ...new Set(rows.map((r) => r.supplier).filter(Boolean)),
+  ].length;
+
   return (
+    <div style={pageStyle}>
+      <div style={sectionCard}>
+        <div style={sectionTitle}>Stores Inward</div>
 
-    <div style={{ padding: 20 }}>
-
-      <h1>Stores Inward</h1>
-
-      <div style={cardStyle}>
-
-        <form
-          onSubmit={submit}
-          style={formStyle}
-        >
-
-          <input
-            type="date"
-            name="date"
-            value={form.date}
-            onChange={onChange}
-            style={inputStyle}
-          />
-
-          <select
-            name="itemName"
-            value={form.itemName}
-            onChange={onChange}
-            style={inputStyle}
-          >
-
-            <option value="">
-              Select Item
-            </option>
-
-            {items.map((x, i) => (
-
-              <option
-                key={i}
-                value={x.itemName}
-              >
-                {x.itemName}
-              </option>
-
-            ))}
-
-          </select>
-
-          <input
-            name="category"
-            value={form.category}
-            readOnly
-            placeholder="Category"
-            style={inputStyle}
-          />
-
-          <input
-            type="number"
-            name="qty"
-            value={form.qty}
-            onChange={onChange}
-            placeholder="Quantity"
-            style={inputStyle}
-          />
-
-          <input
-            type="number"
-            name="rate"
-            value={form.rate}
-            onChange={onChange}
-            placeholder="Rate"
-            style={inputStyle}
-          />
-
-          <input
-            name="totalAmount"
-            value={form.totalAmount}
-            readOnly
-            placeholder="Total Amount"
-            style={inputStyle}
-          />
-
-          <input
-            name="supplier"
-            value={form.supplier}
-            onChange={onChange}
-            placeholder="Supplier"
-            style={inputStyle}
-          />
-
-          <textarea
-            name="remarks"
-            value={form.remarks}
-            onChange={onChange}
-            placeholder="Remarks"
-            style={textareaStyle}
-          />
-
-          <button
-            type="submit"
-            style={buttonStyle}
-          >
-            Save Stores Inward
-          </button>
-
-        </form>
-
+        <div style={{ color: "#64748b", fontSize: 13 }}>
+          Consumables inward entry connected to Consumables Master
+        </div>
       </div>
 
-      {status && (
+      <div style={kpiGrid}>
+        <KPI title="Total Qty" value={totalQty} />
+        <KPI title="Inventory Value" value={`₹ ${totalValue.toFixed(0)}`} />
+        <KPI title="Average Rate" value={`₹ ${avgRate}`} />
+        <KPI title="Suppliers" value={supplierCount} />
+      </div>
 
-        <div style={statusStyle}>
-          {status}
+      <div style={sectionCard}>
+        <div style={sectionHeader}>
+          <div>
+            <div style={sectionTitle}>Inward Entry</div>
+            <div style={{ color: "#64748b", fontSize: 13 }}>
+              Select item from master or add a new consumable directly.
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowAddItem(true)}
+            style={secondaryButton}
+          >
+            + Add New Consumable
+          </button>
         </div>
 
-      )}
+        <form onSubmit={submit} style={formGrid}>
+          <Field label="Date">
+            <input
+              type="date"
+              name="date"
+              value={form.date}
+              onChange={onChange}
+              style={inputStyle}
+              required
+            />
+          </Field>
 
-      <div style={tableCardStyle}>
+          <Field label="Item">
+            <select
+              name="itemName"
+              value={form.itemName}
+              onChange={onChange}
+              style={inputStyle}
+              required
+            >
+              <option value="">
+                {items.length === 0
+                  ? "No items found - add consumable"
+                  : "Select Item"}
+              </option>
 
-        <h2>Recent Inward</h2>
+              {items.map((x, i) => (
+                <option key={i} value={x.itemName}>
+                  {x.itemName}
+                </option>
+              ))}
+            </select>
+          </Field>
 
-        <div
-          style={{
-            overflowX: "auto",
-          }}
-        >
+          <Field label="Category">
+            <input value={form.category} readOnly style={readonlyStyle} />
+          </Field>
 
+          <Field label="Unit">
+            <input value={form.unit} readOnly style={readonlyStyle} />
+          </Field>
+
+          <Field label="Qty">
+            <input
+              type="number"
+              name="qty"
+              value={form.qty}
+              onChange={onChange}
+              style={inputStyle}
+              required
+            />
+          </Field>
+
+          <Field label="Rate">
+            <input
+              type="number"
+              name="rate"
+              value={form.rate}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
+
+          <Field label="Amount">
+            <input value={form.totalAmount} readOnly style={readonlyStyle} />
+          </Field>
+
+          <Field label="Supplier">
+            <input
+              name="supplier"
+              value={form.supplier}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
+
+          <Field label="Invoice">
+            <input
+              name="invoiceNo"
+              value={form.invoiceNo}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
+
+          <Field label="Remarks">
+            <textarea
+              name="remarks"
+              value={form.remarks}
+              onChange={onChange}
+              style={textareaStyle}
+            />
+          </Field>
+
+          <div style={{ display: "flex", alignItems: "end" }}>
+            <button type="submit" style={primaryButton}>
+              Save Inward
+            </button>
+          </div>
+        </form>
+
+        {status && <div style={statusStyle}>{status}</div>}
+      </div>
+
+      <div style={sectionCard}>
+        <div style={sectionTitle}>Recent Inward</div>
+
+        <div style={tableCard}>
           <table style={tableStyle}>
-
             <thead>
-
-              <tr style={headerRowStyle}>
-
-                <th style={th}>Date</th>
-                <th style={th}>Item</th>
-                <th style={th}>Category</th>
-                <th style={th}>Qty</th>
-                <th style={th}>Rate</th>
-                <th style={th}>Amount</th>
-                <th style={th}>Supplier</th>
-
+              <tr>
+                <th style={thStyle}>Date</th>
+                <th style={thStyle}>Item</th>
+                <th style={thStyle}>Category</th>
+                <th style={thStyle}>Unit</th>
+                <th style={thStyle}>Qty</th>
+                <th style={thStyle}>Rate</th>
+                <th style={thStyle}>Amount</th>
+                <th style={thStyle}>Supplier</th>
               </tr>
-
             </thead>
 
             <tbody>
-
               {rows.map((r, i) => (
+                <tr key={i}>
+                  <td style={tdStyle}>{formatDate(r.date)}</td>
 
-                <tr
-                  key={i}
-                  style={{
-                    borderBottom:
-                      "1px solid #ddd",
-                  }}
-                >
-
-                  <td style={td}>
-                    {r.date}
+                  <td style={tdStyle}>
+                    <b>{r.itemName}</b>
                   </td>
 
-                  <td style={td}>
-                    {r.itemName}
-                  </td>
-
-                  <td style={td}>
-                    {r.category}
-                  </td>
-
-                  <td style={td}>
-                    {r.qty}
-                  </td>
-
-                  <td style={td}>
-                    ₹ {r.rate}
-                  </td>
-
-                  <td style={td}>
-                    ₹ {r.totalAmount}
-                  </td>
-
-                  <td style={td}>
-                    {r.supplier}
-                  </td>
-
+                  <td style={tdStyle}>{r.category}</td>
+                  <td style={tdStyle}>{r.unit}</td>
+                  <td style={tdStyle}>{r.qty}</td>
+                  <td style={tdStyle}>₹ {r.rate}</td>
+                  <td style={tdStyle}>₹ {r.totalAmount}</td>
+                  <td style={tdStyle}>{r.supplier}</td>
                 </tr>
-
               ))}
-
             </tbody>
-
           </table>
-
         </div>
-
       </div>
 
+      {showAddItem && (
+        <div style={modalOverlay}>
+          <div style={modal}>
+            <h2 style={{ marginTop: 0 }}>Add New Consumable</h2>
+
+            <form onSubmit={saveNewConsumable} style={formGrid}>
+              <Field label="Item Name">
+                <input
+                  name="itemName"
+                  value={newItem.itemName}
+                  onChange={onNewItemChange}
+                  style={inputStyle}
+                  required
+                />
+              </Field>
+
+              <Field label="Category">
+                <select
+                  name="category"
+                  value={newItem.category}
+                  onChange={onNewItemChange}
+                  style={inputStyle}
+                  required
+                >
+                  <option value="">Select Category</option>
+                  {categories.map((c) => (
+                    <option key={c}>{c}</option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Unit">
+                <select
+                  name="unit"
+                  value={newItem.unit}
+                  onChange={onNewItemChange}
+                  style={inputStyle}
+                >
+                  {units.map((u) => (
+                    <option key={u}>{u}</option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Min Level">
+                <input
+                  type="number"
+                  name="minLevel"
+                  value={newItem.minLevel}
+                  onChange={onNewItemChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Reorder Level">
+                <input
+                  type="number"
+                  name="reorderLevel"
+                  value={newItem.reorderLevel}
+                  onChange={onNewItemChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Preferred Supplier">
+                <input
+                  name="preferredSupplier"
+                  value={newItem.preferredSupplier}
+                  onChange={onNewItemChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Standard Rate">
+                <input
+                  type="number"
+                  name="standardRate"
+                  value={newItem.standardRate}
+                  onChange={onNewItemChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Remarks">
+                <textarea
+                  name="remarks"
+                  value={newItem.remarks}
+                  onChange={onNewItemChange}
+                  style={textareaStyle}
+                />
+              </Field>
+
+              <div style={modalButtons}>
+                <button
+                  type="button"
+                  onClick={() => setShowAddItem(false)}
+                  style={cancelButton}
+                >
+                  Cancel
+                </button>
+
+                <button type="submit" disabled={savingItem} style={saveButton}>
+                  {savingItem ? "Saving..." : "Save Item"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
-
   );
-
 }
 
-const cardStyle = {
-  background: "white",
-  padding: 20,
-  borderRadius: 10,
-  marginBottom: 25,
-  boxShadow:
-    "0 2px 10px rgba(0,0,0,0.08)",
-};
+function Field({ label, children }) {
+  return (
+    <div>
+      <div style={fieldLabel}>{label}</div>
+      {children}
+    </div>
+  );
+}
 
-const tableCardStyle = {
-  background: "white",
-  padding: 20,
-  borderRadius: 10,
-  boxShadow:
-    "0 2px 10px rgba(0,0,0,0.08)",
-};
+function KPI({ title, value }) {
+  return (
+    <div style={kpiCard}>
+      <div style={kpiTitle}>{title}</div>
+      <div style={kpiValue}>{value}</div>
+    </div>
+  );
+}
 
-const formStyle = {
+const kpiGrid = {
   display: "grid",
+  gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))",
+  gap: 14,
+  marginBottom: 16,
+};
+
+const kpiCard = {
+  background: "white",
+  border: "1px solid #e5e7eb",
+  borderRadius: 12,
+  padding: 16,
+};
+
+const kpiTitle = {
+  color: "#64748b",
+  fontSize: 12,
+  marginBottom: 8,
+};
+
+const kpiValue = {
+  fontSize: 24,
+  fontWeight: 700,
+  color: "#005d34",
+};
+
+const sectionHeader = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
   gap: 12,
-  maxWidth: 700,
+  marginBottom: 16,
+  flexWrap: "wrap",
 };
 
-const inputStyle = {
-  padding: 12,
-  borderRadius: 8,
-  border: "1px solid #ccc",
-};
-
-const textareaStyle = {
-  padding: 12,
-  borderRadius: 8,
-  border: "1px solid #ccc",
-  minHeight: 80,
-};
-
-const buttonStyle = {
-  background: "#0f766e",
+const secondaryButton = {
+  background: "#2563eb",
   color: "white",
   border: "none",
-  padding: 14,
+  padding: "10px 14px",
   borderRadius: 8,
   cursor: "pointer",
   fontWeight: 700,
 };
 
 const statusStyle = {
-  marginBottom: 20,
-  color: "green",
+  marginTop: 14,
   fontWeight: 600,
+  color: "#0f766e",
 };
 
-const tableStyle = {
-  width: "100%",
-  borderCollapse: "collapse",
+const fieldLabel = {
+  marginBottom: 4,
+  fontWeight: 600,
+  color: "#334155",
+  fontSize: 12,
 };
 
-const headerRowStyle = {
+const modalOverlay = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.45)",
+  display: "flex",
+  justifyContent: "center",
+  alignItems: "center",
+  zIndex: 9999,
+};
+
+const modal = {
+  background: "white",
+  padding: 24,
+  borderRadius: 14,
+  width: 850,
+  maxWidth: "95vw",
+  maxHeight: "90vh",
+  overflowY: "auto",
+  boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
+};
+
+const modalButtons = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 10,
+  alignItems: "end",
+};
+
+const cancelButton = {
+  background: "#64748b",
+  color: "white",
+  border: "none",
+  padding: "10px 16px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const saveButton = {
   background: "#0f766e",
   color: "white",
-};
-
-const th = {
-  padding: 12,
-  textAlign: "left",
-};
-
-const td = {
-  padding: 10,
+  border: "none",
+  padding: "10px 16px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
 };

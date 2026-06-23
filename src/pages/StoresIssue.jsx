@@ -1,22 +1,63 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
 import { apiCall } from "../api/api";
+
+import { formatDate } from "../utils/date";
+
+import {
+  pageStyle,
+  sectionCard,
+  sectionTitle,
+  formGrid,
+  inputStyle,
+  textareaStyle,
+  readonlyStyle,
+  primaryButton,
+  tableCard,
+  tableStyle,
+  thStyle,
+  tdStyle,
+} from "../ui/styles";
 
 export default function StoresIssue() {
 
-  const [rows, setRows] = useState([]);
-  const [items, setItems] = useState([]);
-  const [status, setStatus] = useState("");
+  const today =
+    new Date()
+      .toISOString()
+      .split("T")[0];
 
-  const [form, setForm] = useState({
-    date: "",
+  const [rows, setRows] =
+    useState([]);
+
+  const [items, setItems] =
+    useState([]);
+
+  const [status, setStatus] =
+    useState("");
+
+  const blankForm = {
+
+    date: today,
+
     itemName: "",
+
     category: "",
+
     qty: "",
+
     department: "",
+
     purpose: "",
+
     remarks: "",
-    createdBy: "Pratap",
-  });
+
+    createdBy:
+      "Pratap",
+
+  };
+
+  const [form, setForm] =
+    useState(blankForm);
 
   useEffect(() => {
 
@@ -26,34 +67,56 @@ export default function StoresIssue() {
 
   async function loadData() {
 
-    const [
-      issue,
-      master,
-    ] = await Promise.all([
+    try {
 
-      apiCall({
-        fn: "storesIssue.list",
-      }),
+      const [
+        issue,
+        master,
+      ] = await Promise.all([
 
-      apiCall({
-        fn: "storesMaster.list",
-      }),
+        apiCall({
+          fn:
+            "storesIssue.list",
+        }),
 
-    ]);
+        apiCall({
+          fn:
+            "storesMaster.list",
+        }),
 
-    setRows(issue.rows || []);
-    setItems(master.rows || []);
+      ]);
+
+      setRows(
+        issue.rows || []
+      );
+
+      setItems(
+        master.rows || []
+      );
+
+    } catch (err) {
+
+      console.log(err);
+
+    }
 
   }
 
   function onChange(e) {
 
     const updated = {
+
       ...form,
-      [e.target.name]: e.target.value,
+
+      [e.target.name]:
+        e.target.value,
+
     };
 
-    if (e.target.name === "itemName") {
+    if (
+      e.target.name ===
+      "itemName"
+    ) {
 
       const selected =
         items.find(
@@ -81,27 +144,25 @@ export default function StoresIssue() {
 
     try {
 
-      const res = await apiCall({
-        fn: "storesIssue.add",
-        ...form,
-      });
+      const res =
+        await apiCall({
+
+          fn:
+            "storesIssue.add",
+
+          ...form,
+
+        });
 
       if (res.ok) {
 
         setStatus(
-          "Stores issue saved"
+          "Stores issue saved successfully"
         );
 
-        setForm({
-          date: "",
-          itemName: "",
-          category: "",
-          qty: "",
-          department: "",
-          purpose: "",
-          remarks: "",
-          createdBy: "Pratap",
-        });
+        setForm(
+          blankForm
+        );
 
         loadData();
 
@@ -115,150 +176,405 @@ export default function StoresIssue() {
 
     } catch (err) {
 
-      setStatus(err.message);
+      setStatus(
+        err.message
+      );
 
     }
 
   }
 
+  const totalIssueQty =
+    rows.reduce(
+      (sum, r) => {
+
+        return (
+          sum +
+          Number(
+            r.qty || 0
+          )
+        );
+
+      },
+      0
+    );
+
+  const departmentSummary =
+    useMemo(() => {
+
+      const map = {};
+
+      rows.forEach((r) => {
+
+        const dept =
+          r.department ||
+          "Unknown";
+
+        if (!map[dept]) {
+
+          map[dept] = 0;
+
+        }
+
+        map[dept] +=
+          Number(
+            r.qty || 0
+          );
+
+      });
+
+      return Object.entries(
+        map
+      );
+
+    }, [rows]);
+
+  const topConsumption =
+    useMemo(() => {
+
+      const map = {};
+
+      rows.forEach((r) => {
+
+        const item =
+          r.itemName ||
+          "Unknown";
+
+        if (!map[item]) {
+
+          map[item] = 0;
+
+        }
+
+        map[item] +=
+          Number(
+            r.qty || 0
+          );
+
+      });
+
+      return Object.entries(
+        map
+      )
+        .sort(
+          (a, b) =>
+            b[1] - a[1]
+        )
+        .slice(0, 5);
+
+    }, [rows]);
+
   return (
 
-    <div style={{ padding: 20 }}>
+    <div style={pageStyle}>
 
-      <h1>Stores Issue</h1>
+      {/* HEADER */}
 
-      <div style={cardStyle}>
+      <div style={sectionCard}>
 
-        <form
-          onSubmit={submit}
-          style={formStyle}
-        >
+        <div style={sectionTitle}>
 
-          <input
-            type="date"
-            name="date"
-            value={form.date}
-            onChange={onChange}
-            style={inputStyle}
-          />
+          Stores Consumption
 
-          <select
-            name="itemName"
-            value={form.itemName}
-            onChange={onChange}
-            style={inputStyle}
-          >
-
-            <option value="">
-              Select Item
-            </option>
-
-            {items.map((x, i) => (
-
-              <option
-                key={i}
-                value={x.itemName}
-              >
-                {x.itemName}
-              </option>
-
-            ))}
-
-          </select>
-
-          <input
-            name="category"
-            value={form.category}
-            readOnly
-            placeholder="Category"
-            style={inputStyle}
-          />
-
-          <input
-            type="number"
-            name="qty"
-            value={form.qty}
-            onChange={onChange}
-            placeholder="Issue Quantity"
-            style={inputStyle}
-          />
-
-          <select
-            name="department"
-            value={form.department}
-            onChange={onChange}
-            style={inputStyle}
-          >
-
-            <option value="">
-              Select Department
-            </option>
-
-            <option>Extrusion</option>
-            <option>Washline</option>
-            <option>Maintenance</option>
-            <option>Utilities</option>
-            <option>Admin</option>
-
-          </select>
-
-          <input
-            name="purpose"
-            value={form.purpose}
-            onChange={onChange}
-            placeholder="Purpose"
-            style={inputStyle}
-          />
-
-          <textarea
-            name="remarks"
-            value={form.remarks}
-            onChange={onChange}
-            placeholder="Remarks"
-            style={textareaStyle}
-          />
-
-          <button
-            type="submit"
-            style={buttonStyle}
-          >
-            Save Stores Issue
-          </button>
-
-        </form>
-
-      </div>
-
-      {status && (
-
-        <div style={statusStyle}>
-          {status}
         </div>
-
-      )}
-
-      <div style={tableCardStyle}>
-
-        <h2>Recent Stores Issues</h2>
 
         <div
           style={{
-            overflowX: "auto",
+            color:
+              "#64748b",
+            fontSize: 13,
           }}
         >
 
-          <table style={tableStyle}>
+          Department-wise
+          inventory consumption
+          tracking
+
+        </div>
+
+      </div>
+
+      {/* KPI */}
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns:
+            "repeat(auto-fit,minmax(220px,1fr))",
+          gap: 14,
+          marginBottom: 16,
+        }}
+      >
+
+        <KPI
+          title="Total Issues"
+          value={
+            rows.length
+          }
+        />
+
+        <KPI
+          title="Qty Consumed"
+          value={totalIssueQty}
+        />
+
+        <KPI
+          title="Departments"
+          value={
+            departmentSummary.length
+          }
+        />
+
+        <KPI
+          title="Top Consumptions"
+          value={
+            topConsumption.length
+          }
+        />
+
+      </div>
+
+      {/* ENTRY */}
+
+      <div style={sectionCard}>
+
+        <div style={sectionTitle}>
+
+          Consumption Entry
+
+        </div>
+
+        <form
+          onSubmit={submit}
+          style={formGrid}
+        >
+
+          <Field label="Date">
+
+            <input
+              type="date"
+              name="date"
+              value={form.date}
+              onChange={onChange}
+              style={inputStyle}
+            />
+
+          </Field>
+
+          <Field label="Item">
+
+            <select
+              name="itemName"
+              value={
+                form.itemName
+              }
+              onChange={onChange}
+              style={inputStyle}
+            >
+
+              <option value="">
+                Select Item
+              </option>
+
+              {items.map(
+                (x, i) => (
+
+                  <option
+                    key={i}
+                    value={
+                      x.itemName
+                    }
+                  >
+
+                    {x.itemName}
+
+                  </option>
+
+                )
+              )}
+
+            </select>
+
+          </Field>
+
+          <Field label="Category">
+
+            <input
+              value={
+                form.category
+              }
+              readOnly
+              style={
+                readonlyStyle
+              }
+            />
+
+          </Field>
+
+          <Field label="Qty">
+
+            <input
+              type="number"
+              name="qty"
+              value={form.qty}
+              onChange={onChange}
+              style={inputStyle}
+            />
+
+          </Field>
+
+          <Field label="Department">
+
+            <select
+              name="department"
+              value={
+                form.department
+              }
+              onChange={onChange}
+              style={inputStyle}
+            >
+
+              <option value="">
+                Select
+              </option>
+
+              <option>
+                Extrusion
+              </option>
+
+              <option>
+                Washline
+              </option>
+
+              <option>
+                Maintenance
+              </option>
+
+              <option>
+                Utilities
+              </option>
+
+              <option>
+                Admin
+              </option>
+
+            </select>
+
+          </Field>
+
+          <Field label="Purpose">
+
+            <input
+              name="purpose"
+              value={
+                form.purpose
+              }
+              onChange={onChange}
+              style={inputStyle}
+            />
+
+          </Field>
+
+          <Field label="Remarks">
+
+            <textarea
+              name="remarks"
+              value={
+                form.remarks
+              }
+              onChange={onChange}
+              style={
+                textareaStyle
+              }
+            />
+
+          </Field>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems:
+                "end",
+            }}
+          >
+
+            <button
+              type="submit"
+              style={
+                primaryButton
+              }
+            >
+
+              Save Issue
+
+            </button>
+
+          </div>
+
+        </form>
+
+        {status && (
+
+          <div
+            style={{
+              marginTop: 14,
+              fontWeight: 600,
+              color:
+                "#0f766e",
+            }}
+          >
+
+            {status}
+
+          </div>
+
+        )}
+
+      </div>
+
+      {/* HISTORY */}
+
+      <div style={sectionCard}>
+
+        <div style={sectionTitle}>
+
+          Recent Consumptions
+
+        </div>
+
+        <div style={tableCard}>
+
+          <table
+            style={tableStyle}
+          >
 
             <thead>
 
-              <tr style={headerRowStyle}>
+              <tr>
 
-                <th style={th}>Date</th>
-                <th style={th}>Item</th>
-                <th style={th}>Category</th>
-                <th style={th}>Qty</th>
-                <th style={th}>Department</th>
-                <th style={th}>Purpose</th>
+                <th style={thStyle}>
+                  Date
+                </th>
+
+                <th style={thStyle}>
+                  Item
+                </th>
+
+                <th style={thStyle}>
+                  Category
+                </th>
+
+                <th style={thStyle}>
+                  Qty
+                </th>
+
+                <th style={thStyle}>
+                  Department
+                </th>
+
+                <th style={thStyle}>
+                  Purpose
+                </th>
 
               </tr>
 
@@ -266,47 +582,192 @@ export default function StoresIssue() {
 
             <tbody>
 
-              {rows.map((r, i) => (
+              {rows.map(
+                (r, i) => (
 
-                <tr
-                  key={i}
-                  style={{
-                    borderBottom:
-                      "1px solid #ddd",
-                  }}
-                >
+                  <tr key={i}>
 
-                  <td style={td}>
-                    {r.date}
-                  </td>
+                    <td style={tdStyle}>
+                      {formatDate(
+                        r.date
+                      )}
+                    </td>
 
-                  <td style={td}>
-                    {r.itemName}
-                  </td>
+                    <td style={tdStyle}>
 
-                  <td style={td}>
-                    {r.category}
-                  </td>
+                      <b>
+                        {
+                          r.itemName
+                        }
+                      </b>
 
-                  <td style={td}>
-                    {r.qty}
-                  </td>
+                    </td>
 
-                  <td style={td}>
-                    {r.department}
-                  </td>
+                    <td style={tdStyle}>
+                      {
+                        r.category
+                      }
+                    </td>
 
-                  <td style={td}>
-                    {r.purpose}
-                  </td>
+                    <td style={tdStyle}>
+                      {r.qty}
+                    </td>
 
-                </tr>
+                    <td style={tdStyle}>
+                      {
+                        r.department
+                      }
+                    </td>
 
-              ))}
+                    <td style={tdStyle}>
+                      {
+                        r.purpose
+                      }
+                    </td>
+
+                  </tr>
+
+                )
+              )}
 
             </tbody>
 
           </table>
+
+        </div>
+
+      </div>
+
+      {/* ANALYTICS */}
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns:
+            "1fr 1fr",
+          gap: 16,
+        }}
+      >
+
+        <div style={sectionCard}>
+
+          <div style={sectionTitle}>
+
+            Department Usage
+
+          </div>
+
+          <div style={tableCard}>
+
+            <table
+              style={tableStyle}
+            >
+
+              <thead>
+
+                <tr>
+
+                  <th style={thStyle}>
+                    Department
+                  </th>
+
+                  <th style={thStyle}>
+                    Qty
+                  </th>
+
+                </tr>
+
+              </thead>
+
+              <tbody>
+
+                {departmentSummary.map(
+                  (
+                    [dept, qty],
+                    i
+                  ) => (
+
+                    <tr key={i}>
+
+                      <td style={tdStyle}>
+                        {dept}
+                      </td>
+
+                      <td style={tdStyle}>
+                        {qty}
+                      </td>
+
+                    </tr>
+
+                  )
+                )}
+
+              </tbody>
+
+            </table>
+
+          </div>
+
+        </div>
+
+        <div style={sectionCard}>
+
+          <div style={sectionTitle}>
+
+            Top Consumptions
+
+          </div>
+
+          <div style={tableCard}>
+
+            <table
+              style={tableStyle}
+            >
+
+              <thead>
+
+                <tr>
+
+                  <th style={thStyle}>
+                    Item
+                  </th>
+
+                  <th style={thStyle}>
+                    Qty
+                  </th>
+
+                </tr>
+
+              </thead>
+
+              <tbody>
+
+                {topConsumption.map(
+                  (
+                    [item, qty],
+                    i
+                  ) => (
+
+                    <tr key={i}>
+
+                      <td style={tdStyle}>
+                        {item}
+                      </td>
+
+                      <td style={tdStyle}>
+                        {qty}
+                      </td>
+
+                    </tr>
+
+                  )
+                )}
+
+              </tbody>
+
+            </table>
+
+          </div>
 
         </div>
 
@@ -318,73 +779,82 @@ export default function StoresIssue() {
 
 }
 
-const cardStyle = {
-  background: "white",
-  padding: 20,
-  borderRadius: 10,
-  marginBottom: 25,
-  boxShadow:
-    "0 2px 10px rgba(0,0,0,0.08)",
-};
+function Field({
+  label,
+  children,
+}) {
 
-const tableCardStyle = {
-  background: "white",
-  padding: 20,
-  borderRadius: 10,
-  boxShadow:
-    "0 2px 10px rgba(0,0,0,0.08)",
-};
+  return (
 
-const formStyle = {
-  display: "grid",
-  gap: 12,
-  maxWidth: 700,
-};
+    <div>
 
-const inputStyle = {
-  padding: 12,
-  borderRadius: 8,
-  border: "1px solid #ccc",
-};
+      <div
+        style={{
+          marginBottom: 4,
+          fontWeight: 600,
+          color: "#334155",
+          fontSize: 12,
+        }}
+      >
 
-const textareaStyle = {
-  padding: 12,
-  borderRadius: 8,
-  border: "1px solid #ccc",
-  minHeight: 80,
-};
+        {label}
 
-const buttonStyle = {
-  background: "#0f766e",
-  color: "white",
-  border: "none",
-  padding: 14,
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 700,
-};
+      </div>
 
-const statusStyle = {
-  marginBottom: 20,
-  color: "green",
-  fontWeight: 600,
-};
+      {children}
 
-const tableStyle = {
-  width: "100%",
-  borderCollapse: "collapse",
-};
+    </div>
 
-const headerRowStyle = {
-  background: "#0f766e",
-  color: "white",
-};
+  );
 
-const th = {
-  padding: 12,
-  textAlign: "left",
-};
+}
 
-const td = {
-  padding: 10,
-};
+function KPI({
+  title,
+  value,
+}) {
+
+  return (
+
+    <div
+      style={{
+        background:
+          "white",
+        border:
+          "1px solid #e5e7eb",
+        borderRadius: 12,
+        padding: 16,
+      }}
+    >
+
+      <div
+        style={{
+          color:
+            "#64748b",
+          fontSize: 12,
+          marginBottom: 8,
+        }}
+      >
+
+        {title}
+
+      </div>
+
+      <div
+        style={{
+          fontSize: 24,
+          fontWeight: 700,
+          color:
+            "#005d34",
+        }}
+      >
+
+        {value}
+
+      </div>
+
+    </div>
+
+  );
+
+}

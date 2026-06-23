@@ -3,27 +3,37 @@ import { apiCall } from "../api/api";
 import DataTable from "../components/DataTable";
 import FormSection from "../components/FormSection";
 
-export default function WashBatches() {
+export default function ColorSorterBatches() {
 
   const today =
     new Date()
       .toISOString()
       .split("T")[0];
 
-  const currentMonth =
-    new Date()
-      .toISOString()
-      .slice(0, 7);
+  const [status, setStatus] =
+    useState("");
+
+  const [rows, setRows] =
+    useState([]);
+
+  const [machines, setMachines] =
+    useState([]);
+
+  const [washBatches, setWashBatches] =
+    useState([]);
+
+  const [editingId, setEditingId] =
+    useState(null);
 
   const blankForm = {
 
-    washBatchId: "",
+    sortingBatchId: "",
 
-    sourceRMId: "",
+    sourceWashBatchId: "",
 
-    supplier: "",
+    sourceSupplier: "",
 
-    availableRMQty: "",
+    availableWashQty: "",
 
     date: today,
 
@@ -31,36 +41,39 @@ export default function WashBatches() {
 
     machine: "",
 
-    entryMode: "DAILY",
-
-    periodMonth:
-      currentMonth,
-
     inputMaterial: "",
 
     inputWeightKg: "",
 
-    washedOutputKg: "",
+    // OUTPUTS
 
-    raffiaKg: "",
+    acceptedQtyKg: "",
 
-    wrappersKg: "",
+    whiteSortedKg: "",
 
-    microPlasticKg: "",
+    allMixSortedKg: "",
 
-    sinkMaterialKg: "",
+    commodityKg: "",
 
-    ironScrapKg: "",
+    whiteGreyKg: "",
 
-    otherColorKg: "",
+    rejectedQtyKg: "",
+
+    rubberRejectKg: "",
+
+    blackSpecsRejectKg: "",
+
+    raffiaRejectKg: "",
+
+    wrappersRejectKg: "",
 
     dustKg: "",
 
-    sludgeKg: "",
+    // AUTO CALCULATED
 
     totalRecoverableKg: "",
 
-    totalNonRecoverableKg: "",
+    totalRejectKg: "",
 
     totalAccountedKg: "",
 
@@ -68,19 +81,13 @@ export default function WashBatches() {
 
     variancePercent: "",
 
-    estimatedRecoveryPercent:
-      "",
-
-    operatorName: "",
-
-    sortingRequired:
-      "YES",
+    recoveryPercent: "",
 
     nextProcess:
-      "Colour Sorting",
+      "Extrusion",
 
     status:
-      "READY_FOR_SORTING",
+      "READY_FOR_EXTRUSION",
 
     remarks: "",
 
@@ -92,66 +99,51 @@ export default function WashBatches() {
   const [form, setForm] =
     useState(blankForm);
 
-  const [rows, setRows] =
-    useState([]);
-
-  const [machines, setMachines] =
-    useState([]);
-
-  const [categories, setCategories] =
-    useState([]);
-
-  const [rmRows, setRmRows] =
-    useState([]);
-
-  const [editing, setEditing] =
-    useState(false);
-
-  const [message, setMessage] =
-    useState("");
-
   useEffect(() => {
 
-    loadMasters();
-
-    loadRows();
+    loadData();
 
   }, []);
 
-  async function loadMasters() {
+  async function loadData() {
 
     try {
 
       const [
+
+        sorterRes,
         machineRes,
-        categoryRes,
-        rmRes,
+        washRes,
+
       ] = await Promise.all([
 
         apiCall({
-          fn: "machines.list",
+          fn:
+            "sorting.list",
         }),
 
         apiCall({
-          fn: "categories.list",
+          fn:
+            "machines.list",
         }),
 
         apiCall({
-          fn: "rm.list",
+          fn:
+            "wash.availableForSorting",
         }),
 
       ]);
+
+      setRows(
+        sorterRes.rows || []
+      );
 
       setMachines(
         machineRes.rows || []
       );
 
-      setCategories(
-        categoryRes.rows || []
-      );
-
-      setRmRows(
-        rmRes.rows || []
+      setWashBatches(
+        washRes.rows || []
       );
 
     } catch (err) {
@@ -162,28 +154,7 @@ export default function WashBatches() {
 
   }
 
-  async function loadRows() {
-
-    try {
-
-      const res =
-        await apiCall({
-          fn: "wash.list",
-        });
-
-      setRows(
-        res.rows || []
-      );
-
-    } catch (err) {
-
-      console.log(err);
-
-    }
-
-  }
-
-  function calculateRecovery(
+  function calculateMassBalance(
     updated
   ) {
 
@@ -192,39 +163,58 @@ export default function WashBatches() {
         updated.inputWeightKg || 0
       );
 
-    const washed =
+    // RECOVERABLE
+
+    const accepted =
       Number(
-        updated.washedOutputKg || 0
+        updated.acceptedQtyKg || 0
+      );
+
+    const white =
+      Number(
+        updated.whiteSortedKg || 0
+      );
+
+    const allMix =
+      Number(
+        updated.allMixSortedKg || 0
+      );
+
+    const commodity =
+      Number(
+        updated.commodityKg || 0
+      );
+
+    const whiteGrey =
+      Number(
+        updated.whiteGreyKg || 0
+      );
+
+    // REJECTS
+
+    const rejected =
+      Number(
+        updated.rejectedQtyKg || 0
+      );
+
+    const rubber =
+      Number(
+        updated.rubberRejectKg || 0
+      );
+
+    const black =
+      Number(
+        updated.blackSpecsRejectKg || 0
       );
 
     const raffia =
       Number(
-        updated.raffiaKg || 0
+        updated.raffiaRejectKg || 0
       );
 
     const wrappers =
       Number(
-        updated.wrappersKg || 0
-      );
-
-    const micro =
-      Number(
-        updated.microPlasticKg || 0
-      );
-
-    const sink =
-      Number(
-        updated.sinkMaterialKg || 0
-      );
-
-    const iron =
-      Number(
-        updated.ironScrapKg || 0
-      );
-
-    const otherColor =
-      Number(
-        updated.otherColorKg || 0
+        updated.wrappersRejectKg || 0
       );
 
     const dust =
@@ -232,65 +222,52 @@ export default function WashBatches() {
         updated.dustKg || 0
       );
 
-    const sludge =
-      Number(
-        updated.sludgeKg || 0
-      );
+    const totalRecoverable =
+      accepted +
+      white +
+      allMix +
+      commodity +
+      whiteGrey;
 
-    // RECOVERABLE
-
-    const recoverable =
-      washed +
-      sink +
-      iron +
-      otherColor;
-
-    // NON RECOVERABLE
-
-    const nonRecoverable =
+    const totalReject =
+      rejected +
+      rubber +
+      black +
       raffia +
       wrappers +
-      micro +
-      dust +
-      sludge;
-
-    // ACCOUNTED
+      dust;
 
     const totalAccounted =
-      recoverable +
-      nonRecoverable;
-
-    // VARIANCE
+      totalRecoverable +
+      totalReject;
 
     const variance =
       input -
       totalAccounted;
 
-    // RECOVERY %
-
-    const recoveryPercent =
+    const recovery =
       input > 0
         ? (
-            (washed / input) *
+            (totalRecoverable /
+              input) *
             100
           ).toFixed(2)
         : 0;
 
-    // VARIANCE %
-
     const variancePercent =
       input > 0
         ? (
-            (variance / input) *
+            (variance /
+              input) *
             100
           ).toFixed(2)
         : 0;
 
     updated.totalRecoverableKg =
-      recoverable.toFixed(2);
+      totalRecoverable.toFixed(2);
 
-    updated.totalNonRecoverableKg =
-      nonRecoverable.toFixed(2);
+    updated.totalRejectKg =
+      totalReject.toFixed(2);
 
     updated.totalAccountedKg =
       totalAccounted.toFixed(2);
@@ -301,8 +278,8 @@ export default function WashBatches() {
     updated.variancePercent =
       variancePercent;
 
-    updated.estimatedRecoveryPercent =
-      recoveryPercent;
+    updated.recoveryPercent =
+      recovery;
 
     return updated;
 
@@ -321,33 +298,40 @@ export default function WashBatches() {
 
     if (
       e.target.name ===
-      "sourceRMId"
+      "sourceWashBatchId"
     ) {
 
-      const rm =
-        rmRows.find(
-          (x) =>
-            x.inwardId ===
-            e.target.value
+      const selected =
+        washBatches.find(
+          (w) =>
+            String(
+              w.washBatchId
+            ) ===
+            String(
+              e.target.value
+            )
         );
 
-      if (rm) {
-
-        updated.supplier =
-          rm.supplier;
+      if (selected) {
 
         updated.inputMaterial =
-          rm.material;
+          selected.inputMaterial || "";
 
-        updated.availableRMQty =
-          rm.netWeight;
+        updated.inputWeightKg =
+          selected.washedOutputKg || "";
+
+        updated.availableWashQty =
+          selected.washedOutputKg || "";
+
+        updated.sourceSupplier =
+          selected.supplier || "";
 
       }
 
     }
 
     updated =
-      calculateRecovery(
+      calculateMassBalance(
         updated
       );
 
@@ -355,73 +339,11 @@ export default function WashBatches() {
 
   }
 
-  async function submit(e) {
-
-    e.preventDefault();
-
-    try {
-
-      let res;
-
-      if (editing) {
-
-        res =
-          await apiCall({
-
-            fn:
-              "wash.update",
-
-            ...form,
-
-          });
-
-      } else {
-
-        res =
-          await apiCall({
-
-            fn:
-              "wash.add",
-
-            ...form,
-
-          });
-
-      }
-
-      if (res.ok) {
-
-        setMessage(
-          editing
-            ? "Updated"
-            : "Saved"
-        );
-
-        setForm(
-          blankForm
-        );
-
-        setEditing(
-          false
-        );
-
-        loadRows();
-
-      }
-
-    } catch (err) {
-
-      setMessage(
-        err.message
-      );
-
-    }
-
-  }
-
   function editRow(row) {
 
-    setEditing(true);
+    setEditingId(
+      row.sortingBatchId
+    );
 
     setForm({
 
@@ -440,44 +362,75 @@ export default function WashBatches() {
     });
 
     window.scrollTo({
+
       top: 0,
+
       behavior:
         "smooth",
+
     });
 
   }
 
-  async function deleteRow(
-    row
-  ) {
+  async function submit(e) {
 
-    const ok =
-      window.confirm(
-        "Delete batch?"
-      );
-
-    if (!ok) return;
+    e.preventDefault();
 
     try {
 
-      await apiCall({
+      let res;
 
-        fn:
-          "wash.update",
+      if (editingId) {
 
-        washBatchId:
-          row.washBatchId,
+        res =
+          await apiCall({
 
-        status:
-          "DELETED",
+            fn:
+              "sorting.update",
 
-      });
+            ...form,
 
-      loadRows();
+          });
+
+      } else {
+
+        res =
+          await apiCall({
+
+            fn:
+              "sorting.add",
+
+            ...form,
+
+          });
+
+      }
+
+      if (res.ok) {
+
+        setStatus(
+
+          editingId
+            ? "Updated"
+            : "Saved"
+
+        );
+
+        setEditingId(
+          null
+        );
+
+        setForm(
+          blankForm
+        );
+
+        loadData();
+
+      }
 
     } catch (err) {
 
-      alert(
+      setStatus(
         err.message
       );
 
@@ -485,13 +438,72 @@ export default function WashBatches() {
 
   }
 
+  async function deleteRow(
+    row
+  ) {
+
+    const confirmed =
+      window.confirm(
+        "Delete sorting batch?"
+      );
+
+    if (!confirmed)
+      return;
+
+    await apiCall({
+
+      fn:
+        "sorting.update",
+
+      sortingBatchId:
+        row.sortingBatchId,
+
+      status:
+        "DELETED",
+
+    });
+
+    loadData();
+
+  }
+
   return (
 
-    <div style={{ padding: 20 }}>
+    <div
+      style={{
+        padding: 16,
+      }}
+    >
 
-      <h1>
-        Washline Mass Balance
-      </h1>
+      <div
+        style={{
+          marginBottom: 16,
+        }}
+      >
+
+        <h2
+          style={{
+            margin: 0,
+          }}
+        >
+
+          Color Sorting Mass Balance
+
+        </h2>
+
+        <div
+          style={{
+            fontSize: 13,
+            color: "#64748b",
+            marginTop: 4,
+          }}
+        >
+
+          Sorting yield & recovery intelligence
+
+        </div>
+
+      </div>
 
       <form
         onSubmit={submit}
@@ -504,8 +516,55 @@ export default function WashBatches() {
       >
 
         <FormSection
-          title="Basic Information"
+          title="Source Information"
         >
+
+          <Field label="Wash Batch">
+
+            <select
+              name="sourceWashBatchId"
+              value={
+                form.sourceWashBatchId
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            >
+
+              <option value="">
+                Select
+              </option>
+
+              {washBatches.map(
+                (w, i) => (
+
+                  <option
+                    key={i}
+                    value={
+                      w.washBatchId
+                    }
+                  >
+
+                    {
+                      w.washBatchId
+                    }
+                    {" | "}
+                    {
+                      w.washedOutputKg
+                    }
+                    {" Kg"}
+
+                  </option>
+
+                )
+              )}
+
+            </select>
+
+          </Field>
 
           <Field label="Date">
 
@@ -564,149 +623,85 @@ export default function WashBatches() {
             >
 
               <option value="">
-                Select Machine
+                Select
               </option>
 
-              {machines.map(
-                (m, i) => (
-
-                  <option
-                    key={i}
-                    value={
-                      m.machineName
-                    }
-                  >
-
-                    {
-                      m.machineName
-                    }
-
-                  </option>
-
+              {machines
+                .filter(
+                  (m) =>
+                    String(
+                      m.isActive ||
+                        "TRUE"
+                    ).toUpperCase() ===
+                    "TRUE"
                 )
-              )}
+                .map(
+                  (
+                    m,
+                    i
+                  ) => (
+
+                    <option
+                      key={i}
+                      value={
+                        m.machineName
+                      }
+                    >
+
+                      {
+                        m.machineName
+                      }
+
+                    </option>
+
+                  )
+                )}
 
             </select>
 
           </Field>
 
-          <Field label="Operator">
+          <Field label="Material">
 
             <input
-              name="operatorName"
-              value={
-                form.operatorName
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
-            />
-
-          </Field>
-
-        </FormSection>
-
-        <FormSection
-          title="Material Input"
-        >
-
-          <Field label="Source RM Batch">
-
-            <select
-              name="sourceRMId"
-              value={
-                form.sourceRMId
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
-            >
-
-              <option value="">
-                Select RM Batch
-              </option>
-
-              {rmRows.map(
-                (r, i) => (
-
-                  <option
-                    key={i}
-                    value={
-                      r.inwardId
-                    }
-                  >
-
-                    {r.inwardId}
-                    {" | "}
-                    {r.material}
-                    {" | "}
-                    {r.netWeight}
-                    Kg
-
-                  </option>
-
-                )
-              )}
-
-            </select>
-
-          </Field>
-
-          <Field label="Input Material">
-
-            <select
-              name="inputMaterial"
+              readOnly
               value={
                 form.inputMaterial
               }
-              onChange={
-                onChange
-              }
               style={
-                inputStyle
+                readonlyStyle
               }
-            >
-
-              <option value="">
-                Select Material
-              </option>
-
-              {categories.map(
-                (c, i) => (
-
-                  <option
-                    key={i}
-                    value={
-                      c.categoryName
-                    }
-                  >
-
-                    {
-                      c.categoryName
-                    }
-
-                  </option>
-
-                )
-              )}
-
-            </select>
+            />
 
           </Field>
 
-          <Field label="Input Weight Kg">
+          <Field label="Input Kg">
+
+            <input
+              readOnly
+              value={
+                form.inputWeightKg
+              }
+              style={
+                readonlyStyle
+              }
+            />
+
+          </Field>
+
+        </FormSection>
+
+        <FormSection
+          title="Recoverable Outputs"
+        >
+
+          <Field label="Accepted">
 
             <input
               type="number"
-              name="inputWeightKg"
+              name="acceptedQtyKg"
               value={
-                form.inputWeightKg
+                form.acceptedQtyKg
               }
               onChange={
                 onChange
@@ -718,13 +713,67 @@ export default function WashBatches() {
 
           </Field>
 
-          <Field label="Washed Output Kg">
+          <Field label="White Sorted">
 
             <input
               type="number"
-              name="washedOutputKg"
+              name="whiteSortedKg"
               value={
-                form.washedOutputKg
+                form.whiteSortedKg
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            />
+
+          </Field>
+
+          <Field label="All Mix">
+
+            <input
+              type="number"
+              name="allMixSortedKg"
+              value={
+                form.allMixSortedKg
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            />
+
+          </Field>
+
+          <Field label="Commodity">
+
+            <input
+              type="number"
+              name="commodityKg"
+              value={
+                form.commodityKg
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            />
+
+          </Field>
+
+          <Field label="White & Grey">
+
+            <input
+              type="number"
+              name="whiteGreyKg"
+              value={
+                form.whiteGreyKg
               }
               onChange={
                 onChange
@@ -739,16 +788,16 @@ export default function WashBatches() {
         </FormSection>
 
         <FormSection
-          title="Washline Wastage"
+          title="Reject Outputs"
         >
 
-          <Field label="Raffia Kg">
+          <Field label="Rejected">
 
             <input
               type="number"
-              name="raffiaKg"
+              name="rejectedQtyKg"
               value={
-                form.raffiaKg
+                form.rejectedQtyKg
               }
               onChange={
                 onChange
@@ -760,13 +809,13 @@ export default function WashBatches() {
 
           </Field>
 
-          <Field label="Wrappers Kg">
+          <Field label="Rubber Reject">
 
             <input
               type="number"
-              name="wrappersKg"
+              name="rubberRejectKg"
               value={
-                form.wrappersKg
+                form.rubberRejectKg
               }
               onChange={
                 onChange
@@ -778,13 +827,13 @@ export default function WashBatches() {
 
           </Field>
 
-          <Field label="Micro Plastic Kg">
+          <Field label="Black Specs">
 
             <input
               type="number"
-              name="microPlasticKg"
+              name="blackSpecsRejectKg"
               value={
-                form.microPlasticKg
+                form.blackSpecsRejectKg
               }
               onChange={
                 onChange
@@ -796,13 +845,13 @@ export default function WashBatches() {
 
           </Field>
 
-          <Field label="Sink Material Kg">
+          <Field label="Raffia Reject">
 
             <input
               type="number"
-              name="sinkMaterialKg"
+              name="raffiaRejectKg"
               value={
-                form.sinkMaterialKg
+                form.raffiaRejectKg
               }
               onChange={
                 onChange
@@ -814,13 +863,13 @@ export default function WashBatches() {
 
           </Field>
 
-          <Field label="Iron Scrap Kg">
+          <Field label="Wrappers Reject">
 
             <input
               type="number"
-              name="ironScrapKg"
+              name="wrappersRejectKg"
               value={
-                form.ironScrapKg
+                form.wrappersRejectKg
               }
               onChange={
                 onChange
@@ -832,49 +881,13 @@ export default function WashBatches() {
 
           </Field>
 
-          <Field label="Other Color Kg">
-
-            <input
-              type="number"
-              name="otherColorKg"
-              value={
-                form.otherColorKg
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
-            />
-
-          </Field>
-
-          <Field label="Dust Kg">
+          <Field label="Dust">
 
             <input
               type="number"
               name="dustKg"
               value={
                 form.dustKg
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
-            />
-
-          </Field>
-
-          <Field label="Sludge Kg">
-
-            <input
-              type="number"
-              name="sludgeKg"
-              value={
-                form.sludgeKg
               }
               onChange={
                 onChange
@@ -897,10 +910,10 @@ export default function WashBatches() {
             <input
               readOnly
               value={
-                form.estimatedRecoveryPercent
+                form.recoveryPercent
               }
               style={
-                readOnlyStyle
+                readonlyStyle
               }
             />
 
@@ -914,27 +927,27 @@ export default function WashBatches() {
                 form.totalRecoverableKg
               }
               style={
-                readOnlyStyle
+                readonlyStyle
               }
             />
 
           </Field>
 
-          <Field label="Non Recoverable Kg">
+          <Field label="Reject Kg">
 
             <input
               readOnly
               value={
-                form.totalNonRecoverableKg
+                form.totalRejectKg
               }
               style={
-                readOnlyStyle
+                readonlyStyle
               }
             />
 
           </Field>
 
-          <Field label="Total Accounted Kg">
+          <Field label="Total Accounted">
 
             <input
               readOnly
@@ -942,7 +955,7 @@ export default function WashBatches() {
                 form.totalAccountedKg
               }
               style={
-                readOnlyStyle
+                readonlyStyle
               }
             />
 
@@ -956,7 +969,7 @@ export default function WashBatches() {
                 form.varianceKg
               }
               style={{
-                ...readOnlyStyle,
+                ...readonlyStyle,
 
                 color:
                   Number(
@@ -978,7 +991,7 @@ export default function WashBatches() {
                 form.variancePercent
               }
               style={{
-                ...readOnlyStyle,
+                ...readonlyStyle,
 
                 color:
                   Number(
@@ -998,28 +1011,6 @@ export default function WashBatches() {
           title="Workflow"
         >
 
-          <Field label="Sorting Required">
-
-            <select
-              name="sortingRequired"
-              value={
-                form.sortingRequired
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
-            >
-
-              <option>YES</option>
-              <option>NO</option>
-
-            </select>
-
-          </Field>
-
           <Field label="Next Process">
 
             <select
@@ -1035,12 +1026,16 @@ export default function WashBatches() {
               }
             >
 
-              <option>
-                Colour Sorting
+              <option value="Extrusion">
+                Extrusion
               </option>
 
-              <option>
-                Extrusion
+              <option value="Hold">
+                Hold
+              </option>
+
+              <option value="Resort">
+                Resort
               </option>
 
             </select>
@@ -1049,32 +1044,15 @@ export default function WashBatches() {
 
           <Field label="Status">
 
-            <select
-              name="status"
+            <input
+              readOnly
               value={
                 form.status
               }
-              onChange={
-                onChange
-              }
               style={
-                inputStyle
+                readonlyStyle
               }
-            >
-
-              <option>
-                READY_FOR_SORTING
-              </option>
-
-              <option>
-                READY_FOR_EXTRUSION
-              </option>
-
-              <option>
-                COMPLETED
-              </option>
-
-            </select>
+            />
 
           </Field>
 
@@ -1108,10 +1086,12 @@ export default function WashBatches() {
 
           <button
             type="submit"
-            style={buttonStyle}
+            style={saveButton(
+              editingId
+            )}
           >
 
-            {editing
+            {editingId
               ? "Update Batch"
               : "Save Batch"}
 
@@ -1121,55 +1101,57 @@ export default function WashBatches() {
 
       </form>
 
-      <div
-        style={{
-          marginBottom: 20,
-          color: "#0f766e",
-          fontWeight: 600,
-        }}
-      >
+      {status && (
 
-        {message}
+        <div
+          style={{
+            marginBottom: 12,
+            color:
+              "#0f766e",
+            fontWeight: 600,
+            fontSize: 13,
+          }}
+        >
 
-      </div>
+          {status}
+
+        </div>
+
+      )}
 
       <DataTable
-        title="Washline Mass Balance"
+        title="Sorting Mass Balance"
         rows={rows.filter(
           (r) =>
             r.status !==
             "DELETED"
         )}
         searchFields={[
-          "washBatchId",
+          "sortingBatchId",
           "machine",
-          "supplier",
           "inputMaterial",
+          "sourceWashBatchId",
         ]}
         columns={[
           {
-            key: "date",
-            label: "Date",
-          },
-          {
-            key: "washBatchId",
+            key:
+              "sortingBatchId",
             label: "Batch",
           },
           {
-            key: "machine",
+            key:
+              "sourceWashBatchId",
+            label: "Wash Batch",
+          },
+          {
+            key:
+              "machine",
             label: "Machine",
           },
           {
-            key: "inputMaterial",
-            label: "Material",
-          },
-          {
-            key: "inputWeightKg",
+            key:
+              "inputWeightKg",
             label: "Input",
-          },
-          {
-            key: "washedOutputKg",
-            label: "Washed",
           },
           {
             key:
@@ -1179,9 +1161,9 @@ export default function WashBatches() {
           },
           {
             key:
-              "totalNonRecoverableKg",
+              "totalRejectKg",
             label:
-              "Non Recoverable",
+              "Reject",
           },
           {
             key:
@@ -1191,7 +1173,7 @@ export default function WashBatches() {
           },
           {
             key:
-              "estimatedRecoveryPercent",
+              "recoveryPercent",
             label:
               "Recovery %",
           },
@@ -1217,9 +1199,10 @@ function Field({
 
       <div
         style={{
+          marginBottom: 4,
           fontWeight: 600,
-          marginBottom: 5,
-          fontSize: 13,
+          color: "#334155",
+          fontSize: 12,
         }}
       >
 
@@ -1239,19 +1222,22 @@ const inputStyle = {
 
   width: "100%",
 
-  padding: 10,
+  padding:
+    "10px",
 
   borderRadius: 8,
 
   border:
-    "1px solid #ccc",
+    "1px solid #cbd5e1",
+
+  fontSize: 13,
 
   boxSizing:
     "border-box",
 
 };
 
-const readOnlyStyle = {
+const readonlyStyle = {
 
   ...inputStyle,
 
@@ -1267,26 +1253,6 @@ const textareaStyle = {
   ...inputStyle,
 
   height: 80,
-
-};
-
-const buttonStyle = {
-
-  background:
-    "#0f766e",
-
-  color: "white",
-
-  border: "none",
-
-  padding:
-    "12px 20px",
-
-  borderRadius: 8,
-
-  cursor: "pointer",
-
-  fontWeight: 600,
 
 };
 
@@ -1312,3 +1278,27 @@ const stickyBar = {
   zIndex: 10,
 
 };
+
+const saveButton = (
+  editingId
+) => ({
+
+  background:
+    editingId
+      ? "#ea580c"
+      : "#0f766e",
+
+  color: "white",
+
+  border: "none",
+
+  padding:
+    "12px 20px",
+
+  borderRadius: 8,
+
+  cursor: "pointer",
+
+  fontWeight: 600,
+
+});

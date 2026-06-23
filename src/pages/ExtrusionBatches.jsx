@@ -1,506 +1,986 @@
 import { useEffect, useState } from "react";
 import { apiCall } from "../api/api";
+import { formatDate } from "../utils/date";
+import {
+  getExtrusionStatus,
+  getAlertSeverity,
+  buildDispatchLot,
+} from "../lib/workflow";
+
+import DataTable from "../components/DataTable";
+import FormSection from "../components/FormSection";
 
 export default function ExtrusionBatches() {
+  const today = new Date().toISOString().split("T")[0];
+  const currentMonth = new Date().toISOString().slice(0, 7);
 
-  const [status, setStatus] = useState("");
+  const feedMaterials = [
+    "WHITE_FLAKES",
+    "COLOUR_FLAKES",
+    "MILKY_FLAKES",
+    "GREY_FLAKES",
+    "ALL_MIX_FLAKES",
+    "COMMODITY_FLAKES",
+    "WASHED_FLAKES",
+    "SORTED_FLAKES",
+    "REWORK_LUMPS",
+    "REWORK_GRANULES",
+    "COLOUR_REGRIND",
+    "FLOTATION_TANK_REGRIND",
+    "SINK_MATERIAL_REGRIND",
+    "FLOAT_MATERIAL_REGRIND",
+    "SORTER_REJECT_REGRIND",
+    "BATTERY_REGRIND",
+    "VIRGIN_PP",
+    "MASTERBATCH",
+    "ANTIOXIDANT",
+    "ADDITIVE_PACKAGE",
+  ];
 
-  const [machines, setMachines] = useState([]);
-  const [grades, setGrades] = useState([]);
-  const [categories, setCategories] = useState([]);
+  const blankFeed = [{ materialType: "WHITE_FLAKES", qtyKg: "" }];
 
-  const [rows, setRows] = useState([]);
-
-  const [editingId, setEditingId] = useState(null);
-
-  const today =
-    new Date().toISOString().split("T")[0];
-
-  const [form, setForm] = useState({
-    batchId: "",
+  const blankForm = {
+    extrusionBatchId: "",
+    sourceType: "SORTING",
+    sourceBatchId: "",
+    sourceSortingBatchId: "",
+    sourceWashBatchId: "",
+    sourceSupplier: "",
+    availableSourceQty: "",
     date: today,
     shift: "A",
     machine: "",
+    periodMonth: currentMonth,
     inputMaterial: "",
-    inputWeight: "",
-    outputWeight: "",
+    inputWeightKg: "",
+    feedComposition: JSON.stringify(blankFeed),
+
+    fgOutputKg: "",
+    lumpsKg: "",
+    purgingKg: "",
+    reworkGranulesKg: "",
+    rejectKg: "",
+    vacuumRejectKg: "",
+    meshRejectKg: "",
+    floorSpillageKg: "",
+
+    totalInputKg: "",
+    totalOutputKg: "",
+    totalRecoverableKg: "",
+    totalNonRecoverableKg: "",
+    varianceKg: "",
+    recoveryPercent: "",
+    recoveryMaterialPercent: "",
+    virginRatioPercent: "",
+    batteryRatioPercent: "",
+    recoverySeverity: "LOW",
+
     productionGrade: "",
-    powerUnits: "",
-    recovery: "",
-    powerPerKg: "",
     operatorName: "",
+    supervisorName: "",
     remarks: "",
-    createdBy: "Pratap",
-  });
+    nextProcess: "Dispatch",
+    status: "READY_FOR_DISPATCH",
+    lotNo: "",
+  };
+
+  const [status, setStatus] = useState("");
+  const [rows, setRows] = useState([]);
+  const [machines, setMachines] = useState([]);
+  const [sortingBatches, setSortingBatches] = useState([]);
+  const [directWashBatches, setDirectWashBatches] = useState([]);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(blankForm);
+  const [feedRows, setFeedRows] = useState(blankFeed);
 
   useEffect(() => {
-
-    loadMasters();
     loadRows();
-
   }, []);
 
-  async function loadMasters() {
-
+  async function loadRows() {
     try {
+      const [extrusionRes, machinesRes, sortingRes, washRes] =
+        await Promise.all([
+          apiCall({ fn: "extrusion.list" }),
+          apiCall({ fn: "machines.list" }),
+          apiCall({ fn: "sorting.availableForExtrusion" }),
+          apiCall({ fn: "wash.availableForExtrusion" }),
+        ]);
 
-      const [
-        machinesRes,
-        gradesRes,
-        categoriesRes,
-      ] = await Promise.all([
-
-        apiCall({ fn: "machines.list" }),
-        apiCall({ fn: "grades.list" }),
-        apiCall({ fn: "categories.list" }),
-
-      ]);
-
+      setRows(extrusionRes.rows || []);
       setMachines(machinesRes.rows || []);
-      setGrades(gradesRes.rows || []);
-      setCategories(categoriesRes.rows || []);
-
+      setSortingBatches(sortingRes.rows || []);
+      setDirectWashBatches(washRes.rows || []);
     } catch (err) {
-
       console.log(err);
-
+      setStatus(err.message);
     }
-
   }
 
-  async function loadRows() {
+  function getFeedTotal(feed = feedRows) {
+    return feed.reduce((s, r) => s + Number(r.qtyKg || 0), 0);
+  }
 
-    try {
+  function getFeedText(feed = feedRows) {
+    return feed
+      .filter((r) => r.materialType && Number(r.qtyKg || 0) > 0)
+      .map((r) => `${r.materialType}: ${r.qtyKg} Kg`)
+      .join(" + ");
+  }
 
-      const res = await apiCall({
-        fn: "extrusion.list",
-      });
+  function getFeedQty(material, feed = feedRows) {
+    return feed
+      .filter((r) => r.materialType === material)
+      .reduce((s, r) => s + Number(r.qtyKg || 0), 0);
+  }
 
-      setRows(res.rows || []);
+  function getRecoveryFeedQty(feed = feedRows) {
+    return feed
+      .filter((r) =>
+        [
+          "REWORK_LUMPS",
+          "REWORK_GRANULES",
+          "COLOUR_REGRIND",
+          "FLOTATION_TANK_REGRIND",
+          "SINK_MATERIAL_REGRIND",
+          "FLOAT_MATERIAL_REGRIND",
+          "SORTER_REJECT_REGRIND",
+        ].includes(r.materialType)
+      )
+      .reduce((s, r) => s + Number(r.qtyKg || 0), 0);
+  }
 
-    } catch (err) {
+  function autoCalculate(updated, feed = feedRows) {
+    const totalInput = getFeedTotal(feed);
 
-      console.log(err);
+    const fg = Number(updated.fgOutputKg || 0);
+    const lumps = Number(updated.lumpsKg || 0);
+    const purging = Number(updated.purgingKg || 0);
+    const rework = Number(updated.reworkGranulesKg || 0);
 
-    }
+    const reject = Number(updated.rejectKg || 0);
+    const vacuum = Number(updated.vacuumRejectKg || 0);
+    const mesh = Number(updated.meshRejectKg || 0);
+    const spillage = Number(updated.floorSpillageKg || 0);
 
+    const recoverable = fg + lumps + purging + rework;
+    const nonRecoverable = reject + vacuum + mesh + spillage;
+    const totalOutput = recoverable + nonRecoverable;
+    const variance = totalInput - totalOutput;
+
+    const recovery = totalInput > 0 ? ((fg / totalInput) * 100).toFixed(2) : 0;
+
+    const virginQty = getFeedQty("VIRGIN_PP", feed);
+    const batteryQty = getFeedQty("BATTERY_REGRIND", feed);
+    const recoveryQty = getRecoveryFeedQty(feed);
+
+    const virginRatio =
+      totalInput > 0 ? ((virginQty / totalInput) * 100).toFixed(2) : 0;
+
+    const batteryRatio =
+      totalInput > 0 ? ((batteryQty / totalInput) * 100).toFixed(2) : 0;
+
+    const recoveryMaterialPercent =
+      totalInput > 0 ? ((recoveryQty / totalInput) * 100).toFixed(2) : 0;
+
+    updated.feedComposition = JSON.stringify(feed);
+    updated.inputMaterial = getFeedText(feed);
+    updated.inputWeightKg = totalInput.toFixed(2);
+    updated.totalInputKg = totalInput.toFixed(2);
+    updated.totalRecoverableKg = recoverable.toFixed(2);
+    updated.totalNonRecoverableKg = nonRecoverable.toFixed(2);
+    updated.totalOutputKg = totalOutput.toFixed(2);
+    updated.varianceKg = variance.toFixed(2);
+    updated.recoveryPercent = recovery;
+    updated.recoveryMaterialPercent = recoveryMaterialPercent;
+    updated.virginRatioPercent = virginRatio;
+    updated.batteryRatioPercent = batteryRatio;
+    updated.recoverySeverity = getAlertSeverity(recovery);
+
+    const workflow = getExtrusionStatus(updated);
+    updated.nextProcess = workflow.nextProcess;
+    updated.status = workflow.status;
+
+    const lot = buildDispatchLot({
+      extrusionBatchId: updated.extrusionBatchId || "NEW",
+      productionGrade: updated.productionGrade,
+      fgOutputKg: updated.fgOutputKg,
+    });
+
+    updated.lotNo = lot.lotNo;
+
+    return updated;
   }
 
   function onChange(e) {
-
-    const updated = {
+    let updated = {
       ...form,
       [e.target.name]: e.target.value,
     };
 
-    const input =
-      Number(updated.inputWeight || 0);
+    if (e.target.name === "sourceType") {
+      updated.sourceBatchId = "";
+      updated.sourceSortingBatchId = "";
+      updated.sourceWashBatchId = "";
+      updated.inputMaterial = "";
+      updated.inputWeightKg = "";
+      updated.sourceSupplier = "";
+      updated.availableSourceQty = "";
 
-    const output =
-      Number(updated.outputWeight || 0);
+      const resetFeed = [{ materialType: "WHITE_FLAKES", qtyKg: "" }];
+      setFeedRows(resetFeed);
+      updated = autoCalculate(updated, resetFeed);
+      setForm(updated);
+      return;
+    }
 
-    const power =
-      Number(updated.powerUnits || 0);
+    if (e.target.name === "sourceBatchId") {
+      if (updated.sourceType === "SORTING") {
+        const selected = sortingBatches.find(
+          (s) => String(s.sortingBatchId) === String(e.target.value)
+        );
 
-    updated.recovery =
-      input > 0
-        ? ((output / input) * 100).toFixed(2)
-        : "";
+        if (selected) {
+          const qty = selected.acceptedQtyKg || "";
 
-    updated.powerPerKg =
-      output > 0
-        ? (power / output).toFixed(2)
-        : "";
+          updated.sourceSortingBatchId = selected.sortingBatchId;
+          updated.sourceWashBatchId = selected.sourceWashBatchId || "";
+          updated.sourceSupplier = selected.supplier || "";
+          updated.availableSourceQty = qty;
+          updated.remarks = "Auto linked from sorting batch";
 
+          const newFeed = [{ materialType: "SORTED_FLAKES", qtyKg: qty }];
+          setFeedRows(newFeed);
+          updated = autoCalculate(updated, newFeed);
+          setForm(updated);
+          return;
+        }
+      } else {
+        const selected = directWashBatches.find(
+          (w) => String(w.washBatchId) === String(e.target.value)
+        );
+
+        if (selected) {
+          const qty = selected.washedOutputKg || "";
+
+          updated.sourceWashBatchId = selected.washBatchId;
+          updated.sourceSupplier = selected.supplier || "";
+          updated.availableSourceQty = qty;
+          updated.remarks = "Auto linked from wash batch";
+
+          const newFeed = [{ materialType: "WASHED_FLAKES", qtyKg: qty }];
+          setFeedRows(newFeed);
+          updated = autoCalculate(updated, newFeed);
+          setForm(updated);
+          return;
+        }
+      }
+    }
+
+    updated = autoCalculate(updated, feedRows);
     setForm(updated);
+  }
 
+  function updateFeedRow(index, key, value) {
+    const updatedFeed = feedRows.map((r, i) =>
+      i === index ? { ...r, [key]: value } : r
+    );
+
+    setFeedRows(updatedFeed);
+    setForm(autoCalculate({ ...form }, updatedFeed));
+  }
+
+  function addFeedRow() {
+    const updatedFeed = [...feedRows, { materialType: "", qtyKg: "" }];
+    setFeedRows(updatedFeed);
+    setForm(autoCalculate({ ...form }, updatedFeed));
+  }
+
+  function removeFeedRow(index) {
+    const updatedFeed = feedRows.filter((_, i) => i !== index);
+
+    const finalFeed =
+      updatedFeed.length > 0
+        ? updatedFeed
+        : [{ materialType: "WHITE_FLAKES", qtyKg: "" }];
+
+    setFeedRows(finalFeed);
+    setForm(autoCalculate({ ...form }, finalFeed));
+  }
+
+  function parseFeedComposition(row) {
+    try {
+      if (row.feedComposition) {
+        const parsed = JSON.parse(row.feedComposition);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (err) {
+      console.log(err);
+    }
+
+    const legacy = [];
+
+    if (row.washedFlakesKg) {
+      legacy.push({ materialType: "WASHED_FLAKES", qtyKg: row.washedFlakesKg });
+    }
+
+    if (row.whiteFlakesKg) {
+      legacy.push({ materialType: "WHITE_FLAKES", qtyKg: row.whiteFlakesKg });
+    }
+
+    if (row.allMixKg) {
+      legacy.push({ materialType: "ALL_MIX_FLAKES", qtyKg: row.allMixKg });
+    }
+
+    if (row.commodityKg) {
+      legacy.push({ materialType: "COMMODITY_FLAKES", qtyKg: row.commodityKg });
+    }
+
+    if (row.batteryFlakesKg) {
+      legacy.push({ materialType: "BATTERY_REGRIND", qtyKg: row.batteryFlakesKg });
+    }
+
+    if (row.virginMaterialKg) {
+      legacy.push({ materialType: "VIRGIN_PP", qtyKg: row.virginMaterialKg });
+    }
+
+    if (row.masterbatchKg) {
+      legacy.push({ materialType: "MASTERBATCH", qtyKg: row.masterbatchKg });
+    }
+
+    if (row.antioxidantKg) {
+      legacy.push({ materialType: "ANTIOXIDANT", qtyKg: row.antioxidantKg });
+    }
+
+    if (row.reworkInputKg) {
+      legacy.push({ materialType: "REWORK_GRANULES", qtyKg: row.reworkInputKg });
+    }
+
+    if (row.lumpsInputKg) {
+      legacy.push({ materialType: "REWORK_LUMPS", qtyKg: row.lumpsInputKg });
+    }
+
+    return legacy.length > 0 ? legacy : blankFeed;
   }
 
   function editRow(row) {
+    const parsedFeed = parseFeedComposition(row);
 
-    setEditingId(row.batchId);
+    setEditingId(row.extrusionBatchId);
+    setFeedRows(parsedFeed);
 
-    setForm({
-      batchId: row.batchId || "",
-      date: row.date
-        ? new Date(row.date)
-            .toISOString()
-            .split("T")[0]
-        : today,
-      shift: row.shift || "A",
-      machine: row.machine || "",
-      inputMaterial: row.inputMaterial || "",
-      inputWeight: row.inputWeight || "",
-      outputWeight: row.outputWeight || "",
-      productionGrade:
-        row.productionGrade || "",
-      powerUnits: row.powerUnits || "",
-      recovery: row.recovery || "",
-      powerPerKg: row.powerPerKg || "",
-      operatorName: row.operatorName || "",
-      remarks: row.remarks || "",
-      createdBy: row.createdBy || "Pratap",
-    });
+    const updated = autoCalculate(
+      {
+        ...blankForm,
+        ...row,
+        date: row.date ? new Date(row.date).toISOString().split("T")[0] : today,
+      },
+      parsedFeed
+    );
+
+    setForm(updated);
 
     window.scrollTo({
       top: 0,
       behavior: "smooth",
     });
+  }
 
+  async function deleteRow(row) {
+    const confirmed = window.confirm("Delete extrusion batch?");
+    if (!confirmed) return;
+
+    try {
+      await apiCall({
+        fn: "extrusion.update",
+        extrusionBatchId: row.extrusionBatchId,
+        status: "DELETED",
+      });
+
+      loadRows();
+    } catch (err) {
+      alert(err.message);
+    }
   }
 
   async function submit(e) {
-
     e.preventDefault();
 
     try {
+      const finalForm = autoCalculate({ ...form }, feedRows);
 
       let res;
 
       if (editingId) {
-
         res = await apiCall({
           fn: "extrusion.update",
-          ...form,
+          ...finalForm,
         });
-
       } else {
-
         res = await apiCall({
           fn: "extrusion.add",
-          ...form,
+          ...finalForm,
         });
-
       }
 
       if (res.ok) {
-
-        setStatus(
-          editingId
-            ? "Extrusion batch updated"
-            : "Extrusion batch saved"
-        );
-
+        setStatus(editingId ? "Updated" : "Saved");
         setEditingId(null);
-
+        setForm(blankForm);
+        setFeedRows(blankFeed);
         loadRows();
-
-        setForm({
-          batchId: "",
-          date: today,
-          shift: "A",
-          machine: "",
-          inputMaterial: "",
-          inputWeight: "",
-          outputWeight: "",
-          productionGrade: "",
-          powerUnits: "",
-          recovery: "",
-          powerPerKg: "",
-          operatorName: "",
-          remarks: "",
-          createdBy: "Pratap",
-        });
-
+      } else {
+        setStatus(res.error || "Error saving batch");
       }
-
     } catch (err) {
-
       setStatus(err.message);
-
     }
-
   }
 
   return (
+    <div style={{ padding: 16 }}>
+      <div style={{ marginBottom: 16 }}>
+        <h2 style={{ margin: 0 }}>Extrusion Mass Balance</h2>
 
-    <div style={{ padding: 20 }}>
-
-      <h1>Extrusion Batches</h1>
+        <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
+          Production intelligence, feed composition and recovery engine
+        </div>
+      </div>
 
       <form
         onSubmit={submit}
         style={{
-          display: "grid",
-          gap: 12,
-          maxWidth: 750,
-          background: "white",
-          padding: 20,
-          borderRadius: 10,
-          marginBottom: 30,
+          display: "flex",
+          flexDirection: "column",
+          gap: 16,
         }}
       >
-
-        <input
-          type="date"
-          name="date"
-          value={form.date}
-          onChange={onChange}
-        />
-
-        <select
-          name="shift"
-          value={form.shift}
-          onChange={onChange}
-        >
-
-          <option>A</option>
-          <option>B</option>
-          <option>C</option>
-
-        </select>
-
-        <select
-          name="machine"
-          value={form.machine}
-          onChange={onChange}
-        >
-
-          <option value="">
-            Select Machine
-          </option>
-
-          {machines.map((m, i) => (
-
-            <option
-              key={i}
-              value={m.machineName}
+        <FormSection title="Source & Workflow">
+          <Field label="Source Type">
+            <select
+              name="sourceType"
+              value={form.sourceType}
+              onChange={onChange}
+              style={inputStyle}
             >
-              {m.machineName}
-            </option>
+              <option value="SORTING">Sorting</option>
+              <option value="WASH">Direct Wash</option>
+            </select>
+          </Field>
 
-          ))}
-
-        </select>
-
-        <select
-          name="inputMaterial"
-          value={form.inputMaterial}
-          onChange={onChange}
-        >
-
-          <option value="">
-            Select Material
-          </option>
-
-          {categories.map((c, i) => (
-
-            <option
-              key={i}
-              value={c.categoryName}
+          <Field label="Source Batch">
+            <select
+              name="sourceBatchId"
+              value={form.sourceBatchId}
+              onChange={onChange}
+              style={inputStyle}
             >
-              {c.categoryName}
-            </option>
+              <option value="">Select</option>
 
-          ))}
+              {form.sourceType === "SORTING"
+                ? sortingBatches.map((s, i) => (
+                    <option key={i} value={s.sortingBatchId}>
+                      {s.sortingBatchId} | {s.acceptedQtyKg} Kg
+                    </option>
+                  ))
+                : directWashBatches.map((w, i) => (
+                    <option key={i} value={w.washBatchId}>
+                      {w.washBatchId} | {w.washedOutputKg} Kg
+                    </option>
+                  ))}
+            </select>
+          </Field>
 
-        </select>
+          <Field label="Date">
+            <input
+              type="date"
+              name="date"
+              value={form.date}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
 
-        <input
-          type="number"
-          name="inputWeight"
-          value={form.inputWeight}
-          onChange={onChange}
-          placeholder="Input Weight Kg"
-        />
-
-        <input
-          type="number"
-          name="outputWeight"
-          value={form.outputWeight}
-          onChange={onChange}
-          placeholder="Output Weight Kg"
-        />
-
-        <select
-          name="productionGrade"
-          value={form.productionGrade}
-          onChange={onChange}
-        >
-
-          <option value="">
-            Select Grade
-          </option>
-
-          {grades.map((g, i) => (
-
-            <option
-              key={i}
-              value={g.gradeName}
+          <Field label="Shift">
+            <select
+              name="shift"
+              value={form.shift}
+              onChange={onChange}
+              style={inputStyle}
             >
-              {g.gradeName}
-            </option>
+              <option>A</option>
+              <option>B</option>
+              <option>C</option>
+            </select>
+          </Field>
 
-          ))}
+          <Field label="Machine">
+            <select
+              name="machine"
+              value={form.machine}
+              onChange={onChange}
+              style={inputStyle}
+            >
+              <option value="">Select Machine</option>
+              {machines.map((m, i) => (
+                <option key={i} value={m.machineName}>
+                  {m.machineName}
+                </option>
+              ))}
+            </select>
+          </Field>
 
-        </select>
+          <Field label="Supplier">
+            <input readOnly value={form.sourceSupplier} style={readonlyStyle} />
+          </Field>
 
-        <input
-          type="number"
-          name="powerUnits"
-          value={form.powerUnits}
-          onChange={onChange}
-          placeholder="Power Units"
-        />
+          <Field label="Workflow Status">
+            <input readOnly value={form.status} style={readonlyStyle} />
+          </Field>
+        </FormSection>
 
-        <input
-          name="recovery"
-          value={form.recovery}
-          readOnly
-          placeholder="Recovery %"
-        />
+        <FormSection title="Feed Composition">
+          <div style={{ gridColumn: "1 / -1" }}>
+            <table style={feedTable}>
+              <thead>
+                <tr style={feedHeader}>
+                  <th style={feedTh}>Material</th>
+                  <th style={feedTh}>Qty Kg</th>
+                  <th style={feedTh}>Action</th>
+                </tr>
+              </thead>
 
-        <input
-          name="powerPerKg"
-          value={form.powerPerKg}
-          readOnly
-          placeholder="Power Per Kg"
-        />
+              <tbody>
+                {feedRows.map((r, i) => (
+                  <tr key={i}>
+                    <td style={feedTd}>
+                      <select
+                        value={r.materialType}
+                        onChange={(e) =>
+                          updateFeedRow(i, "materialType", e.target.value)
+                        }
+                        style={inputStyle}
+                      >
+                        <option value="">Select Material</option>
+                        {feedMaterials.map((m) => (
+                          <option key={m} value={m}>
+                            {m}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
 
-        <input
-          name="operatorName"
-          value={form.operatorName}
-          onChange={onChange}
-          placeholder="Operator Name"
-        />
+                    <td style={feedTd}>
+                      <input
+                        type="number"
+                        value={r.qtyKg}
+                        onChange={(e) =>
+                          updateFeedRow(i, "qtyKg", e.target.value)
+                        }
+                        style={inputStyle}
+                      />
+                    </td>
 
-        <textarea
-          name="remarks"
-          value={form.remarks}
-          onChange={onChange}
-          placeholder="Remarks"
-        />
+                    <td style={feedTd}>
+                      <button
+                        type="button"
+                        onClick={() => removeFeedRow(i)}
+                        style={removeButton}
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
 
-        <button
-          type="submit"
-          style={{
-            background: editingId
-              ? "#ea580c"
-              : "#0f766e",
-            color: "white",
-            border: "none",
-            padding: 14,
-            borderRadius: 8,
-            cursor: "pointer",
-            fontWeight: 600,
-          }}
-        >
+            <button type="button" onClick={addFeedRow} style={addButton}>
+              + Add Material
+            </button>
+          </div>
 
-          {editingId
-            ? "Update Batch"
-            : "Save Extrusion Batch"}
+          <Field label="Total Feed Kg">
+            <input readOnly value={form.totalInputKg} style={readonlyStyle} />
+          </Field>
 
-        </button>
+          <Field label="Feed Summary">
+            <textarea readOnly value={form.inputMaterial} style={textareaStyle} />
+          </Field>
+        </FormSection>
 
-      </form>
+        <FormSection title="Output Matrix">
+          <Field label="FG Output">
+            <input
+              type="number"
+              name="fgOutputKg"
+              value={form.fgOutputKg}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
 
-      {status && (
+          <Field label="Lumps">
+            <input
+              type="number"
+              name="lumpsKg"
+              value={form.lumpsKg}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
 
-        <div
-          style={{
-            marginBottom: 20,
-            fontWeight: 600,
-          }}
-        >
-          {status}
+          <Field label="Purging">
+            <input
+              type="number"
+              name="purgingKg"
+              value={form.purgingKg}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
+
+          <Field label="Rework">
+            <input
+              type="number"
+              name="reworkGranulesKg"
+              value={form.reworkGranulesKg}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
+
+          <Field label="Reject">
+            <input
+              type="number"
+              name="rejectKg"
+              value={form.rejectKg}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
+
+          <Field label="Vacuum Reject">
+            <input
+              type="number"
+              name="vacuumRejectKg"
+              value={form.vacuumRejectKg}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
+
+          <Field label="Mesh Reject">
+            <input
+              type="number"
+              name="meshRejectKg"
+              value={form.meshRejectKg}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
+
+          <Field label="Floor Spillage">
+            <input
+              type="number"
+              name="floorSpillageKg"
+              value={form.floorSpillageKg}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
+        </FormSection>
+
+        <FormSection title="Mass Balance Engine">
+          <Field label="Total Input">
+            <input readOnly value={form.totalInputKg} style={readonlyStyle} />
+          </Field>
+
+          <Field label="Total Output">
+            <input readOnly value={form.totalOutputKg} style={readonlyStyle} />
+          </Field>
+
+          <Field label="Recoverable">
+            <input
+              readOnly
+              value={form.totalRecoverableKg}
+              style={readonlyStyle}
+            />
+          </Field>
+
+          <Field label="Non Recoverable">
+            <input
+              readOnly
+              value={form.totalNonRecoverableKg}
+              style={readonlyStyle}
+            />
+          </Field>
+
+          <Field label="Variance">
+            <input
+              readOnly
+              value={form.varianceKg}
+              style={{
+                ...readonlyStyle,
+                color: Number(form.varianceKg || 0) > 10 ? "#dc2626" : "#16a34a",
+              }}
+            />
+          </Field>
+
+          <Field label="Recovery %">
+            <input
+              readOnly
+              value={form.recoveryPercent}
+              style={readonlyStyle}
+            />
+          </Field>
+
+          <Field label="Recovery Material %">
+            <input
+              readOnly
+              value={form.recoveryMaterialPercent}
+              style={readonlyStyle}
+            />
+          </Field>
+
+          <Field label="Virgin Ratio %">
+            <input
+              readOnly
+              value={form.virginRatioPercent}
+              style={readonlyStyle}
+            />
+          </Field>
+
+          <Field label="Battery Ratio %">
+            <input
+              readOnly
+              value={form.batteryRatioPercent}
+              style={readonlyStyle}
+            />
+          </Field>
+        </FormSection>
+
+        <FormSection title="FG & Traceability">
+          <Field label="Production Grade">
+            <input
+              name="productionGrade"
+              value={form.productionGrade}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
+
+          <Field label="Lot No">
+            <input readOnly value={form.lotNo} style={readonlyStyle} />
+          </Field>
+
+          <Field label="Operator">
+            <input
+              name="operatorName"
+              value={form.operatorName}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
+
+          <Field label="Supervisor">
+            <input
+              name="supervisorName"
+              value={form.supervisorName}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
+        </FormSection>
+
+        <FormSection title="Remarks" defaultOpen={false}>
+          <Field label="Remarks">
+            <textarea
+              name="remarks"
+              value={form.remarks}
+              onChange={onChange}
+              style={textareaStyle}
+            />
+          </Field>
+        </FormSection>
+
+        <div style={stickyBar}>
+          <button type="submit" style={saveButton(editingId)}>
+            {editingId ? "Update Batch" : "Save Batch"}
+          </button>
         </div>
-
-      )}
+      </form>
 
       <div
         style={{
-          background: "white",
-          borderRadius: 10,
-          padding: 20,
-          overflowX: "auto",
+          marginTop: 12,
+          marginBottom: 16,
+          color: "#0f766e",
+          fontWeight: 600,
         }}
       >
-
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-          }}
-        >
-
-          <thead>
-
-            <tr
-              style={{
-                background: "#0f766e",
-                color: "white",
-              }}
-            >
-
-              <th style={th}>Date</th>
-              <th style={th}>Machine</th>
-              <th style={th}>Grade</th>
-              <th style={th}>Output</th>
-              <th style={th}>Recovery</th>
-              <th style={th}>Power/Kg</th>
-              <th style={th}>Action</th>
-
-            </tr>
-
-          </thead>
-
-          <tbody>
-
-            {rows.map((r, i) => (
-
-              <tr
-                key={i}
-                style={{
-                  borderBottom: "1px solid #ddd",
-                }}
-              >
-
-                <td style={td}>{r.date}</td>
-                <td style={td}>{r.machine}</td>
-                <td style={td}>{r.productionGrade}</td>
-                <td style={td}>{r.outputWeight}</td>
-                <td style={td}>{r.recovery}%</td>
-                <td style={td}>{r.powerPerKg}</td>
-
-                <td style={td}>
-
-                  <button
-                    onClick={() => editRow(r)}
-                    style={{
-                      background: "#2563eb",
-                      color: "white",
-                      border: "none",
-                      padding: "8px 12px",
-                      borderRadius: 6,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Edit
-                  </button>
-
-                </td>
-
-              </tr>
-
-            ))}
-
-          </tbody>
-
-        </table>
-
+        {status}
       </div>
 
+      <DataTable
+        title="Extrusion Mass Balance"
+        rows={rows.filter((r) => r.status !== "DELETED")}
+        searchFields={[
+          "extrusionBatchId",
+          "machine",
+          "inputMaterial",
+          "productionGrade",
+          "lotNo",
+        ]}
+        columns={[
+          { key: "extrusionBatchId", label: "Batch" },
+          {
+            key: "date",
+            label: "Date",
+            render: (r) => formatDate(r.date),
+          },
+          { key: "productionGrade", label: "Grade" },
+          { key: "totalInputKg", label: "Input" },
+          { key: "fgOutputKg", label: "FG" },
+          { key: "varianceKg", label: "Variance" },
+          { key: "recoveryPercent", label: "Recovery %" },
+          { key: "recoveryMaterialPercent", label: "Recovery Feed %" },
+          {
+            key: "recoverySeverity",
+            label: "Severity",
+            render: (r) => (
+              <span style={badge(r.recoverySeverity || "LOW")}>
+                {r.recoverySeverity}
+              </span>
+            ),
+          },
+        ]}
+        onEdit={editRow}
+        onDelete={deleteRow}
+      />
     </div>
-
   );
-
 }
 
-const th = {
-  padding: 12,
+function Field({ label, children }) {
+  return (
+    <div>
+      <div
+        style={{
+          marginBottom: 4,
+          fontWeight: 600,
+          color: "#334155",
+          fontSize: 12,
+        }}
+      >
+        {label}
+      </div>
+
+      {children}
+    </div>
+  );
+}
+
+const badge = (severity) => ({
+  background:
+    severity === "CRITICAL"
+      ? "#fee2e2"
+      : severity === "HIGH"
+      ? "#fef3c7"
+      : severity === "MEDIUM"
+      ? "#dbeafe"
+      : "#dcfce7",
+  color:
+    severity === "CRITICAL"
+      ? "#991b1b"
+      : severity === "HIGH"
+      ? "#92400e"
+      : severity === "MEDIUM"
+      ? "#1e40af"
+      : "#166534",
+  padding: "4px 8px",
+  borderRadius: 999,
+  fontSize: 11,
+  fontWeight: 700,
+});
+
+const inputStyle = {
+  width: "100%",
+  padding: 10,
+  borderRadius: 8,
+  border: "1px solid #ccc",
+  boxSizing: "border-box",
+};
+
+const readonlyStyle = {
+  ...inputStyle,
+  background: "#f8fafc",
+  fontWeight: 700,
+};
+
+const textareaStyle = {
+  ...inputStyle,
+  height: 80,
+};
+
+const feedTable = {
+  width: "100%",
+  borderCollapse: "collapse",
+  marginBottom: 10,
+};
+
+const feedHeader = {
+  background: "#0f766e",
+  color: "white",
+};
+
+const feedTh = {
+  padding: 10,
   textAlign: "left",
 };
 
-const td = {
-  padding: 10,
+const feedTd = {
+  padding: 8,
+  borderBottom: "1px solid #e5e7eb",
+};
+
+const addButton = {
+  background: "#2563eb",
+  color: "white",
+  border: "none",
+  padding: "9px 14px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const removeButton = {
+  background: "#dc2626",
+  color: "white",
+  border: "none",
+  padding: "8px 12px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const saveButton = (editingId) => ({
+  background: editingId ? "#ea580c" : "#0f766e",
+  color: "white",
+  border: "none",
+  padding: "12px 20px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 600,
+});
+
+const stickyBar = {
+  position: "sticky",
+  bottom: 0,
+  background: "white",
+  padding: 12,
+  borderTop: "1px solid #ddd",
+  display: "flex",
+  justifyContent: "flex-end",
+  zIndex: 10,
 };

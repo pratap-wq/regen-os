@@ -1,24 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
+import { formatDate } from "../utils/date";
 
 export default function FGInventory() {
 
-  const [rows, setRows] = useState([]);
+  const [
+    extrusionRows,
+    setExtrusionRows,
+  ] = useState([]);
 
-  const [status, setStatus] = useState("");
+  const [
+    dispatchRows,
+    setDispatchRows,
+  ] = useState([]);
 
-  const [form, setForm] = useState({
-    date: "",
-    grade: "",
-    color: "",
-    lotNo: "",
-    quantityKg: "",
-    noOfBags: "",
-    location: "",
-    qcStatus: "",
-    remarks: "",
-    createdBy: "Pratap",
-  });
+  const [status, setStatus] =
+    useState("");
 
   useEffect(() => {
 
@@ -28,253 +25,633 @@ export default function FGInventory() {
 
   async function loadData() {
 
-    const res = await apiCall({
-      fn: "fg.list",
-    });
+    try {
 
-    setRows(res.rows || []);
+      const [
+        extrusion,
+        dispatch,
+      ] = await Promise.all([
 
-  }
+        apiCall({
+          fn:
+            "extrusion.list",
+        }),
 
-  function onChange(e) {
+        apiCall({
+          fn:
+            "dispatch.list",
+        }),
 
-    setForm((p) => ({
-      ...p,
-      [e.target.name]: e.target.value,
-    }));
+      ]);
 
-  }
+      setExtrusionRows(
+        extrusion.rows || []
+      );
 
-  async function submit(e) {
+      setDispatchRows(
+        dispatch.rows || []
+      );
 
-    e.preventDefault();
+    } catch (err) {
 
-    const res = await apiCall({
-      fn: "fg.add",
-      ...form,
-    });
+      console.log(err);
 
-    if (res.ok) {
-
-      setStatus("FG saved");
-
-      loadData();
+      setStatus(
+        "Failed loading FG inventory"
+      );
 
     }
 
   }
 
-  const totalStock = rows.reduce((sum, r) => {
-    return sum + Number(r.quantityKg || 0);
-  }, 0);
+  const inventory =
+    useMemo(() => {
 
-  return (
+      const map = {};
 
-    <div style={{ padding: 20 }}>
+      extrusionRows.forEach(
+        (r) => {
 
-      <h1>FG Inventory</h1>
+          const lot =
+            r.extrusionBatchId ||
+            "UNKNOWN";
 
-      <div
-        style={{
-          display: "flex",
-          gap: 20,
-          marginBottom: 20,
-        }}
-      >
+          if (!map[lot]) {
 
-        <Card
-          title="Total FG Stock"
-          value={`${totalStock.toFixed(2)} Kg`}
-        />
+            map[lot] = {
 
-        <Card
-          title="Lots"
-          value={rows.length}
-        />
+              lotNo: lot,
 
-      </div>
+              date:
+                r.date,
 
-      <form
-        onSubmit={submit}
-        style={{
-          display: "grid",
-          gap: 10,
-          maxWidth: 700,
-          background: "white",
-          padding: 20,
-          borderRadius: 10,
-          marginBottom: 30,
-        }}
-      >
+              grade:
+                r.productionGrade ||
+                "NA",
 
-        <input type="date" name="date" value={form.date} onChange={onChange} />
+              producedKg:
+                0,
 
-        <select name="grade" value={form.grade} onChange={onChange}>
-          <option value="">Select Grade</option>
-          <option>E1</option>
-          <option>E2</option>
-          <option>E3</option>
-          <option>E4</option>
-        </select>
+              dispatchedKg:
+                0,
 
-        <input
-          name="color"
-          value={form.color}
-          onChange={onChange}
-          placeholder="Color"
-        />
+              balanceKg:
+                0,
 
-        <input
-          name="lotNo"
-          value={form.lotNo}
-          onChange={onChange}
-          placeholder="Lot Number"
-        />
+              machine:
+                r.machine,
 
-        <input
-          name="quantityKg"
-          value={form.quantityKg}
-          onChange={onChange}
-          placeholder="Quantity Kg"
-        />
+              qcStatus:
+                "Approved",
 
-        <input
-          name="noOfBags"
-          value={form.noOfBags}
-          onChange={onChange}
-          placeholder="No Of Bags"
-        />
+            };
 
-        <input
-          name="location"
-          value={form.location}
-          onChange={onChange}
-          placeholder="Location"
-        />
+          }
 
-        <select
-          name="qcStatus"
-          value={form.qcStatus}
-          onChange={onChange}
-        >
-          <option value="">QC Status</option>
-          <option>Approved</option>
-          <option>Hold</option>
-          <option>Rejected</option>
-        </select>
+          map[lot]
+            .producedKg +=
+            Number(
+              r.fgOutputKg ||
+                0
+            );
 
-        <textarea
-          name="remarks"
-          value={form.remarks}
-          onChange={onChange}
-          placeholder="Remarks"
-        />
+        }
+      );
 
-        <button
-          type="submit"
-          style={{
-            background: "#0f766e",
-            color: "white",
-            border: "none",
-            padding: 12,
-            borderRadius: 8,
-          }}
-        >
-          Save FG
-        </button>
+      dispatchRows.forEach(
+        (d) => {
 
-      </form>
+          const lot =
+            d.lotNo ||
+            d.sourceExtrusionBatchId;
 
-      {status && (
-        <div style={{ marginBottom: 20 }}>
-          {status}
-        </div>
-      )}
+          if (
+            map[lot]
+          ) {
 
-      <div
-        style={{
-          background: "white",
-          borderRadius: 10,
-          padding: 20,
-          overflowX: "auto",
-        }}
-      >
+            map[
+              lot
+            ].dispatchedKg +=
+              Number(
+                d.quantityKg ||
+                  0
+              );
 
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-          }}
-        >
+          }
 
-          <thead>
+        }
+      );
 
-            <tr
-              style={{
-                background: "#0f766e",
-                color: "white",
-              }}
-            >
+      Object.values(map).forEach(
+        (x) => {
 
-              <th style={th}>Date</th>
-              <th style={th}>Grade</th>
-              <th style={th}>Lot</th>
-              <th style={th}>Qty</th>
-              <th style={th}>QC</th>
+          x.balanceKg =
+            x.producedKg -
+            x.dispatchedKg;
 
-            </tr>
+        }
+      );
 
-          </thead>
+      return Object.values(
+        map
+      );
 
-          <tbody>
+    }, [
+      extrusionRows,
+      dispatchRows,
+    ]);
 
-            {rows.map((r, i) => (
+  const totalFGProduced =
+    inventory.reduce(
+      (sum, r) => {
 
-              <tr key={i} style={{ borderBottom: "1px solid #ddd" }}>
+        return (
+          sum +
+          Number(
+            r.producedKg || 0
+          )
+        );
 
-                <td style={td}>{r.date}</td>
-                <td style={td}>{r.grade}</td>
-                <td style={td}>{r.lotNo}</td>
-                <td style={td}>{r.quantityKg}</td>
-                <td style={td}>{r.qcStatus}</td>
+      },
+      0
+    );
 
-              </tr>
+  const totalDispatch =
+    inventory.reduce(
+      (sum, r) => {
 
-            ))}
+        return (
+          sum +
+          Number(
+            r.dispatchedKg || 0
+          )
+        );
 
-          </tbody>
+      },
+      0
+    );
 
-        </table>
+  const liveFGStock =
+    inventory.reduce(
+      (sum, r) => {
 
-      </div>
+        return (
+          sum +
+          Number(
+            r.balanceKg || 0
+          )
+        );
 
-    </div>
+      },
+      0
+    );
 
-  );
+  const gradeSummary =
+    useMemo(() => {
 
-}
+      const map = {};
 
-function Card({ title, value }) {
+      inventory.forEach(
+        (r) => {
+
+          const grade =
+            r.grade ||
+            "NA";
+
+          if (
+            !map[grade]
+          ) {
+
+            map[
+              grade
+            ] = {
+
+              produced:
+                0,
+
+              dispatched:
+                0,
+
+              balance: 0,
+
+            };
+
+          }
+
+          map[
+            grade
+          ].produced +=
+            Number(
+              r.producedKg || 0
+            );
+
+          map[
+            grade
+          ].dispatched +=
+            Number(
+              r.dispatchedKg || 0
+            );
+
+          map[
+            grade
+          ].balance +=
+            Number(
+              r.balanceKg || 0
+            );
+
+        }
+      );
+
+      return Object.entries(
+        map
+      );
+
+    }, [inventory]);
 
   return (
 
     <div
       style={{
-        background: "white",
-        padding: 20,
-        borderRadius: 10,
-        minWidth: 220,
-        boxShadow: "0 2px 10px rgba(0,0,0,0.08)",
+        padding: 16,
       }}
     >
 
-      <div style={{ color: "#666", marginBottom: 10 }}>
-        {title}
+      <div
+        style={{
+          display: "flex",
+          justifyContent:
+            "space-between",
+          alignItems:
+            "center",
+          marginBottom: 20,
+          flexWrap: "wrap",
+          gap: 12,
+        }}
+      >
+
+        <div>
+
+          <h1
+            style={{
+              marginBottom: 6,
+            }}
+          >
+            FG Inventory
+          </h1>
+
+          <div
+            style={{
+              color:
+                "#64748b",
+              fontSize: 13,
+            }}
+          >
+            Auto generated from
+            extrusion and dispatch
+          </div>
+
+        </div>
+
       </div>
 
-      <h2 style={{ margin: 0, color: "#0f766e" }}>
-        {value}
-      </h2>
+      <div
+        style={gridStyle}
+      >
+
+        <Card
+          title="FG Produced"
+          value={`${totalFGProduced.toFixed(
+            0
+          )} Kg`}
+        />
+
+        <Card
+          title="FG Dispatched"
+          value={`${totalDispatch.toFixed(
+            0
+          )} Kg`}
+        />
+
+        <Card
+          title="Live FG Stock"
+          value={`${liveFGStock.toFixed(
+            0
+          )} Kg`}
+        />
+
+        <Card
+          title="Lots"
+          value={
+            inventory.length
+          }
+        />
+
+      </div>
+
+      {status && (
+
+        <div
+          style={{
+            marginTop: 12,
+            color:
+              "#dc2626",
+            fontWeight: 600,
+          }}
+        >
+
+          {status}
+
+        </div>
+
+      )}
+
+      <div
+        style={{
+          marginTop: 24,
+        }}
+      >
+
+        <div
+          style={
+            tableBox
+          }
+        >
+
+          <h3>
+            Lot-wise FG Inventory
+          </h3>
+
+          <table
+            style={{
+              width: "100%",
+              borderCollapse:
+                "collapse",
+            }}
+          >
+
+            <thead>
+
+              <tr
+                style={{
+                  background:
+                    "#0f766e",
+                  color:
+                    "white",
+                }}
+              >
+
+                <th style={th}>
+                  Lot No
+                </th>
+
+                <th style={th}>
+                  Date
+                </th>
+
+                <th style={th}>
+                  Grade
+                </th>
+
+                <th style={th}>
+                  Machine
+                </th>
+
+                <th style={th}>
+                  Produced
+                </th>
+
+                <th style={th}>
+                  Dispatched
+                </th>
+
+                <th style={th}>
+                  Balance
+                </th>
+
+                <th style={th}>
+                  QC
+                </th>
+
+              </tr>
+
+            </thead>
+
+            <tbody>
+
+              {inventory.map(
+                (r, i) => (
+
+                  <tr
+                    key={i}
+                    style={{
+                      borderBottom:
+                        "1px solid #ddd",
+                    }}
+                  >
+
+                    <td style={td}>
+                      <b>
+                        {
+                          r.lotNo
+                        }
+                      </b>
+                    </td>
+
+                    <td style={td}>
+                      {formatDate(
+                        r.date
+                      )}
+                    </td>
+
+                    <td style={td}>
+                      {r.grade}
+                    </td>
+
+                    <td style={td}>
+                      {
+                        r.machine
+                      }
+                    </td>
+
+                    <td style={td}>
+                      {
+                        r.producedKg
+                      }
+                    </td>
+
+                    <td style={td}>
+                      {
+                        r.dispatchedKg
+                      }
+                    </td>
+
+                    <td style={td}>
+
+                      <b
+                        style={{
+                          color:
+                            r.balanceKg >
+                            0
+                              ? "#15803d"
+                              : "#dc2626",
+                        }}
+                      >
+
+                        {
+                          r.balanceKg
+                        }
+
+                      </b>
+
+                    </td>
+
+                    <td style={td}>
+
+                      <span
+                        style={
+                          statusBadge
+                        }
+                      >
+
+                        {
+                          r.qcStatus
+                        }
+
+                      </span>
+
+                    </td>
+
+                  </tr>
+
+                )
+              )}
+
+            </tbody>
+
+          </table>
+
+        </div>
+
+      </div>
+
+      <div
+        style={{
+          marginTop: 24,
+        }}
+      >
+
+        <div
+          style={
+            tableBox
+          }
+        >
+
+          <h3>
+            Grade-wise Summary
+          </h3>
+
+          <table
+            style={{
+              width: "100%",
+              borderCollapse:
+                "collapse",
+            }}
+          >
+
+            <thead>
+
+              <tr
+                style={{
+                  background:
+                    "#0f766e",
+                  color:
+                    "white",
+                }}
+              >
+
+                <th style={th}>
+                  Grade
+                </th>
+
+                <th style={th}>
+                  Produced
+                </th>
+
+                <th style={th}>
+                  Dispatched
+                </th>
+
+                <th style={th}>
+                  Balance
+                </th>
+
+              </tr>
+
+            </thead>
+
+            <tbody>
+
+              {gradeSummary.map(
+                (
+                  [grade, data],
+                  i
+                ) => (
+
+                  <tr
+                    key={i}
+                    style={{
+                      borderBottom:
+                        "1px solid #ddd",
+                    }}
+                  >
+
+                    <td style={td}>
+                      <b>
+                        {grade}
+                      </b>
+                    </td>
+
+                    <td style={td}>
+                      {
+                        data.produced
+                      }
+                    </td>
+
+                    <td style={td}>
+                      {
+                        data.dispatched
+                      }
+                    </td>
+
+                    <td style={td}>
+
+                      <b
+                        style={{
+                          color:
+                            "#15803d",
+                        }}
+                      >
+
+                        {
+                          data.balance
+                        }
+
+                      </b>
+
+                    </td>
+
+                  </tr>
+
+                )
+              )}
+
+            </tbody>
+
+          </table>
+
+        </div>
+
+      </div>
 
     </div>
 
@@ -282,11 +659,131 @@ function Card({ title, value }) {
 
 }
 
+function Card({
+  title,
+  value,
+}) {
+
+  return (
+
+    <div
+      style={cardStyle}
+    >
+
+      <div
+        style={{
+          color: "#64748b",
+          marginBottom: 8,
+          fontSize: 13,
+        }}
+      >
+
+        {title}
+
+      </div>
+
+      <div
+        style={{
+          fontSize: 24,
+          fontWeight: 700,
+          color:
+            "#0f766e",
+        }}
+      >
+
+        {value}
+
+      </div>
+
+    </div>
+
+  );
+
+}
+
+const gridStyle = {
+
+  display: "grid",
+
+  gridTemplateColumns:
+    "repeat(auto-fit,minmax(220px,1fr))",
+
+  gap: 16,
+
+};
+
+const cardStyle = {
+
+  background:
+    "white",
+
+  padding: 18,
+
+  borderRadius: 10,
+
+  border:
+    "1px solid #e5e7eb",
+
+};
+
+const tableBox = {
+
+  background:
+    "white",
+
+  borderRadius: 10,
+
+  border:
+    "1px solid #e5e7eb",
+
+  padding: 18,
+
+  overflowX:
+    "auto",
+
+};
+
+const statusBadge = {
+
+  background:
+    "#dcfce7",
+
+  color:
+    "#166534",
+
+  padding:
+    "4px 8px",
+
+  borderRadius: 999,
+
+  fontSize: 11,
+
+  fontWeight: 700,
+
+};
+
 const th = {
-  padding: 12,
+
+  padding:
+    "10px 12px",
+
   textAlign: "left",
+
+  fontSize: 12,
+
+  textTransform:
+    "uppercase",
+
+  letterSpacing:
+    "0.4px",
+
 };
 
 const td = {
-  padding: 10,
+
+  padding:
+    "10px 12px",
+
+  fontSize: 13,
+
 };

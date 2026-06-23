@@ -1,26 +1,74 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
+import { formatDate } from "../utils/date";
+import { validateDispatch } from "../lib/workflow";
+
+import DataTable from "../components/DataTable";
+import FormSection from "../components/FormSection";
 
 export default function Dispatch() {
 
-  const [rows, setRows] = useState([]);
+  const [rows, setRows] =
+    useState([]);
 
-  const [status, setStatus] = useState("");
+  const [
+    extrusionRows,
+    setExtrusionRows,
+  ] = useState([]);
 
-  const [form, setForm] = useState({
-    date: "",
+  const [status, setStatus] =
+    useState("");
+
+  const [editingId, setEditingId] =
+    useState(null);
+
+  const today =
+    new Date()
+      .toISOString()
+      .split("T")[0];
+
+  const blankForm = {
+
+    dispatchId: "",
+
+    sourceExtrusionBatchId:
+      "",
+
+    sourceSupplier: "",
+
+    availableFGQty: "",
+
+    date: today,
+
     customerName: "",
+
     invoiceNo: "",
+
     vehicleNo: "",
+
+    driverName: "",
+
+    dispatchStatus:
+      "DISPATCHED",
+
     grade: "",
+
     lotNo: "",
+
     quantityKg: "",
+
     noOfBags: "",
+
     ratePerKg: "",
+
     dispatchLocation: "",
+
     remarks: "",
-    createdBy: "Pratap",
-  });
+
+  };
+
+  const [form, setForm] =
+    useState(blankForm);
 
   useEffect(() => {
 
@@ -30,20 +78,143 @@ export default function Dispatch() {
 
   async function loadData() {
 
-    const res = await apiCall({
-      fn: "dispatch.list",
-    });
+    try {
 
-    setRows(res.rows || []);
+      const [
+        dispatch,
+        extrusion,
+      ] = await Promise.all([
+
+        apiCall({
+          fn:
+            "dispatch.list",
+        }),
+
+        apiCall({
+          fn:
+            "extrusion.list",
+        }),
+
+      ]);
+
+      setRows(
+        dispatch.rows || []
+      );
+
+      setExtrusionRows(
+        extrusion.rows || []
+      );
+
+    } catch (err) {
+
+      console.log(err);
+
+    }
+
+  }
+
+  function getAvailableFG(
+    batchId
+  ) {
+
+    const fg =
+      extrusionRows.find(
+        (x) =>
+          String(
+            x.extrusionBatchId
+          ) ===
+          String(batchId)
+      );
+
+    if (!fg)
+      return 0;
+
+    const totalDispatch =
+      rows
+        .filter(
+          (r) =>
+            String(
+              r.sourceExtrusionBatchId
+            ) ===
+              String(batchId) &&
+            r.dispatchStatus !==
+              "DELETED"
+        )
+        .reduce(
+          (sum, r) => {
+
+            return (
+              sum +
+              Number(
+                r.quantityKg || 0
+              )
+            );
+
+          },
+          0
+        );
+
+    return (
+      Number(
+        fg.fgOutputKg || 0
+      ) - totalDispatch
+    );
 
   }
 
   function onChange(e) {
 
-    setForm((p) => ({
-      ...p,
-      [e.target.name]: e.target.value,
-    }));
+    let updated = {
+
+      ...form,
+
+      [e.target.name]:
+        e.target.value,
+
+    };
+
+    if (
+      e.target.name ===
+      "sourceExtrusionBatchId"
+    ) {
+
+      const selected =
+        extrusionRows.find(
+          (x) =>
+            String(
+              x.extrusionBatchId
+            ) ===
+            String(
+              e.target.value
+            )
+        );
+
+      if (selected) {
+
+        updated.grade =
+          selected.productionGrade || "";
+
+        updated.lotNo =
+          selected.lotNo ||
+          selected.extrusionBatchId ||
+          "";
+
+        updated.availableFGQty =
+          getAvailableFG(
+            selected.extrusionBatchId
+          );
+
+        updated.quantityKg =
+          updated.availableFGQty;
+
+        updated.sourceSupplier =
+          selected.sourceSupplier || "";
+
+      }
+
+    }
+
+    setForm(updated);
 
   }
 
@@ -51,55 +222,295 @@ export default function Dispatch() {
 
     e.preventDefault();
 
-    const res = await apiCall({
-      fn: "dispatch.add",
-      ...form,
-    });
+    try {
 
-    if (res.ok) {
+      const valid =
+        validateDispatch({
 
-      setStatus("Dispatch saved");
+          fgStock:
+            form.availableFGQty,
 
-      loadData();
+          dispatchQty:
+            form.quantityKg,
+
+        });
+
+      if (!valid) {
+
+        setStatus(
+          "Dispatch exceeds available FG stock"
+        );
+
+        return;
+
+      }
+
+      let res;
+
+      if (editingId) {
+
+        res =
+          await apiCall({
+
+            fn:
+              "dispatch.update",
+
+            ...form,
+
+          });
+
+      } else {
+
+        res =
+          await apiCall({
+
+            fn:
+              "dispatch.add",
+
+            ...form,
+
+          });
+
+      }
+
+      if (res.ok) {
+
+        setStatus(
+          editingId
+            ? "Dispatch Updated"
+            : "Dispatch Saved"
+        );
+
+        setEditingId(
+          null
+        );
+
+        setForm(
+          blankForm
+        );
+
+        loadData();
+
+      }
+
+    } catch (err) {
+
+      setStatus(
+        err.message
+      );
 
     }
 
   }
 
-  const totalDispatch = rows.reduce((sum, r) => {
-    return sum + Number(r.quantityKg || 0);
-  }, 0);
+  function editRow(row) {
 
-  const totalSales = rows.reduce((sum, r) => {
-    return sum + (
-      Number(r.quantityKg || 0) *
-      Number(r.ratePerKg || 0)
+    setEditingId(
+      row.dispatchId
     );
-  }, 0);
+
+    setForm({
+
+      ...blankForm,
+
+      ...row,
+
+      date: row.date
+        ? new Date(
+            row.date
+          )
+            .toISOString()
+            .split("T")[0]
+        : today,
+
+    });
+
+    window.scrollTo({
+
+      top: 0,
+
+      behavior:
+        "smooth",
+
+    });
+
+  }
+
+  async function deleteRow(
+    row
+  ) {
+
+    const confirmed =
+      window.confirm(
+        "Delete dispatch?"
+      );
+
+    if (!confirmed)
+      return;
+
+    await apiCall({
+
+      fn:
+        "dispatch.update",
+
+      dispatchId:
+        row.dispatchId,
+
+      dispatchStatus:
+        "DELETED",
+
+    });
+
+    loadData();
+
+  }
+
+  const totalSales =
+    rows.reduce(
+      (sum, r) => {
+
+        return (
+          sum +
+          (
+            Number(
+              r.quantityKg || 0
+            ) *
+            Number(
+              r.ratePerKg || 0
+            )
+          )
+        );
+
+      },
+      0
+    );
+
+  const totalDispatch =
+    rows.reduce(
+      (sum, r) => {
+
+        return (
+          sum +
+          Number(
+            r.quantityKg || 0
+          )
+        );
+
+      },
+      0
+    );
+
+  const avgRealization =
+    totalDispatch > 0
+      ? (
+          totalSales /
+          totalDispatch
+        ).toFixed(2)
+      : 0;
+
+  const liveLots =
+    extrusionRows
+      .map((x) => {
+
+        return {
+
+          ...x,
+
+          available:
+            getAvailableFG(
+              x.extrusionBatchId
+            ),
+
+        };
+
+      })
+      .filter(
+        (x) =>
+          x.available > 0
+      );
+
+  const customerSummary =
+    useMemo(() => {
+
+      const map = {};
+
+      rows.forEach((r) => {
+
+        const customer =
+          r.customerName ||
+          "Unknown";
+
+        map[customer] =
+          (
+            map[customer] || 0
+          ) +
+          Number(
+            r.quantityKg || 0
+          );
+
+      });
+
+      return Object.entries(
+        map
+      )
+
+        .sort(
+          (a, b) =>
+            b[1] - a[1]
+        )
+
+        .slice(0, 5);
+
+    }, [rows]);
 
   return (
 
-    <div style={{ padding: 20 }}>
+    <div style={pageStyle}>
 
-      <h1>Dispatches</h1>
+      <div style={headerCard}>
 
-      <div
-        style={{
-          display: "flex",
-          gap: 20,
-          marginBottom: 20,
-          flexWrap: "wrap",
-        }}
-      >
+        <h1
+          style={{
+            margin: 0,
+          }}
+        >
 
-        <Card
-          title="Total Dispatch Qty"
-          value={`${totalDispatch.toFixed(2)} Kg`}
+          Dispatch Workflow
+
+        </h1>
+
+        <div style={subText}>
+
+          Finished goods dispatch & customer traceability
+
+        </div>
+
+      </div>
+
+      <div style={kpiGrid}>
+
+        <KPI
+          title="Dispatch Qty"
+          value={`${totalDispatch.toFixed(
+            0
+          )} Kg`}
         />
 
-        <Card
-          title="Estimated Sales"
-          value={`₹ ${totalSales.toFixed(0)}`}
+        <KPI
+          title="Sales"
+          value={`₹ ${totalSales.toFixed(
+            0
+          )}`}
+        />
+
+        <KPI
+          title="Avg Realization"
+          value={`₹ ${avgRealization}`}
+        />
+
+        <KPI
+          title="Live Lots"
+          value={liveLots.length}
         />
 
       </div>
@@ -107,175 +518,477 @@ export default function Dispatch() {
       <form
         onSubmit={submit}
         style={{
-          display: "grid",
-          gap: 10,
-          maxWidth: 700,
-          background: "white",
-          padding: 20,
-          borderRadius: 10,
-          marginBottom: 30,
+          display: "flex",
+          flexDirection:
+            "column",
+          gap: 16,
         }}
       >
 
-        <input type="date" name="date" value={form.date} onChange={onChange} />
-
-        <input
-          name="customerName"
-          value={form.customerName}
-          onChange={onChange}
-          placeholder="Customer Name"
-        />
-
-        <input
-          name="invoiceNo"
-          value={form.invoiceNo}
-          onChange={onChange}
-          placeholder="Invoice Number"
-        />
-
-        <input
-          name="vehicleNo"
-          value={form.vehicleNo}
-          onChange={onChange}
-          placeholder="Vehicle Number"
-        />
-
-        <select
-          name="grade"
-          value={form.grade}
-          onChange={onChange}
+        <FormSection
+          title="FG Source"
         >
 
-          <option value="">Select Grade</option>
+          <Field label="FG Batch">
 
-          <option>E1</option>
-          <option>E2</option>
-          <option>E3</option>
-          <option>E4</option>
+            <select
+              name="sourceExtrusionBatchId"
+              value={
+                form.sourceExtrusionBatchId
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            >
 
-        </select>
+              <option value="">
+                Select
+              </option>
 
-        <input
-          name="lotNo"
-          value={form.lotNo}
-          onChange={onChange}
-          placeholder="Lot Number"
-        />
+              {liveLots.map(
+                (
+                  x,
+                  i
+                ) => (
 
-        <input
-          name="quantityKg"
-          value={form.quantityKg}
-          onChange={onChange}
-          placeholder="Quantity Kg"
-        />
+                  <option
+                    key={i}
+                    value={
+                      x.extrusionBatchId
+                    }
+                  >
 
-        <input
-          name="noOfBags"
-          value={form.noOfBags}
-          onChange={onChange}
-          placeholder="No Of Bags"
-        />
+                    {
+                      x.extrusionBatchId
+                    }
+                    {" | "}
+                    {
+                      x.productionGrade
+                    }
+                    {" | "}
+                    {
+                      x.available
+                    }
+                    {" Kg"}
 
-        <input
-          name="ratePerKg"
-          value={form.ratePerKg}
-          onChange={onChange}
-          placeholder="Rate Per Kg"
-        />
+                  </option>
 
-        <input
-          name="dispatchLocation"
-          value={form.dispatchLocation}
-          onChange={onChange}
-          placeholder="Dispatch Location"
-        />
+                )
+              )}
 
-        <textarea
-          name="remarks"
-          value={form.remarks}
-          onChange={onChange}
-          placeholder="Remarks"
-        />
+            </select>
 
-        <button
-          type="submit"
-          style={{
-            background: "#0f766e",
-            color: "white",
-            border: "none",
-            padding: 12,
-            borderRadius: 8,
-          }}
+          </Field>
+
+          <Field label="Grade">
+
+            <input
+              readOnly
+              value={
+                form.grade
+              }
+              style={
+                readonlyStyle
+              }
+            />
+
+          </Field>
+
+          <Field label="Lot No">
+
+            <input
+              readOnly
+              value={
+                form.lotNo
+              }
+              style={
+                readonlyStyle
+              }
+            />
+
+          </Field>
+
+          <Field label="Available FG">
+
+            <input
+              readOnly
+              value={
+                form.availableFGQty
+              }
+              style={
+                readonlyStyle
+              }
+            />
+
+          </Field>
+
+        </FormSection>
+
+        <FormSection
+          title="Customer & Logistics"
         >
-          Save Dispatch
-        </button>
+
+          <Field label="Date">
+
+            <input
+              type="date"
+              name="date"
+              value={
+                form.date
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            />
+
+          </Field>
+
+          <Field label="Customer">
+
+            <input
+              name="customerName"
+              value={
+                form.customerName
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            />
+
+          </Field>
+
+          <Field label="Invoice">
+
+            <input
+              name="invoiceNo"
+              value={
+                form.invoiceNo
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            />
+
+          </Field>
+
+          <Field label="Vehicle">
+
+            <input
+              name="vehicleNo"
+              value={
+                form.vehicleNo
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            />
+
+          </Field>
+
+          <Field label="Driver">
+
+            <input
+              name="driverName"
+              value={
+                form.driverName
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            />
+
+          </Field>
+
+          <Field label="Location">
+
+            <input
+              name="dispatchLocation"
+              value={
+                form.dispatchLocation
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            />
+
+          </Field>
+
+        </FormSection>
+
+        <FormSection
+          title="Dispatch Quantity"
+        >
+
+          <Field label="Dispatch Qty Kg">
+
+            <input
+              name="quantityKg"
+              value={
+                form.quantityKg
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            />
+
+          </Field>
+
+          <Field label="No Of Bags">
+
+            <input
+              name="noOfBags"
+              value={
+                form.noOfBags
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            />
+
+          </Field>
+
+          <Field label="Rate">
+
+            <input
+              name="ratePerKg"
+              value={
+                form.ratePerKg
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            />
+
+          </Field>
+
+          <Field label="Status">
+
+            <select
+              name="dispatchStatus"
+              value={
+                form.dispatchStatus
+              }
+              onChange={
+                onChange
+              }
+              style={
+                inputStyle
+              }
+            >
+
+              <option>
+                DISPATCHED
+              </option>
+
+              <option>
+                IN_TRANSIT
+              </option>
+
+              <option>
+                DELIVERED
+              </option>
+
+            </select>
+
+          </Field>
+
+        </FormSection>
+
+        <FormSection
+          title="Remarks"
+          defaultOpen={false}
+        >
+
+          <Field label="Remarks">
+
+            <textarea
+              name="remarks"
+              value={
+                form.remarks
+              }
+              onChange={
+                onChange
+              }
+              style={
+                textareaStyle
+              }
+            />
+
+          </Field>
+
+        </FormSection>
+
+        <div style={stickyBar}>
+
+          <button
+            type="submit"
+            style={
+              editingId
+                ? updateButton
+                : saveButton
+            }
+          >
+
+            {editingId
+              ? "Update Dispatch"
+              : "Save Dispatch"}
+
+          </button>
+
+        </div>
 
       </form>
 
       {status && (
-        <div style={{ marginBottom: 20 }}>
+
+        <div style={statusStyle}>
+
           {status}
+
         </div>
+
       )}
 
-      <div
-        style={{
-          background: "white",
-          borderRadius: 10,
-          padding: 20,
-          overflowX: "auto",
-        }}
-      >
+      <div style={sectionCard}>
 
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-          }}
-        >
+        <div style={sectionTitle}>
+          Top Customers
+        </div>
 
-          <thead>
+        <div style={customerGrid}>
 
-            <tr
-              style={{
-                background: "#0f766e",
-                color: "white",
-              }}
-            >
+          {customerSummary.map(
+            (c, i) => (
 
-              <th style={th}>Date</th>
-              <th style={th}>Customer</th>
-              <th style={th}>Invoice</th>
-              <th style={th}>Grade</th>
-              <th style={th}>Qty</th>
-              <th style={th}>Rate</th>
+              <div
+                key={i}
+                style={
+                  customerCard
+                }
+              >
 
-            </tr>
+                <div
+                  style={{
+                    fontWeight: 700,
+                  }}
+                >
 
-          </thead>
+                  {c[0]}
 
-          <tbody>
+                </div>
 
-            {rows.map((r, i) => (
+                <div
+                  style={{
+                    marginTop: 6,
+                    color:
+                      "#0f766e",
+                    fontWeight: 700,
+                  }}
+                >
 
-              <tr key={i} style={{ borderBottom: "1px solid #ddd" }}>
+                  {Number(
+                    c[1]
+                  ).toFixed(0)}
+                  {" Kg"}
 
-                <td style={td}>{r.date}</td>
-                <td style={td}>{r.customerName}</td>
-                <td style={td}>{r.invoiceNo}</td>
-                <td style={td}>{r.grade}</td>
-                <td style={td}>{r.quantityKg}</td>
-                <td style={td}>{r.ratePerKg}</td>
+                </div>
 
-              </tr>
+              </div>
 
-            ))}
+            )
+          )}
 
-          </tbody>
-
-        </table>
+        </div>
 
       </div>
+
+      <DataTable
+        title="Dispatch History"
+        rows={rows.filter(
+          (r) =>
+            r.dispatchStatus !==
+            "DELETED"
+        )}
+        searchFields={[
+          "dispatchId",
+          "customerName",
+          "grade",
+          "invoiceNo",
+          "vehicleNo",
+          "lotNo",
+        ]}
+        columns={[
+          {
+            key: "date",
+            label: "Date",
+            render: (r) =>
+              formatDate(
+                r.date
+              ),
+          },
+          {
+            key:
+              "dispatchId",
+            label: "Dispatch",
+          },
+          {
+            key:
+              "customerName",
+            label: "Customer",
+          },
+          {
+            key: "grade",
+            label: "Grade",
+          },
+          {
+            key:
+              "quantityKg",
+            label: "Qty Kg",
+          },
+          {
+            key:
+              "ratePerKg",
+            label: "Rate",
+          },
+          {
+            key:
+              "dispatchStatus",
+            label: "Status",
+          },
+        ]}
+        onEdit={editRow}
+        onDelete={deleteRow}
+      />
 
     </div>
 
@@ -283,27 +996,20 @@ export default function Dispatch() {
 
 }
 
-function Card({ title, value }) {
+function Field({
+  label,
+  children,
+}) {
 
   return (
 
-    <div
-      style={{
-        background: "white",
-        padding: 20,
-        borderRadius: 10,
-        minWidth: 220,
-        boxShadow: "0 2px 10px rgba(0,0,0,0.08)",
-      }}
-    >
+    <div>
 
-      <div style={{ color: "#666", marginBottom: 10 }}>
-        {title}
+      <div style={fieldLabel}>
+        {label}
       </div>
 
-      <h2 style={{ margin: 0, color: "#0f766e" }}>
-        {value}
-      </h2>
+      {children}
 
     </div>
 
@@ -311,11 +1017,168 @@ function Card({ title, value }) {
 
 }
 
-const th = {
-  padding: 12,
-  textAlign: "left",
+function KPI({
+  title,
+  value,
+}) {
+
+  return (
+
+    <div style={kpiCard}>
+
+      <div style={kpiTitle}>
+        {title}
+      </div>
+
+      <div style={kpiValue}>
+        {value}
+      </div>
+
+    </div>
+
+  );
+
+}
+
+const pageStyle = {
+  padding: 20,
 };
 
-const td = {
+const headerCard = {
+  background: "white",
+  padding: 18,
+  borderRadius: 12,
+  border: "1px solid #e5e7eb",
+  marginBottom: 16,
+};
+
+const subText = {
+  color: "#64748b",
+  marginTop: 4,
+  fontSize: 13,
+};
+
+const sectionCard = {
+  background: "white",
+  padding: 18,
+  borderRadius: 12,
+  border: "1px solid #e5e7eb",
+  marginBottom: 16,
+};
+
+const sectionTitle = {
+  fontWeight: 700,
+  marginBottom: 16,
+  color: "#005d34",
+};
+
+const fieldLabel = {
+  fontSize: 12,
+  fontWeight: 600,
+  marginBottom: 4,
+  color: "#334155",
+};
+
+const kpiGrid = {
+  display: "grid",
+  gridTemplateColumns:
+    "repeat(auto-fit,minmax(180px,1fr))",
+  gap: 14,
+  marginBottom: 16,
+};
+
+const kpiCard = {
+  background: "white",
+  padding: 16,
+  borderRadius: 12,
+  border: "1px solid #e5e7eb",
+};
+
+const kpiTitle = {
+  color: "#64748b",
+  fontSize: 12,
+  marginBottom: 8,
+};
+
+const kpiValue = {
+  fontSize: 22,
+  fontWeight: 700,
+  color: "#005d34",
+};
+
+const customerGrid = {
+  display: "grid",
+  gridTemplateColumns:
+    "repeat(auto-fit,minmax(180px,1fr))",
+  gap: 12,
+};
+
+const customerCard = {
+  border:
+    "1px solid #e5e7eb",
+  borderRadius: 10,
+  padding: 12,
+  background:
+    "#f8fafc",
+};
+
+const inputStyle = {
+  width: "100%",
   padding: 10,
+  borderRadius: 8,
+  border:
+    "1px solid #ccc",
+  boxSizing:
+    "border-box",
+};
+
+const readonlyStyle = {
+  ...inputStyle,
+  background:
+    "#f8fafc",
+  fontWeight: 700,
+};
+
+const textareaStyle = {
+  ...inputStyle,
+  height: 80,
+};
+
+const saveButton = {
+  background:
+    "#0f766e",
+  color: "white",
+  border: "none",
+  padding:
+    "12px 20px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 600,
+};
+
+const updateButton = {
+  ...saveButton,
+  background:
+    "#ea580c",
+};
+
+const stickyBar = {
+  position: "sticky",
+  bottom: 0,
+  background:
+    "white",
+  padding: 12,
+  borderTop:
+    "1px solid #ddd",
+  display: "flex",
+  justifyContent:
+    "flex-end",
+  zIndex: 10,
+};
+
+const statusStyle = {
+  marginTop: 12,
+  marginBottom: 16,
+  fontWeight: 600,
+  color: "#0f766e",
 };

@@ -1,307 +1,658 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
 
 export default function Consumables() {
-  const currentDate = new Date();
-
-  const [rows, setRows] = useState([]);
-  const [status, setStatus] = useState("");
-
-  const [form, setForm] = useState({
-    month: currentDate.toLocaleString("default", { month: "short" }),
-    year: String(currentDate.getFullYear()),
-    category: "",
+  const blankForm = {
     itemName: "",
-    openingQty: "",
-    purchasedQty: "",
-    closingQty: "",
-    consumedQty: "",
+    category: "",
     unit: "Kg",
-    ratePerUnit: "",
-    consumedValue: "",
+    minLevel: "",
+    reorderLevel: "",
+    preferredSupplier: "",
+    standardRate: "",
+    isActive: "TRUE",
     remarks: "",
     createdBy: "Pratap",
-  });
+  };
+
+  const categories = [
+    "PROCESS CHEMICALS",
+    "EXTRUSION CONSUMABLES",
+    "QUALITY ADDITIVES",
+    "MAINTENANCE",
+    "PACKING",
+    "SAFETY & PPE",
+    "TOOLS & SPARES",
+    "HOUSEKEEPING",
+    "ADMIN / GENERAL",
+  ];
+
+  const units = ["Kg", "Nos", "Ltr", "Bag", "Box", "Set", "Roll"];
+
+  const [rows, setRows] = useState([]);
+  const [form, setForm] = useState(blankForm);
+  const [editing, setEditing] = useState(null);
+  const [status, setStatus] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     loadRows();
   }, []);
 
   async function loadRows() {
-    const res = await apiCall({
-      fn: "consumables.list",
-    });
+    try {
+      const res = await apiCall({
+        fn: "consumables.list",
+      });
 
-    setRows(res.rows || []);
+      setRows(res.rows || []);
+    } catch (err) {
+      setStatus(err.message);
+    }
   }
 
   function onChange(e) {
-    const updated = {
+    setForm({
       ...form,
       [e.target.name]: e.target.value,
-    };
-
-    const opening = Number(updated.openingQty || 0);
-    const purchased = Number(updated.purchasedQty || 0);
-    const closing = Number(updated.closingQty || 0);
-    const rate = Number(updated.ratePerUnit || 0);
-
-    const consumed = opening + purchased - closing;
-
-    updated.consumedQty = consumed;
-    updated.consumedValue = consumed * rate;
-
-    setForm(updated);
+    });
   }
 
   async function submit(e) {
     e.preventDefault();
 
+    if (!form.itemName) {
+      alert("Item name is required");
+      return;
+    }
+
+    if (!form.category) {
+      alert("Category is required");
+      return;
+    }
+
     try {
+      setSaving(true);
+
       const res = await apiCall({
         fn: "consumables.add",
         ...form,
       });
 
       if (res.ok) {
-        setStatus("Consumables entry saved");
-
-        setForm({
-          month: currentDate.toLocaleString("default", { month: "short" }),
-          year: String(currentDate.getFullYear()),
-          category: "",
-          itemName: "",
-          openingQty: "",
-          purchasedQty: "",
-          closingQty: "",
-          consumedQty: "",
-          unit: "Kg",
-          ratePerUnit: "",
-          consumedValue: "",
-          remarks: "",
-          createdBy: "Pratap",
-        });
-
+        setStatus("Consumable item saved successfully");
+        setForm(blankForm);
         loadRows();
       } else {
-        setStatus(res.error || "Error saving");
+        setStatus(res.error || "Error saving consumable");
       }
     } catch (err) {
       setStatus(err.message);
+    } finally {
+      setSaving(false);
     }
   }
 
-  const totalConsumedValue = rows.reduce((sum, r) => {
-    return sum + Number(r.consumedValue || 0);
-  }, 0);
+  function startEdit(row) {
+    setEditing({
+      ...row,
+    });
+  }
+
+  function onEditChange(e) {
+    setEditing({
+      ...editing,
+      [e.target.name]: e.target.value,
+    });
+  }
+
+  async function saveEdit() {
+    try {
+      setSaving(true);
+
+      const res = await apiCall({
+        fn: "consumables.update",
+        ...editing,
+      });
+
+      if (res.ok === false) {
+        alert(res.error || "Update failed");
+        return;
+      }
+
+      setStatus("Consumable item updated");
+      setEditing(null);
+      loadRows();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteRow(row) {
+    const ok = window.confirm(`Delete / deactivate ${row.itemName}?`);
+    if (!ok) return;
+
+    try {
+      const res = await apiCall({
+        fn: "consumables.update",
+        ...row,
+        isActive: "FALSE",
+        status: "DELETED",
+      });
+
+      if (res.ok === false) {
+        alert(res.error || "Delete failed");
+        return;
+      }
+
+      setStatus("Consumable item deactivated");
+      loadRows();
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+  const filteredRows = useMemo(() => {
+    const q = search.toLowerCase();
+
+    return rows
+      .filter((r) => String(r.status || "").toUpperCase() !== "DELETED")
+      .filter((r) => {
+        if (!q) return true;
+
+        return [
+          r.itemName,
+          r.category,
+          r.unit,
+          r.preferredSupplier,
+          r.remarks,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(q);
+      });
+  }, [rows, search]);
+
+  const activeItems = filteredRows.filter(
+    (r) => String(r.isActive || "TRUE").toUpperCase() === "TRUE"
+  ).length;
+
+  const categoryCount = new Set(filteredRows.map((r) => r.category)).size;
+
+  const lowMinConfigured = filteredRows.filter(
+    (r) => Number(r.minLevel || 0) > 0
+  ).length;
 
   return (
-    <div style={{ padding: 20 }}>
-      <h1>Consumables & Additives</h1>
+    <div style={page}>
+      <div style={hero}>
+        <div>
+          <div style={eyebrow}>Stores Master</div>
+          <h1 style={title}>Consumables Master</h1>
+          <div style={subtitle}>
+            Maintain consumable items, category, unit, min level and reorder level.
+          </div>
+        </div>
+      </div>
+
+      <div style={kpiGrid}>
+        <KPI title="Total Items" value={filteredRows.length} />
+        <KPI title="Active Items" value={activeItems} />
+        <KPI title="Categories" value={categoryCount} />
+        <KPI title="Min Level Set" value={lowMinConfigured} />
+      </div>
 
       <div style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>Monthly Consumption Entry</h2>
+        <h2 style={{ marginTop: 0 }}>Add Consumable Item</h2>
 
         <form onSubmit={submit} style={formStyle}>
-          <select name="month" value={form.month} onChange={onChange} style={inputStyle}>
-            <option>Jan</option>
-            <option>Feb</option>
-            <option>Mar</option>
-            <option>Apr</option>
-            <option>May</option>
-            <option>Jun</option>
-            <option>Jul</option>
-            <option>Aug</option>
-            <option>Sep</option>
-            <option>Oct</option>
-            <option>Nov</option>
-            <option>Dec</option>
-          </select>
+          <Field label="Item Name">
+            <input
+              name="itemName"
+              value={form.itemName}
+              onChange={onChange}
+              placeholder="Example: Screen Mesh, TiO2, Gear Oil"
+              style={inputStyle}
+            />
+          </Field>
 
-          <select name="year" value={form.year} onChange={onChange} style={inputStyle}>
-            <option>2025</option>
-            <option>2026</option>
-            <option>2027</option>
-          </select>
+          <Field label="Category">
+            <select
+              name="category"
+              value={form.category}
+              onChange={onChange}
+              style={inputStyle}
+            >
+              <option value="">Select Category</option>
+              {categories.map((c) => (
+                <option key={c}>{c}</option>
+              ))}
+            </select>
+          </Field>
 
-          <select name="category" value={form.category} onChange={onChange} style={inputStyle}>
-            <option value="">Select Category</option>
-            <option>Virgin Resin</option>
-            <option>Battery Regrind</option>
-            <option>Masterbatch</option>
-            <option>Additives</option>
-            <option>Chemicals</option>
-            <option>Consumables</option>
-          </select>
+          <Field label="Unit">
+            <select
+              name="unit"
+              value={form.unit}
+              onChange={onChange}
+              style={inputStyle}
+            >
+              {units.map((u) => (
+                <option key={u}>{u}</option>
+              ))}
+            </select>
+          </Field>
 
-          <input
-            name="itemName"
-            value={form.itemName}
-            onChange={onChange}
-            placeholder="Item Name"
-            style={inputStyle}
-          />
+          <Field label="Min Level">
+            <input
+              type="number"
+              name="minLevel"
+              value={form.minLevel}
+              onChange={onChange}
+              placeholder="Minimum stock level"
+              style={inputStyle}
+            />
+          </Field>
 
-          <input
-            type="number"
-            name="openingQty"
-            value={form.openingQty}
-            onChange={onChange}
-            placeholder="Opening Qty"
-            style={inputStyle}
-          />
+          <Field label="Reorder Level">
+            <input
+              type="number"
+              name="reorderLevel"
+              value={form.reorderLevel}
+              onChange={onChange}
+              placeholder="Reorder trigger level"
+              style={inputStyle}
+            />
+          </Field>
 
-          <input
-            type="number"
-            name="purchasedQty"
-            value={form.purchasedQty}
-            onChange={onChange}
-            placeholder="Purchased Qty"
-            style={inputStyle}
-          />
+          <Field label="Preferred Supplier">
+            <input
+              name="preferredSupplier"
+              value={form.preferredSupplier}
+              onChange={onChange}
+              placeholder="Preferred supplier"
+              style={inputStyle}
+            />
+          </Field>
 
-          <input
-            type="number"
-            name="closingQty"
-            value={form.closingQty}
-            onChange={onChange}
-            placeholder="Closing Qty"
-            style={inputStyle}
-          />
+          <Field label="Standard Rate">
+            <input
+              type="number"
+              name="standardRate"
+              value={form.standardRate}
+              onChange={onChange}
+              placeholder="Standard rate"
+              style={inputStyle}
+            />
+          </Field>
 
-          <input
-            name="consumedQty"
-            value={form.consumedQty}
-            readOnly
-            placeholder="Consumed Qty"
-            style={inputStyle}
-          />
+          <Field label="Active">
+            <select
+              name="isActive"
+              value={form.isActive}
+              onChange={onChange}
+              style={inputStyle}
+            >
+              <option value="TRUE">Active</option>
+              <option value="FALSE">Inactive</option>
+            </select>
+          </Field>
 
-          <select name="unit" value={form.unit} onChange={onChange} style={inputStyle}>
-            <option>Kg</option>
-            <option>Nos</option>
-            <option>Ltr</option>
-            <option>Bag</option>
-          </select>
+          <Field label="Remarks">
+            <textarea
+              name="remarks"
+              value={form.remarks}
+              onChange={onChange}
+              placeholder="Remarks"
+              style={textareaStyle}
+            />
+          </Field>
 
-          <input
-            type="number"
-            name="ratePerUnit"
-            value={form.ratePerUnit}
-            onChange={onChange}
-            placeholder="Rate Per Unit"
-            style={inputStyle}
-          />
-
-          <input
-            name="consumedValue"
-            value={form.consumedValue}
-            readOnly
-            placeholder="Consumed Value"
-            style={inputStyle}
-          />
-
-          <textarea
-            name="remarks"
-            value={form.remarks}
-            onChange={onChange}
-            placeholder="Remarks"
-            style={textareaStyle}
-          />
-
-          <button type="submit" style={buttonStyle}>
-            Save Consumption
-          </button>
+          <div style={{ display: "flex", alignItems: "end" }}>
+            <button type="submit" disabled={saving} style={buttonStyle}>
+              {saving ? "Saving..." : "Save Consumable"}
+            </button>
+          </div>
         </form>
       </div>
 
       {status && <div style={statusStyle}>{status}</div>}
 
       <div style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>Monthly Consumption Summary</h2>
+        <div style={tableTop}>
+          <h2 style={{ margin: 0 }}>Consumables List</h2>
 
-        <div style={summaryStyle}>
-          Total Consumed Value: <b>₹ {totalConsumedValue.toFixed(0)}</b>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search consumables..."
+            style={searchStyle}
+          />
         </div>
 
         <div style={{ overflowX: "auto" }}>
           <table style={tableStyle}>
             <thead>
               <tr style={headerRowStyle}>
-                <th style={th}>Month</th>
-                <th style={th}>Year</th>
-                <th style={th}>Category</th>
                 <th style={th}>Item</th>
-                <th style={th}>Opening</th>
-                <th style={th}>Purchased</th>
-                <th style={th}>Closing</th>
-                <th style={th}>Consumed</th>
+                <th style={th}>Category</th>
+                <th style={th}>Unit</th>
+                <th style={th}>Min Level</th>
+                <th style={th}>Reorder Level</th>
+                <th style={th}>Supplier</th>
                 <th style={th}>Rate</th>
-                <th style={th}>Value</th>
+                <th style={th}>Active</th>
+                <th style={th}>Action</th>
               </tr>
             </thead>
 
             <tbody>
-              {rows.map((r, i) => (
-                <tr key={i} style={{ borderBottom: "1px solid #ddd" }}>
-                  <td style={td}>{r.month}</td>
-                  <td style={td}>{r.year}</td>
+              {filteredRows.map((r, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid #e5e7eb" }}>
+                  <td style={td}>
+                    <b>{r.itemName}</b>
+                  </td>
                   <td style={td}>{r.category}</td>
-                  <td style={td}>{r.itemName}</td>
-                  <td style={td}>{r.openingQty}</td>
-                  <td style={td}>{r.purchasedQty}</td>
-                  <td style={td}>{r.closingQty}</td>
-                  <td style={td}>{r.consumedQty}</td>
-                  <td style={td}>₹ {r.ratePerUnit}</td>
-                  <td style={td}>₹ {Number(r.consumedValue || 0).toFixed(0)}</td>
+                  <td style={td}>{r.unit}</td>
+                  <td style={td}>{r.minLevel}</td>
+                  <td style={td}>{r.reorderLevel}</td>
+                  <td style={td}>{r.preferredSupplier}</td>
+                  <td style={td}>₹ {r.standardRate}</td>
+                  <td style={td}>
+                    <span
+                      style={badge(
+                        String(r.isActive || "TRUE").toUpperCase() === "TRUE"
+                      )}
+                    >
+                      {String(r.isActive || "TRUE").toUpperCase() === "TRUE"
+                        ? "Active"
+                        : "Inactive"}
+                    </span>
+                  </td>
+                  <td style={td}>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button onClick={() => startEdit(r)} style={editButton}>
+                        Edit
+                      </button>
+                      <button onClick={() => deleteRow(r)} style={deleteButton}>
+                        Delete
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
+
+              {filteredRows.length === 0 && (
+                <tr>
+                  <td colSpan="9" style={emptyStyle}>
+                    No consumables found
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
       </div>
 
       <div style={noteStyle}>
-        <b>Purpose:</b> This is month-end consumption costing. It avoids batch-wise complexity
-        while still giving real P&L inputs for virgin, battery regrind, masterbatch, additives,
-        chemicals and consumables.
+        <b>Purpose:</b> This is now the Consumables Master. Monthly consumption
+        should come from Stores Inward and Stores Issue, not manual monthly
+        entries.
       </div>
+
+      {editing && (
+        <div style={modalOverlay}>
+          <div style={modal}>
+            <h2 style={{ marginTop: 0 }}>Edit Consumable</h2>
+
+            <div style={formStyle}>
+              <Field label="Item Name">
+                <input
+                  name="itemName"
+                  value={editing.itemName || ""}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Category">
+                <select
+                  name="category"
+                  value={editing.category || ""}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                >
+                  <option value="">Select Category</option>
+                  {categories.map((c) => (
+                    <option key={c}>{c}</option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Unit">
+                <select
+                  name="unit"
+                  value={editing.unit || "Kg"}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                >
+                  {units.map((u) => (
+                    <option key={u}>{u}</option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Min Level">
+                <input
+                  type="number"
+                  name="minLevel"
+                  value={editing.minLevel || ""}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Reorder Level">
+                <input
+                  type="number"
+                  name="reorderLevel"
+                  value={editing.reorderLevel || ""}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Preferred Supplier">
+                <input
+                  name="preferredSupplier"
+                  value={editing.preferredSupplier || ""}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Standard Rate">
+                <input
+                  type="number"
+                  name="standardRate"
+                  value={editing.standardRate || ""}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Active">
+                <select
+                  name="isActive"
+                  value={editing.isActive || "TRUE"}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                >
+                  <option value="TRUE">Active</option>
+                  <option value="FALSE">Inactive</option>
+                </select>
+              </Field>
+
+              <Field label="Remarks">
+                <textarea
+                  name="remarks"
+                  value={editing.remarks || ""}
+                  onChange={onEditChange}
+                  style={textareaStyle}
+                />
+              </Field>
+            </div>
+
+            <div style={modalButtons}>
+              <button onClick={() => setEditing(null)} style={cancelButton}>
+                Cancel
+              </button>
+
+              <button onClick={saveEdit} disabled={saving} style={saveButton}>
+                {saving ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
+function Field({ label, children }) {
+  return (
+    <div>
+      <div style={labelStyle}>{label}</div>
+      {children}
+    </div>
+  );
+}
+
+function KPI({ title, value }) {
+  return (
+    <div style={kpiCard}>
+      <div style={kpiTitle}>{title}</div>
+      <div style={kpiValue}>{value}</div>
+    </div>
+  );
+}
+
+const badge = (active) => ({
+  background: active ? "#dcfce7" : "#fee2e2",
+  color: active ? "#166534" : "#991b1b",
+  padding: "5px 10px",
+  borderRadius: 999,
+  fontSize: 11,
+  fontWeight: 800,
+});
+
+const page = {
+  padding: 20,
+};
+
+const hero = {
+  background: "linear-gradient(135deg,#064e3b,#0f766e)",
+  color: "white",
+  borderRadius: 18,
+  padding: 24,
+  marginBottom: 20,
+};
+
+const eyebrow = {
+  fontSize: 13,
+  textTransform: "uppercase",
+  letterSpacing: 1.2,
+  opacity: 0.85,
+  fontWeight: 800,
+};
+
+const title = {
+  margin: "6px 0",
+  fontSize: 32,
+  fontWeight: 950,
+};
+
+const subtitle = {
+  opacity: 0.9,
+};
+
+const kpiGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))",
+  gap: 16,
+  marginBottom: 20,
+};
+
+const kpiCard = {
+  background: "white",
+  border: "1px solid #e5e7eb",
+  borderRadius: 14,
+  padding: 18,
+  boxShadow: "0 6px 18px rgba(15,23,42,0.06)",
+};
+
+const kpiTitle = {
+  color: "#64748b",
+  fontSize: 12,
+  fontWeight: 800,
+  textTransform: "uppercase",
+  marginBottom: 8,
+};
+
+const kpiValue = {
+  fontSize: 28,
+  fontWeight: 950,
+  color: "#0f766e",
+};
+
 const cardStyle = {
   background: "white",
   padding: 20,
-  borderRadius: 10,
+  borderRadius: 14,
   marginBottom: 25,
-  boxShadow: "0 2px 10px rgba(0,0,0,0.08)",
+  border: "1px solid #e5e7eb",
+  boxShadow: "0 6px 18px rgba(15,23,42,0.06)",
 };
 
 const formStyle = {
   display: "grid",
-  gap: 10,
-  maxWidth: 700,
+  gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))",
+  gap: 14,
+};
+
+const labelStyle = {
+  fontSize: 12,
+  fontWeight: 700,
+  marginBottom: 5,
+  color: "#334155",
 };
 
 const inputStyle = {
-  padding: 10,
+  width: "100%",
+  height: 40,
+  padding: "0 10px",
   borderRadius: 8,
-  border: "1px solid #ccc",
+  border: "1px solid #cbd5e1",
+  boxSizing: "border-box",
 };
 
 const textareaStyle = {
+  width: "100%",
   padding: 10,
   borderRadius: 8,
-  border: "1px solid #ccc",
+  border: "1px solid #cbd5e1",
   minHeight: 80,
+  boxSizing: "border-box",
 };
 
 const buttonStyle = {
   background: "#0f766e",
   color: "white",
   border: "none",
-  padding: 14,
+  padding: "11px 16px",
   borderRadius: 8,
   cursor: "pointer",
   fontWeight: 700,
@@ -309,21 +660,35 @@ const buttonStyle = {
 
 const statusStyle = {
   marginBottom: 20,
-  color: "green",
-  fontWeight: 600,
+  background: "#ecfdf5",
+  color: "#166534",
+  border: "1px solid #bbf7d0",
+  padding: 12,
+  borderRadius: 10,
+  fontWeight: 700,
 };
 
-const summaryStyle = {
-  background: "#ecfdf5",
-  padding: 15,
+const tableTop = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 12,
+  marginBottom: 16,
+  flexWrap: "wrap",
+};
+
+const searchStyle = {
+  height: 40,
+  padding: "0 12px",
   borderRadius: 8,
-  marginBottom: 20,
-  color: "#065f46",
+  border: "1px solid #cbd5e1",
+  minWidth: 240,
 };
 
 const tableStyle = {
   width: "100%",
   borderCollapse: "collapse",
+  minWidth: 1000,
 };
 
 const headerRowStyle = {
@@ -334,10 +699,38 @@ const headerRowStyle = {
 const th = {
   padding: 12,
   textAlign: "left",
+  whiteSpace: "nowrap",
 };
 
 const td = {
   padding: 10,
+  whiteSpace: "nowrap",
+};
+
+const editButton = {
+  background: "#2563eb",
+  color: "white",
+  border: "none",
+  padding: "7px 11px",
+  borderRadius: 7,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const deleteButton = {
+  background: "#dc2626",
+  color: "white",
+  border: "none",
+  padding: "7px 11px",
+  borderRadius: 7,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const emptyStyle = {
+  padding: 20,
+  textAlign: "center",
+  color: "#64748b",
 };
 
 const noteStyle = {
@@ -347,4 +740,52 @@ const noteStyle = {
   borderRadius: 10,
   marginTop: 20,
   color: "#7c2d12",
+};
+
+const modalOverlay = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.45)",
+  display: "flex",
+  justifyContent: "center",
+  alignItems: "center",
+  zIndex: 9999,
+};
+
+const modal = {
+  background: "white",
+  padding: 24,
+  borderRadius: 14,
+  width: 850,
+  maxWidth: "95vw",
+  maxHeight: "90vh",
+  overflowY: "auto",
+  boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
+};
+
+const modalButtons = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 10,
+  marginTop: 22,
+};
+
+const cancelButton = {
+  background: "#64748b",
+  color: "white",
+  border: "none",
+  padding: "10px 16px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const saveButton = {
+  background: "#0f766e",
+  color: "white",
+  border: "none",
+  padding: "10px 16px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
 };

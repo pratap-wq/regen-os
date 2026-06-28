@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
+import { formatDate } from "../utils/date";
+import DataTable from "../components/DataTable";
 
 export default function ProductionHistory() {
   const now = new Date();
@@ -8,11 +10,11 @@ export default function ProductionHistory() {
   const [sortingRows, setSortingRows] = useState([]);
   const [extrusionRows, setExtrusionRows] = useState([]);
 
-  const [month, setMonth] = useState(String(now.getMonth() + 1).padStart(2, "0"));
+  const [month, setMonth] = useState(
+    String(now.getMonth() + 1).padStart(2, "0")
+  );
   const [year, setYear] = useState(String(now.getFullYear()));
-  const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
-
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -20,21 +22,91 @@ export default function ProductionHistory() {
     loadData();
   }, []);
 
+  async function safeList(fn) {
+    try {
+      const res = await apiCall({ fn });
+      return res.rows || [];
+    } catch (err) {
+      console.log(fn, err);
+      return [];
+    }
+  }
+
   async function loadData() {
     try {
       const [wash, sorting, extrusion] = await Promise.all([
-        apiCall({ fn: "wash.list" }),
-        apiCall({ fn: "sorting.list" }),
-        apiCall({ fn: "extrusion.list" }),
+        safeList("wash.list"),
+        safeList("sorting.list"),
+        safeList("extrusion.list"),
       ]);
 
-      setWashRows((wash.rows || []).filter((r) => String(r.status || "").toUpperCase() !== "DELETED"));
-      setSortingRows((sorting.rows || []).filter((r) => String(r.status || "").toUpperCase() !== "DELETED"));
-      setExtrusionRows((extrusion.rows || []).filter((r) => String(r.status || "").toUpperCase() !== "DELETED"));
+      setWashRows(
+        wash.filter((r) => String(r.status || "").toUpperCase() !== "DELETED")
+      );
+
+      setSortingRows(
+        sorting.filter((r) => String(r.status || "").toUpperCase() !== "DELETED")
+      );
+
+      setExtrusionRows(
+        extrusion.filter(
+          (r) => String(r.status || "").toUpperCase() !== "DELETED"
+        )
+      );
     } catch (err) {
       console.log(err);
       setStatus("Failed loading production history");
     }
+  }
+
+  function dateForInput(value) {
+    if (!value) return "";
+
+    const text = String(value).trim();
+
+    if (/^\d{4}-\d{2}-\d{2}/.test(text)) {
+      return text.slice(0, 10);
+    }
+
+    return text.slice(0, 10);
+  }
+
+  function n(value) {
+    return Number(value || 0);
+  }
+
+  function ton(kg) {
+    return (Number(kg || 0) / 1000).toFixed(1);
+  }
+
+  function monthMatch(value) {
+    const clean = dateForInput(value);
+    if (!clean) return false;
+
+    const [y, m] = clean.split("-");
+    return String(y) === year && String(m) === month;
+  }
+
+  function washOutput(row) {
+    return n(row.washedOutputKg);
+  }
+
+  function sortingOutput(row) {
+    return (
+      n(row.acceptedQtyKg) ||
+      n(row.whiteSortedKg) +
+        n(row.allMixSortedKg) +
+        n(row.commodityKg) +
+        n(row.whiteGreyKg)
+    );
+  }
+
+  function extrusionInput(row) {
+    return n(row.inputWeightKg || row.totalInputKg);
+  }
+
+  function extrusionOutput(row) {
+    return n(row.fgOutputKg);
   }
 
   const rows = useMemo(() => {
@@ -42,7 +114,7 @@ export default function ProductionHistory() {
 
     washRows.forEach((r) => {
       all.push({
-        id: r.washBatchId,
+        id: r.washBatchId || r.id || "",
         process: "Wash",
         updateFn: "wash.update",
         idKey: "washBatchId",
@@ -50,11 +122,11 @@ export default function ProductionHistory() {
         shift: r.shift,
         material: r.inputMaterial,
         machine: r.machine,
-        inputKg: Number(r.inputWeightKg || 0),
-        outputKg: Number(r.washedOutputKg || 0),
+        inputKg: n(r.inputWeightKg),
+        outputKg: washOutput(r),
         recovery:
-          Number(r.inputWeightKg || 0) > 0
-            ? (Number(r.washedOutputKg || 0) / Number(r.inputWeightKg || 0)) * 100
+          n(r.inputWeightKg) > 0
+            ? (washOutput(r) / n(r.inputWeightKg)) * 100
             : 0,
         operator: r.operatorName,
         supervisor: r.supervisorName,
@@ -64,15 +136,10 @@ export default function ProductionHistory() {
     });
 
     sortingRows.forEach((r) => {
-      const output =
-        Number(r.acceptedQtyKg || 0) ||
-        Number(r.whiteSortedKg || 0) +
-          Number(r.allMixSortedKg || 0) +
-          Number(r.commodityKg || 0) +
-          Number(r.whiteGreyKg || 0);
+      const output = sortingOutput(r);
 
       all.push({
-        id: r.sortingBatchId,
+        id: r.sortingBatchId || r.id || "",
         process: "Sorting",
         updateFn: "sorting.update",
         idKey: "sortingBatchId",
@@ -80,12 +147,9 @@ export default function ProductionHistory() {
         shift: r.shift,
         material: r.inputMaterial,
         machine: r.machine,
-        inputKg: Number(r.inputWeightKg || 0),
+        inputKg: n(r.inputWeightKg),
         outputKg: output,
-        recovery:
-          Number(r.inputWeightKg || 0) > 0
-            ? (output / Number(r.inputWeightKg || 0)) * 100
-            : 0,
+        recovery: n(r.inputWeightKg) > 0 ? (output / n(r.inputWeightKg)) * 100 : 0,
         operator: r.operatorName,
         supervisor: r.supervisorName,
         status: r.status,
@@ -94,8 +158,11 @@ export default function ProductionHistory() {
     });
 
     extrusionRows.forEach((r) => {
+      const input = extrusionInput(r);
+      const output = extrusionOutput(r);
+
       all.push({
-        id: r.extrusionBatchId,
+        id: r.extrusionBatchId || r.id || "",
         process: "Extrusion",
         updateFn: "extrusion.update",
         idKey: "extrusionBatchId",
@@ -103,12 +170,9 @@ export default function ProductionHistory() {
         shift: r.shift,
         material: r.inputMaterial || r.productionGrade,
         machine: r.machine,
-        inputKg: Number(r.inputWeightKg || 0),
-        outputKg: Number(r.fgOutputKg || 0),
-        recovery:
-          Number(r.inputWeightKg || 0) > 0
-            ? (Number(r.fgOutputKg || 0) / Number(r.inputWeightKg || 0)) * 100
-            : 0,
+        inputKg: input,
+        outputKg: output,
+        recovery: input > 0 ? (output / input) * 100 : 0,
         operator: r.operatorName,
         supervisor: r.supervisorName,
         status: r.status,
@@ -117,74 +181,240 @@ export default function ProductionHistory() {
     });
 
     return all
-      .filter((r) => {
-        const d = new Date(r.date || "");
-        if (isNaN(d.getTime())) return false;
+      .filter((r) => monthMatch(r.date))
+      .sort((a, b) =>
+        String(dateForInput(b.date || "")).localeCompare(
+          String(dateForInput(a.date || ""))
+        )
+      );
+  }, [washRows, sortingRows, extrusionRows, month, year]);
 
-        return (
-          String(d.getFullYear()) === year &&
-          String(d.getMonth() + 1).padStart(2, "0") === month
-        );
-      })
-      .filter((r) => {
-        const q = search.toLowerCase();
-        if (!q) return true;
-
-        return [
-          r.id,
-          r.process,
-          r.shift,
-          r.material,
-          r.machine,
-          r.operator,
-          r.supervisor,
-          r.status,
-        ]
-          .join(" ")
-          .toLowerCase()
-          .includes(q);
-      })
-      .sort((a, b) => new Date(b.date) - new Date(a.date));
-  }, [washRows, sortingRows, extrusionRows, month, year, search]);
-
-  const totalInput = rows.reduce((s, r) => s + Number(r.inputKg || 0), 0);
-  const totalOutput = rows.reduce((s, r) => s + Number(r.outputKg || 0), 0);
+  const totalInput = rows.reduce((s, r) => s + n(r.inputKg), 0);
+  const totalOutput = rows.reduce((s, r) => s + n(r.outputKg), 0);
   const avgRecovery = totalInput > 0 ? (totalOutput / totalInput) * 100 : 0;
 
-  function editRow(row) {
-    const s = row.source || {};
+  function getEditSections(row) {
+    if (row.process === "Wash") {
+      return [
+        {
+          title: "Batch Details",
+          fields: [
+            ["date", "Date", "date"],
+            ["shift", "Shift", "text"],
+            ["machine", "Machine", "text"],
+            ["inputMaterial", "Input Material", "text"],
+            ["inputWeightKg", "Input Kg", "number"],
+            ["washedOutputKg", "Washed Output Kg", "number"],
+          ],
+        },
+        {
+          title: "Wash Losses",
+          fields: [
+            ["dustKg", "Dust Kg", "number"],
+            ["sinkMaterialKg", "Sink Material Kg", "number"],
+            ["microPlasticKg", "Micro Plastic Kg", "number"],
+            ["wrappersKg", "Wrappers Kg", "number"],
+            ["sludgeKg", "Sludge Kg", "number"],
+            ["raffiaKg", "Raffia Kg", "number"],
+            ["washVarianceKg", "Wash Variance Kg", "number"],
+            ["estimatedRecoveryPercent", "Recovery %", "number"],
+          ],
+        },
+        {
+          title: "Downtime",
+          fields: [
+            ["machineRunningHours", "Machine Running Hours", "number"],
+            ["downtimeHours", "Downtime Hours", "number"],
+            ["downtimeReason", "Downtime Reason", "textarea"],
+          ],
+        },
+        {
+          title: "People / Status",
+          fields: [
+            ["operatorName", "Operator", "text"],
+            ["supervisorName", "Supervisor", "text"],
+            ["sortingRequired", "Sorting Required", "text"],
+            ["nextProcess", "Next Process", "text"],
+            ["status", "Status", "text"],
+            ["remarks", "Remarks", "textarea"],
+          ],
+        },
+      ];
+    }
 
+    if (row.process === "Sorting") {
+      return [
+        {
+          title: "Batch Details",
+          fields: [
+            ["date", "Date", "date"],
+            ["shift", "Shift", "text"],
+            ["machine", "Machine", "text"],
+            ["sourceWashBatchId", "Source Wash Batch", "text"],
+            ["inputMaterial", "Input Material", "text"],
+            ["inputWeightKg", "Input Kg", "number"],
+          ],
+        },
+        {
+          title: "Sorter Outputs",
+          fields: [
+            ["acceptedQtyKg", "Accepted Qty Kg", "number"],
+            ["whiteSortedKg", "White Kg", "number"],
+            ["allMixSortedKg", "All Mix Kg", "number"],
+            ["commodityKg", "Commodity Kg", "number"],
+            ["whiteGreyKg", "White Grey Kg", "number"],
+            ["rejectedQtyKg", "Reject Kg", "number"],
+            ["sorterVarianceKg", "Sorter Variance Kg", "number"],
+            ["recoveryPercent", "Recovery %", "number"],
+          ],
+        },
+        {
+          title: "Downtime",
+          fields: [
+            ["machineRunningHours", "Machine Running Hours", "number"],
+            ["downtimeHours", "Downtime Hours", "number"],
+            ["downtimeReason", "Downtime Reason", "textarea"],
+          ],
+        },
+        {
+          title: "People / Status",
+          fields: [
+            ["operatorName", "Operator", "text"],
+            ["supervisorName", "Supervisor", "text"],
+            ["nextProcess", "Next Process", "text"],
+            ["status", "Status", "text"],
+            ["remarks", "Remarks", "textarea"],
+          ],
+        },
+      ];
+    }
+
+    return [
+      {
+        title: "Batch Details",
+        fields: [
+          ["date", "Date", "date"],
+          ["periodMonth", "Period Month", "text"],
+          ["shift", "Shift", "text"],
+          ["machine", "Machine", "text"],
+          ["sourceType", "Source Type", "text"],
+          ["sourceSortingBatchId", "Source Sorting Batch", "text"],
+          ["sourceWashBatchId", "Source Wash Batch", "text"],
+          ["inputMaterial", "Input Material / Feed Summary", "textarea"],
+          ["inputWeightKg", "Input Weight Kg", "number"],
+          ["totalInputKg", "Total Input Kg", "number"],
+          ["productionGrade", "Production Grade", "text"],
+        ],
+      },
+      {
+        title: "Feed Composition",
+        fields: [["feedComposition", "Feed Composition", "textarea"]],
+      },
+      {
+        title: "Extrusion Outputs",
+        fields: [
+          ["fgOutputKg", "FG Output Kg", "number"],
+          ["lumpsKg", "Lumps Kg", "number"],
+          ["purgingKg", "Purging Kg", "number"],
+          ["reworkGranulesKg", "Rework Granules Kg", "number"],
+          ["rejectKg", "Reject Kg", "number"],
+          ["vacuumRejectKg", "Vacuum Reject Kg", "number"],
+          ["meshRejectKg", "Mesh Reject Kg", "number"],
+          ["floorSpillageKg", "Floor Spillage Kg", "number"],
+          ["totalRecoverableKg", "Total Recoverable Kg", "number"],
+          ["totalNonRecoverableKg", "Total Non-Recoverable Kg", "number"],
+          ["totalOutputKg", "Total Output Kg", "number"],
+          ["varianceKg", "Variance Kg", "number"],
+          ["recoveryPercent", "Recovery %", "number"],
+        ],
+      },
+      {
+        title: "Ratios",
+        fields: [
+          ["recoveryMaterialPercent", "Recovery Material %", "number"],
+          ["virginRatioPercent", "Virgin %", "number"],
+          ["batteryRatioPercent", "Battery %", "number"],
+          ["additiveRatioPercent", "Additive %", "number"],
+        ],
+      },
+      {
+        title: "Downtime",
+        fields: [
+          ["machineRunningHours", "Machine Running Hours", "number"],
+          ["downtimeHours", "Downtime Hours", "number"],
+          ["downtimeReason", "Downtime Reason", "textarea"],
+        ],
+      },
+      {
+        title: "People / Status",
+        fields: [
+          ["operatorName", "Operator", "text"],
+          ["supervisorName", "Supervisor", "text"],
+          ["nextProcess", "Next Process", "text"],
+          ["status", "Status", "text"],
+          ["remarks", "Remarks", "textarea"],
+        ],
+      },
+    ];
+  }
+
+  function prepareEditFields(row) {
+    const source = { ...(row.source || {}) };
+    source.date = dateForInput(source.date || row.date);
+
+    if (row.process === "Wash") {
+      source.washBatchId = source.washBatchId || row.id;
+      source.inputMaterial = source.inputMaterial || row.material || "";
+      source.inputWeightKg = source.inputWeightKg || row.inputKg || "";
+      source.washedOutputKg = source.washedOutputKg || row.outputKg || "";
+      source.operatorName = source.operatorName || row.operator || "";
+      source.supervisorName = source.supervisorName || row.supervisor || "";
+      source.status = source.status || row.status || "";
+    }
+
+    if (row.process === "Sorting") {
+      source.sortingBatchId = source.sortingBatchId || row.id;
+      source.inputMaterial = source.inputMaterial || row.material || "";
+      source.inputWeightKg = source.inputWeightKg || row.inputKg || "";
+      source.acceptedQtyKg = source.acceptedQtyKg || row.outputKg || "";
+      source.operatorName = source.operatorName || row.operator || "";
+      source.supervisorName = source.supervisorName || row.supervisor || "";
+      source.status = source.status || row.status || "";
+    }
+
+    if (row.process === "Extrusion") {
+      source.extrusionBatchId = source.extrusionBatchId || row.id;
+      source.inputMaterial = source.inputMaterial || row.material || "";
+      source.inputWeightKg = source.inputWeightKg || row.inputKg || "";
+      source.totalInputKg = source.totalInputKg || row.inputKg || "";
+      source.fgOutputKg = source.fgOutputKg || row.outputKg || "";
+      source.operatorName = source.operatorName || row.operator || "";
+      source.supervisorName = source.supervisorName || row.supervisor || "";
+      source.status = source.status || row.status || "";
+    }
+
+    return source;
+  }
+
+  function editRow(row) {
     setEditing({
       process: row.process,
       updateFn: row.updateFn,
       idKey: row.idKey,
       id: row.id,
-
-      date: s.date || "",
-      shift: s.shift || "",
-      machine: s.machine || "",
-      inputMaterial: s.inputMaterial || "",
-      inputWeightKg: s.inputWeightKg || "",
-      outputWeightKg:
-        row.process === "Wash"
-          ? s.washedOutputKg || ""
-          : row.process === "Sorting"
-          ? s.acceptedQtyKg || ""
-          : s.fgOutputKg || "",
-      operatorName: s.operatorName || "",
-      supervisorName: s.supervisorName || "",
-      status: s.status || "",
-      remarks: s.remarks || "",
-
-      source: s,
+      fields: prepareEditFields(row),
+      sections: getEditSections(row),
     });
   }
 
-  function onEditChange(e) {
-    setEditing({
-      ...editing,
-      [e.target.name]: e.target.value,
-    });
+  function onEditChange(key, value) {
+    setEditing((prev) => ({
+      ...prev,
+      fields: {
+        ...prev.fields,
+        [key]: value,
+      },
+    }));
   }
 
   async function saveEdit() {
@@ -193,32 +423,14 @@ export default function ProductionHistory() {
     try {
       setSaving(true);
 
+      const cleanDate = dateForInput(editing.fields.date);
+
       const payload = {
-        ...editing.source,
         fn: editing.updateFn,
+        ...editing.fields,
+        date: cleanDate,
         [editing.idKey]: editing.id,
-        date: editing.date,
-        shift: editing.shift,
-        machine: editing.machine,
-        inputMaterial: editing.inputMaterial,
-        inputWeightKg: editing.inputWeightKg,
-        operatorName: editing.operatorName,
-        supervisorName: editing.supervisorName,
-        status: editing.status,
-        remarks: editing.remarks,
       };
-
-      if (editing.process === "Wash") {
-        payload.washedOutputKg = editing.outputWeightKg;
-      }
-
-      if (editing.process === "Sorting") {
-        payload.acceptedQtyKg = editing.outputWeightKg;
-      }
-
-      if (editing.process === "Extrusion") {
-        payload.fgOutputKg = editing.outputWeightKg;
-      }
 
       const res = await apiCall(payload);
 
@@ -268,16 +480,24 @@ export default function ProductionHistory() {
           <div style={eyebrow}>Operations Review</div>
           <h1 style={title}>Production History</h1>
           <div style={subtitle}>
-            Combined Wash, Sorting and Extrusion production history with real edit and delete.
+            Complete history of Wash, Sorting and Extrusion batches with full popup editing.
           </div>
         </div>
 
         <div style={filters}>
           <select value={month} onChange={(e) => setMonth(e.target.value)} style={filter}>
-            <option value="01">Jan</option><option value="02">Feb</option><option value="03">Mar</option>
-            <option value="04">Apr</option><option value="05">May</option><option value="06">Jun</option>
-            <option value="07">Jul</option><option value="08">Aug</option><option value="09">Sep</option>
-            <option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option>
+            <option value="01">Jan</option>
+            <option value="02">Feb</option>
+            <option value="03">Mar</option>
+            <option value="04">Apr</option>
+            <option value="05">May</option>
+            <option value="06">Jun</option>
+            <option value="07">Jul</option>
+            <option value="08">Aug</option>
+            <option value="09">Sep</option>
+            <option value="10">Oct</option>
+            <option value="11">Nov</option>
+            <option value="12">Dec</option>
           </select>
 
           <select value={year} onChange={(e) => setYear(e.target.value)} style={filter}>
@@ -285,13 +505,6 @@ export default function ProductionHistory() {
             <option>2026</option>
             <option>2027</option>
           </select>
-
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search..."
-            style={searchBox}
-          />
         </div>
       </div>
 
@@ -299,69 +512,61 @@ export default function ProductionHistory() {
         <KPI title="Entries" value={rows.length} />
         <KPI title="Input" value={`${ton(totalInput)} T`} />
         <KPI title="Output" value={`${ton(totalOutput)} T`} />
-        <KPI title="Avg Recovery" value={`${avgRecovery.toFixed(1)}%`} />
+        <KPI title="Average Recovery" value={`${avgRecovery.toFixed(1)}%`} />
       </div>
 
       {status && <div style={statusStyle}>{status}</div>}
 
-      <div style={panel}>
-        <h3 style={panelTitle}>Production Records</h3>
-
-        <div style={{ overflowX: "auto" }}>
-          <table style={table}>
-            <thead>
-              <tr style={thead}>
-                <th style={th}>Date</th>
-                <th style={th}>Process</th>
-                <th style={th}>Batch</th>
-                <th style={th}>Shift</th>
-                <th style={th}>Material</th>
-                <th style={th}>Machine</th>
-                <th style={th}>Input</th>
-                <th style={th}>Output</th>
-                <th style={th}>Recovery</th>
-                <th style={th}>Operator</th>
-                <th style={th}>Supervisor</th>
-                <th style={th}>Status</th>
-                <th style={th}>Action</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={i} style={tr}>
-                  <td style={td}>{formatDate(r.date)}</td>
-                  <td style={td}><b>{r.process}</b></td>
-                  <td style={td}>{r.id}</td>
-                  <td style={td}>{r.shift}</td>
-                  <td style={td}>{r.material}</td>
-                  <td style={td}>{r.machine}</td>
-                  <td style={td}>{Number(r.inputKg || 0).toFixed(0)}</td>
-                  <td style={td}>{Number(r.outputKg || 0).toFixed(0)}</td>
-                  <td style={td}>{Number(r.recovery || 0).toFixed(1)}%</td>
-                  <td style={td}>{r.operator}</td>
-                  <td style={td}>{r.supervisor}</td>
-                  <td style={td}>
-                    <span style={badge(r.status)}>{r.status || "OPEN"}</span>
-                  </td>
-                  <td style={td}>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button onClick={() => editRow(r)} style={editButton}>Edit</button>
-                      <button onClick={() => deleteRow(r)} style={deleteButton}>Delete</button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-
-              {rows.length === 0 && (
-                <tr>
-                  <td colSpan="13" style={empty}>No production records found.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <DataTable
+        title="Production Records"
+        rows={rows}
+        searchFields={[
+          "id",
+          "process",
+          "shift",
+          "material",
+          "machine",
+          "operator",
+          "supervisor",
+          "status",
+        ]}
+        columns={[
+          {
+            key: "date",
+            label: "Date",
+            render: (r) => formatDate(dateForInput(r.date)),
+            renderExport: (r) => dateForInput(r.date),
+          },
+          { key: "process", label: "Process" },
+          { key: "id", label: "Batch" },
+          { key: "shift", label: "Shift" },
+          { key: "material", label: "Material" },
+          { key: "machine", label: "Machine" },
+          {
+            key: "inputKg",
+            label: "Input Kg",
+            render: (r) => Number(r.inputKg || 0).toFixed(0),
+            renderExport: (r) => Number(r.inputKg || 0).toFixed(0),
+          },
+          {
+            key: "outputKg",
+            label: "Output Kg",
+            render: (r) => Number(r.outputKg || 0).toFixed(0),
+            renderExport: (r) => Number(r.outputKg || 0).toFixed(0),
+          },
+          {
+            key: "recovery",
+            label: "Recovery %",
+            render: (r) => `${Number(r.recovery || 0).toFixed(1)}%`,
+            renderExport: (r) => Number(r.recovery || 0).toFixed(1),
+          },
+          { key: "operator", label: "Operator" },
+          { key: "supervisor", label: "Supervisor" },
+          { key: "status", label: "Status" },
+        ]}
+        onEdit={editRow}
+        onDelete={deleteRow}
+      />
 
       {editing && (
         <div style={modalOverlay}>
@@ -370,18 +575,48 @@ export default function ProductionHistory() {
               Edit {editing.process} - {editing.id}
             </h2>
 
-            <div style={formGrid}>
-              <EditField label="Date" name="date" value={editing.date} onChange={onEditChange} type="date" />
-              <EditField label="Shift" name="shift" value={editing.shift} onChange={onEditChange} />
-              <EditField label="Machine" name="machine" value={editing.machine} onChange={onEditChange} />
-              <EditField label="Material" name="inputMaterial" value={editing.inputMaterial} onChange={onEditChange} />
-              <EditField label="Input Kg" name="inputWeightKg" value={editing.inputWeightKg} onChange={onEditChange} />
-              <EditField label="Output Kg" name="outputWeightKg" value={editing.outputWeightKg} onChange={onEditChange} />
-              <EditField label="Operator" name="operatorName" value={editing.operatorName} onChange={onEditChange} />
-              <EditField label="Supervisor" name="supervisorName" value={editing.supervisorName} onChange={onEditChange} />
-              <EditField label="Status" name="status" value={editing.status} onChange={onEditChange} />
-              <EditField label="Remarks" name="remarks" value={editing.remarks} onChange={onEditChange} />
+            <div style={modalInfo}>
+              Dates are saved exactly as YYYY-MM-DD without timezone conversion.
             </div>
+
+            {editing.sections.map((section) => (
+              <div key={section.title} style={sectionBlock}>
+                <div style={sectionHeading}>{section.title}</div>
+
+                <div style={formGrid}>
+                  {section.fields.map(([key, label, type]) => (
+                    <EditField
+                      key={key}
+                      label={label}
+                      type={type}
+                      value={editing.fields[key]}
+                      dateForInput={dateForInput}
+                      onChange={(value) => onEditChange(key, value)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+
+            <details style={jsonBox}>
+              <summary style={{ cursor: "pointer", fontWeight: 700 }}>
+                Advanced JSON
+              </summary>
+
+              <textarea
+                value={JSON.stringify(editing.fields, null, 2)}
+                onChange={(e) => {
+                  try {
+                    const parsed = JSON.parse(e.target.value);
+                    setEditing((prev) => ({
+                      ...prev,
+                      fields: parsed,
+                    }));
+                  } catch {}
+                }}
+                style={jsonArea}
+              />
+            </details>
 
             <div style={modalButtons}>
               <button onClick={() => setEditing(null)} style={cancelButton}>
@@ -399,30 +634,33 @@ export default function ProductionHistory() {
   );
 }
 
-function EditField({ label, name, value, onChange, type = "text" }) {
+function EditField({ label, value, type = "text", onChange, dateForInput }) {
+  const safe = type === "date" ? dateForInput(value) : value || "";
+
+  if (type === "textarea") {
+    return (
+      <div>
+        <label style={labelStyle}>{label}</label>
+        <textarea
+          value={safe}
+          onChange={(e) => onChange(e.target.value)}
+          style={textareaStyle}
+        />
+      </div>
+    );
+  }
+
   return (
     <div>
-      <label style={editLabel}>{label}</label>
+      <label style={labelStyle}>{label}</label>
       <input
         type={type}
-        name={name}
-        value={value || ""}
-        onChange={onChange}
-        style={editInput}
+        value={safe}
+        onChange={(e) => onChange(e.target.value)}
+        style={inputStyle}
       />
     </div>
   );
-}
-
-function formatDate(value) {
-  if (!value) return "";
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return value;
-  return d.toLocaleDateString("en-IN");
-}
-
-function ton(kg) {
-  return (Number(kg || 0) / 1000).toFixed(1);
 }
 
 function KPI({ title, value }) {
@@ -433,15 +671,6 @@ function KPI({ title, value }) {
     </div>
   );
 }
-
-const badge = (status) => ({
-  background: String(status || "").includes("READY") ? "#dcfce7" : "#e0f2fe",
-  color: String(status || "").includes("READY") ? "#166534" : "#075985",
-  padding: "5px 10px",
-  borderRadius: 999,
-  fontSize: 11,
-  fontWeight: 800,
-});
 
 const page = { width: "100%", paddingBottom: 30 };
 
@@ -465,7 +694,12 @@ const eyebrow = {
   fontWeight: 800,
 };
 
-const title = { margin: "6px 0", fontSize: 32, fontWeight: 950 };
+const title = {
+  margin: "6px 0",
+  fontSize: 32,
+  fontWeight: 950,
+};
+
 const subtitle = { opacity: 0.9 };
 
 const filters = {
@@ -482,14 +716,6 @@ const filter = {
   fontWeight: 800,
 };
 
-const searchBox = {
-  height: 42,
-  borderRadius: 10,
-  border: "none",
-  padding: "0 12px",
-  minWidth: 220,
-};
-
 const kpiGrid = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))",
@@ -502,7 +728,6 @@ const kpi = {
   border: "1px solid #e5e7eb",
   borderRadius: 16,
   padding: 18,
-  boxShadow: "0 6px 18px rgba(15,23,42,0.06)",
 };
 
 const kpiTitle = {
@@ -517,56 +742,6 @@ const kpiValue = {
   fontSize: 28,
   fontWeight: 950,
   color: "#0f766e",
-};
-
-const panel = {
-  background: "white",
-  border: "1px solid #e5e7eb",
-  borderRadius: 16,
-  padding: 20,
-  boxShadow: "0 6px 18px rgba(15,23,42,0.06)",
-};
-
-const panelTitle = {
-  marginTop: 0,
-  marginBottom: 14,
-  fontSize: 18,
-  color: "#0f172a",
-  fontWeight: 900,
-};
-
-const table = { width: "100%", borderCollapse: "collapse", minWidth: 1200 };
-const thead = { background: "#005d34", color: "white" };
-const th = { padding: 12, textAlign: "left", fontSize: 12, whiteSpace: "nowrap" };
-const tr = { borderBottom: "1px solid #e5e7eb" };
-const td = { padding: 12, fontSize: 13, whiteSpace: "nowrap" };
-
-const editButton = {
-  background: "#2563eb",
-  color: "white",
-  border: "none",
-  padding: "7px 11px",
-  borderRadius: 7,
-  cursor: "pointer",
-  fontWeight: 700,
-  fontSize: 12,
-};
-
-const deleteButton = {
-  background: "#dc2626",
-  color: "white",
-  border: "none",
-  padding: "7px 11px",
-  borderRadius: 7,
-  cursor: "pointer",
-  fontWeight: 700,
-  fontSize: 12,
-};
-
-const empty = {
-  padding: 20,
-  textAlign: "center",
-  color: "#64748b",
 };
 
 const statusStyle = {
@@ -593,11 +768,34 @@ const modal = {
   background: "white",
   padding: 24,
   borderRadius: 14,
-  width: 850,
-  maxWidth: "95vw",
-  maxHeight: "90vh",
+  width: 1100,
+  maxWidth: "96vw",
+  maxHeight: "92vh",
   overflowY: "auto",
-  boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
+};
+
+const modalInfo = {
+  background: "#fff7ed",
+  border: "1px solid #fed7aa",
+  padding: 10,
+  borderRadius: 10,
+  color: "#7c2d12",
+  marginBottom: 16,
+  fontSize: 13,
+  fontWeight: 700,
+};
+
+const sectionBlock = {
+  marginBottom: 18,
+  border: "1px solid #e5e7eb",
+  borderRadius: 12,
+  padding: 14,
+};
+
+const sectionHeading = {
+  fontWeight: 900,
+  color: "#0f766e",
+  marginBottom: 12,
 };
 
 const formGrid = {
@@ -606,7 +804,7 @@ const formGrid = {
   gap: 14,
 };
 
-const editLabel = {
+const labelStyle = {
   display: "block",
   fontSize: 12,
   fontWeight: 700,
@@ -614,12 +812,38 @@ const editLabel = {
   marginBottom: 5,
 };
 
-const editInput = {
+const inputStyle = {
   width: "100%",
   height: 40,
   padding: "0 10px",
   border: "1px solid #cbd5e1",
   borderRadius: 8,
+  boxSizing: "border-box",
+};
+
+const textareaStyle = {
+  width: "100%",
+  minHeight: 90,
+  padding: 10,
+  border: "1px solid #cbd5e1",
+  borderRadius: 8,
+  boxSizing: "border-box",
+};
+
+const jsonBox = {
+  marginTop: 12,
+  marginBottom: 12,
+};
+
+const jsonArea = {
+  width: "100%",
+  minHeight: 260,
+  marginTop: 10,
+  fontFamily: "monospace",
+  fontSize: 12,
+  padding: 10,
+  borderRadius: 8,
+  border: "1px solid #cbd5e1",
   boxSizing: "border-box",
 };
 

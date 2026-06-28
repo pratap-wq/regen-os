@@ -17,23 +17,42 @@ export default function ProcurementDashboard() {
     setRows((res.rows || []).filter((r) => String(r.status || "").toUpperCase() !== "DELETED"));
   }
 
-  const data = useMemo(() => {
-    const filtered = rows.filter((r) => {
-      const d = new Date(r.date || "");
-      return (
-        !isNaN(d.getTime()) &&
-        String(d.getFullYear()) === year &&
-        String(d.getMonth() + 1).padStart(2, "0") === month
-      );
-    });
+  function n(v) {
+    return Number(v || 0);
+  }
 
-    const map = {};
+  function dateForInput(value) {
+    if (!value) return "";
+    const text = String(value).trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+    return text.slice(0, 10);
+  }
+
+  function inSelectedMonth(r) {
+    const clean = dateForInput(r.date);
+    if (!clean) return false;
+    const [y, m] = clean.split("-");
+    return String(y) === year && String(m) === month;
+  }
+
+  const data = useMemo(() => {
+    const filtered = rows.filter(inSelectedMonth);
+
+    const supplierMap = {};
+    const materialMap = {};
 
     filtered.forEach((r) => {
       const supplier = r.supplier || "Unknown";
+      const material = r.material || "Unknown";
+      const qty = n(r.netWeight);
+      const rate = n(r.ratePerKg);
+      const value = qty * rate;
+      const recovery = n(r.estimatedRecovery);
+      const moisture = n(r.moisture);
+      const contamination = n(r.contamination);
 
-      if (!map[supplier]) {
-        map[supplier] = {
+      if (!supplierMap[supplier]) {
+        supplierMap[supplier] = {
           supplier,
           qty: 0,
           value: 0,
@@ -44,36 +63,81 @@ export default function ProcurementDashboard() {
         };
       }
 
-      const qty = Number(r.netWeight || 0);
-      const rate = Number(r.ratePerKg || 0);
+      supplierMap[supplier].qty += qty;
+      supplierMap[supplier].value += value;
+      supplierMap[supplier].moisture += moisture;
+      supplierMap[supplier].contamination += contamination;
+      supplierMap[supplier].recovery += recovery;
+      supplierMap[supplier].count += 1;
 
-      map[supplier].qty += qty;
-      map[supplier].value += qty * rate;
-      map[supplier].moisture += Number(r.moisture || 0);
-      map[supplier].contamination += Number(r.contamination || 0);
-      map[supplier].recovery += Number(r.estimatedRecovery || 0);
-      map[supplier].count += 1;
+      if (!materialMap[material]) {
+        materialMap[material] = {
+          material,
+          qty: 0,
+          value: 0,
+          count: 0,
+        };
+      }
+
+      materialMap[material].qty += qty;
+      materialMap[material].value += value;
+      materialMap[material].count += 1;
     });
 
-    const suppliers = Object.values(map)
-      .map((s) => ({
-        ...s,
-        avgRate: s.qty > 0 ? s.value / s.qty : 0,
-        avgMoisture: s.count > 0 ? s.moisture / s.count : 0,
-        avgContamination: s.count > 0 ? s.contamination / s.count : 0,
-        avgRecovery: s.count > 0 ? s.recovery / s.count : 0,
-        grade: gradeSupplier(
-          s.count > 0 ? s.recovery / s.count : 0,
-          s.count > 0 ? s.contamination / s.count : 0
-        ),
+    const suppliers = Object.values(supplierMap)
+      .map((s) => {
+        const avgRate = s.qty > 0 ? s.value / s.qty : 0;
+        const avgMoisture = s.count > 0 ? s.moisture / s.count : 0;
+        const avgContamination = s.count > 0 ? s.contamination / s.count : 0;
+        const avgRecovery = s.count > 0 ? s.recovery / s.count : 0;
+        const effectiveCost =
+          avgRecovery > 0 ? avgRate / (avgRecovery / 100) : avgRate;
+
+        return {
+          ...s,
+          avgRate,
+          avgMoisture,
+          avgContamination,
+          avgRecovery,
+          effectiveCost,
+          grade: gradeSupplier(avgRecovery, avgContamination, effectiveCost),
+        };
+      })
+      .sort((a, b) => a.effectiveCost - b.effectiveCost);
+
+    const materials = Object.values(materialMap)
+      .map((m) => ({
+        ...m,
+        avgRate: m.qty > 0 ? m.value / m.qty : 0,
       }))
       .sort((a, b) => b.qty - a.qty);
+
+    const totalQty = filtered.reduce((s, r) => s + n(r.netWeight), 0);
+    const totalValue = filtered.reduce((s, r) => s + n(r.netWeight) * n(r.ratePerKg), 0);
+    const avgRate = totalQty > 0 ? totalValue / totalQty : 0;
+
+    const avgRecovery =
+      suppliers.length > 0
+        ? suppliers.reduce((s, r) => s + r.avgRecovery * r.qty, 0) / totalQty
+        : 0;
+
+    const weightedEffectiveCost =
+      suppliers.length > 0
+        ? suppliers.reduce((s, r) => s + r.effectiveCost * r.qty, 0) / totalQty
+        : 0;
+
+    const bestSupplier = suppliers[0];
 
     return {
       filtered,
       suppliers,
-      totalQty: suppliers.reduce((s, r) => s + r.qty, 0),
-      totalValue: suppliers.reduce((s, r) => s + r.value, 0),
+      materials,
+      totalQty,
+      totalValue,
+      avgRate,
+      avgRecovery,
+      weightedEffectiveCost,
+      bestSupplier,
     };
   }, [rows, month, year]);
 
@@ -82,9 +146,9 @@ export default function ProcurementDashboard() {
       <div style={hero}>
         <div>
           <div style={eyebrow}>Procurement Intelligence</div>
-          <h1 style={title}>Supplier Quality Dashboard</h1>
+          <h1 style={title}>Supplier Cost & Recovery Dashboard</h1>
           <div style={subtitle}>
-            Volume, cost, moisture, contamination and estimated recovery from RM inward data.
+            Supplier ranking by volume, average rate, recovery and effective cost/kg.
           </div>
         </div>
 
@@ -107,15 +171,44 @@ export default function ProcurementDashboard() {
       <div style={kpiGrid}>
         <KPI title="RM Purchased" value={`${ton(data.totalQty)} T`} />
         <KPI title="RM Value" value={`₹ ${cr(data.totalValue)} Cr`} />
-        <KPI title="Suppliers" value={data.suppliers.length} />
-        <KPI
-          title="Average RM Rate"
-          value={`₹ ${data.totalQty > 0 ? (data.totalValue / data.totalQty).toFixed(2) : "0.00"}/kg`}
-        />
+        <KPI title="Avg Buy Rate" value={`₹ ${data.avgRate.toFixed(2)}/kg`} />
+        <KPI title="Avg Recovery" value={`${data.avgRecovery.toFixed(1)}%`} />
+        <KPI title="Effective Cost/kg" value={`₹ ${data.weightedEffectiveCost.toFixed(2)}`} color="#b45309" />
+        <KPI title="Best Supplier" value={data.bestSupplier?.supplier || "-"} color="#2563eb" />
+      </div>
+      <div style={twoCol}>
+        <Panel title="Material Volume Mix">
+          {data.materials.length === 0 ? (
+            <div style={empty}>No material data for selected month.</div>
+          ) : (
+            data.materials.map((m, i) => (
+              <div key={i} style={rowLine}>
+                <div>
+                  <b>{m.material}</b>
+                  <div style={muted}>{m.count} entries</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <b>{ton(m.qty)} T</b>
+                  <div style={muted}>₹ {m.avgRate.toFixed(2)}/kg</div>
+                </div>
+              </div>
+            ))
+          )}
+        </Panel>
+
+        <Panel title="Procurement Recommendation">
+          <Metric label="Best Effective Supplier" value={data.bestSupplier?.supplier || "-"} />
+          <Metric label="Best Avg Rate" value={`₹ ${data.bestSupplier?.avgRate?.toFixed(2) || "0.00"}/kg`} />
+          <Metric label="Best Recovery" value={`${data.bestSupplier?.avgRecovery?.toFixed(1) || "0.0"}%`} />
+          <Metric label="Best Effective Cost" value={`₹ ${data.bestSupplier?.effectiveCost?.toFixed(2) || "0.00"}/kg`} color="#0f766e" />
+          <div style={note}>
+            Effective cost = purchase rate adjusted by estimated recovery. Lower effective cost is better.
+          </div>
+        </Panel>
       </div>
 
       <div style={panel}>
-        <h3 style={panelTitle}>Supplier Ranking</h3>
+        <h3 style={panelTitle}>Supplier Effective Cost Ranking</h3>
 
         <div style={{ overflowX: "auto" }}>
           <table style={table}>
@@ -124,9 +217,10 @@ export default function ProcurementDashboard() {
                 <th style={th}>Supplier</th>
                 <th style={th}>Volume</th>
                 <th style={th}>Avg Rate</th>
+                <th style={th}>Recovery</th>
+                <th style={th}>Effective Cost/kg</th>
                 <th style={th}>Moisture</th>
                 <th style={th}>Contamination</th>
-                <th style={th}>Estimated Recovery</th>
                 <th style={th}>Grade</th>
               </tr>
             </thead>
@@ -137,16 +231,17 @@ export default function ProcurementDashboard() {
                   <td style={td}><b>{s.supplier}</b></td>
                   <td style={td}>{ton(s.qty)} T</td>
                   <td style={td}>₹ {s.avgRate.toFixed(2)}</td>
+                  <td style={td}>{s.avgRecovery.toFixed(1)}%</td>
+                  <td style={td}><b>₹ {s.effectiveCost.toFixed(2)}</b></td>
                   <td style={td}>{s.avgMoisture.toFixed(1)}%</td>
                   <td style={td}>{s.avgContamination.toFixed(1)}%</td>
-                  <td style={td}>{s.avgRecovery.toFixed(1)}%</td>
                   <td style={td}><span style={badge(s.grade)}>{s.grade}</span></td>
                 </tr>
               ))}
 
               {data.suppliers.length === 0 && (
                 <tr>
-                  <td colSpan="7" style={empty}>No RM inward data for selected month.</td>
+                  <td colSpan="8" style={empty}>No RM inward data for selected month.</td>
                 </tr>
               )}
             </tbody>
@@ -157,7 +252,7 @@ export default function ProcurementDashboard() {
   );
 }
 
-function gradeSupplier(recovery, contamination) {
+function gradeSupplier(recovery, contamination, effectiveCost) {
   if (recovery >= 90 && contamination <= 3) return "Very Good";
   if (recovery >= 85 && contamination <= 6) return "Good";
   if (recovery >= 78 && contamination <= 10) return "Average";
@@ -172,11 +267,29 @@ function cr(value) {
   return (Number(value || 0) / 10000000).toFixed(2);
 }
 
-function KPI({ title, value }) {
+function KPI({ title, value, color = "#0f766e" }) {
   return (
     <div style={kpi}>
       <div style={kpiTitle}>{title}</div>
-      <div style={kpiValue}>{value}</div>
+      <div style={{ ...kpiValue, color }}>{value}</div>
+    </div>
+  );
+}
+
+function Panel({ title, children }) {
+  return (
+    <div style={panel}>
+      <h3 style={panelTitle}>{title}</h3>
+      {children}
+    </div>
+  );
+}
+
+function Metric({ label, value, color = "#0f172a" }) {
+  return (
+    <div style={metric}>
+      <span>{label}</span>
+      <b style={{ color }}>{value}</b>
     </div>
   );
 }
@@ -208,6 +321,13 @@ const kpiGrid = {
   marginBottom: 18,
 };
 
+const twoCol = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))",
+  gap: 18,
+  marginBottom: 18,
+};
+
 const kpi = {
   background: "white",
   border: "1px solid #e5e7eb",
@@ -217,7 +337,7 @@ const kpi = {
 };
 
 const kpiTitle = { color: "#64748b", fontSize: 12, fontWeight: 800, textTransform: "uppercase", marginBottom: 8 };
-const kpiValue = { fontSize: 28, fontWeight: 950, color: "#0f766e" };
+const kpiValue = { fontSize: 28, fontWeight: 950 };
 
 const panel = {
   background: "white",
@@ -229,7 +349,39 @@ const panel = {
 
 const panelTitle = { marginTop: 0, marginBottom: 14, fontSize: 18, color: "#0f172a", fontWeight: 900 };
 
-const table = { width: "100%", borderCollapse: "collapse", minWidth: 850 };
+const metric = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 14,
+  padding: "10px 0",
+  borderBottom: "1px solid #f1f5f9",
+};
+
+const rowLine = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  padding: "11px 0",
+  borderBottom: "1px solid #f1f5f9",
+};
+
+const muted = {
+  color: "#64748b",
+  fontSize: 12,
+  marginTop: 3,
+};
+
+const note = {
+  marginTop: 14,
+  background: "#f8fafc",
+  border: "1px solid #e5e7eb",
+  borderRadius: 10,
+  padding: 12,
+  color: "#475569",
+  fontSize: 13,
+};
+
+const table = { width: "100%", borderCollapse: "collapse", minWidth: 950 };
 const thead = { background: "#0f766e", color: "white" };
 const th = { padding: 12, textAlign: "left", fontSize: 12 };
 const tr = { borderBottom: "1px solid #e5e7eb" };

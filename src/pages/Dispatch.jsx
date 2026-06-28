@@ -12,6 +12,8 @@ export default function Dispatch() {
     sourceExtrusionBatchId: "",
     lotNo: "",
     grade: "",
+    productionDate: "",
+    productionShift: "",
     availableKg: "",
     dispatchQtyKg: "",
     remarks: "",
@@ -20,6 +22,10 @@ export default function Dispatch() {
   const blankForm = {
     dispatchId: "",
     date: today,
+
+    productionDate: "",
+    productionShift: "",
+
     customerName: "Mold-Tek",
     customerUnit: "",
     invoiceNo: "",
@@ -30,6 +36,7 @@ export default function Dispatch() {
     noOfBags: "",
     dispatchLocation: "",
     remarks: "",
+
     dispatchLines: JSON.stringify([blankLine]),
     quantityKg: "",
     grade: "",
@@ -40,9 +47,9 @@ export default function Dispatch() {
   const [rows, setRows] = useState([]);
   const [extrusionRows, setExtrusionRows] = useState([]);
   const [status, setStatus] = useState("");
-  const [editingId, setEditingId] = useState(null);
+  const [editingRow, setEditingRow] = useState(null);
   const [form, setForm] = useState(blankForm);
-  const [dispatchLines, setDispatchLines] = useState([blankLine]);
+  const [dispatchLines, setDispatchLines] = useState([{ ...blankLine }]);
 
   useEffect(() => {
     loadData();
@@ -63,6 +70,28 @@ export default function Dispatch() {
     }
   }
 
+  function dateForInput(value) {
+    if (!value) return "";
+
+    const text = String(value);
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+    if (text.includes("T")) return text.split("T")[0];
+
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return text.slice(0, 10);
+
+    return d.toISOString().split("T")[0];
+  }
+
+  function makeDispatchId(productionDate, shift) {
+    const baseDate = productionDate || today;
+    const datePart = String(baseDate).replaceAll("-", "");
+    const shiftPart = String(shift || "NA").toUpperCase();
+
+    return `DISP-${datePart}-${shiftPart}`;
+  }
+
   function parseLines(row) {
     try {
       if (row.dispatchLines) {
@@ -79,6 +108,8 @@ export default function Dispatch() {
           sourceExtrusionBatchId: row.sourceExtrusionBatchId || "",
           lotNo: row.lotNo || row.sourceExtrusionBatchId || "",
           grade: row.grade || "",
+          productionDate: row.productionDate || row.date || "",
+          productionShift: row.productionShift || "",
           availableKg: row.availableFGQty || "",
           dispatchQtyKg: row.quantityKg || "",
           remarks: "",
@@ -86,15 +117,21 @@ export default function Dispatch() {
       ];
     }
 
-    return [blankLine];
+    return [{ ...blankLine }];
   }
 
   function getDispatchedQtyForBatch(batchId, currentDispatchId = "") {
     let total = 0;
 
     rows
-      .filter((r) => r.dispatchStatus !== "DELETED")
-      .filter((r) => String(r.dispatchId || "") !== String(currentDispatchId || ""))
+      .filter(
+        (r) =>
+          String(r.dispatchStatus || "").toUpperCase() !== "DELETED" &&
+          String(r.status || "").toUpperCase() !== "DELETED"
+      )
+      .filter(
+        (r) => String(r.dispatchId || "") !== String(currentDispatchId || "")
+      )
       .forEach((r) => {
         const lines = parseLines(r);
 
@@ -110,7 +147,7 @@ export default function Dispatch() {
     return total;
   }
 
-  function getAvailableFG(batchId, currentDispatchId = editingId || "") {
+  function getAvailableFG(batchId, currentDispatchId = editingRow?.dispatchId || "") {
     const fg = extrusionRows.find(
       (x) => String(x.extrusionBatchId) === String(batchId)
     );
@@ -123,19 +160,44 @@ export default function Dispatch() {
     return Math.max(produced - dispatched, 0);
   }
 
-  const liveLots = useMemo(() => {
+  function extrusionDate(row) {
+    return dateForInput(row.date || row.productionDate || row.createdAt || "");
+  }
+
+  function extrusionShift(row) {
+    return String(row.shift || row.productionShift || "").toUpperCase();
+  }
+
+  const allLiveLots = useMemo(() => {
     return extrusionRows
       .map((x) => ({
         ...x,
+        productionDate: extrusionDate(x),
+        productionShift: extrusionShift(x),
         available: getAvailableFG(x.extrusionBatchId),
       }))
       .filter((x) => Number(x.available || 0) > 0)
       .sort((a, b) =>
-        String(a.productionGrade || "").localeCompare(
-          String(b.productionGrade || "")
+        String(a.extrusionBatchId || "").localeCompare(
+          String(b.extrusionBatchId || "")
         )
       );
-  }, [extrusionRows, rows, editingId]);
+  }, [extrusionRows, rows, editingRow]);
+
+  const filteredLiveLots = useMemo(() => {
+    return allLiveLots
+      .filter((x) => {
+        if (!form.productionDate) return true;
+        return String(x.productionDate || "") === String(form.productionDate);
+      })
+      .filter((x) => {
+        if (!form.productionShift) return true;
+        return (
+          String(x.productionShift || "").toUpperCase() ===
+          String(form.productionShift || "").toUpperCase()
+        );
+      });
+  }, [allLiveLots, form.productionDate, form.productionShift]);
 
   function getLineTotal(lines = dispatchLines) {
     return lines.reduce((s, r) => s + Number(r.dispatchQtyKg || 0), 0);
@@ -166,11 +228,16 @@ export default function Dispatch() {
 
   function autoCalculate(updated, lines = dispatchLines) {
     const totalQty = getLineTotal(lines);
+
     const cleanLines = lines.map((x) => ({
       ...x,
       availableKg: Number(x.availableKg || 0),
       dispatchQtyKg: Number(x.dispatchQtyKg || 0),
     }));
+
+    updated.dispatchId =
+      updated.dispatchId ||
+      makeDispatchId(updated.productionDate, updated.productionShift);
 
     updated.quantityKg = totalQty.toFixed(2);
     updated.dispatchLines = JSON.stringify(cleanLines);
@@ -185,24 +252,36 @@ export default function Dispatch() {
   }
 
   function onChange(e) {
-    const updated = autoCalculate(
-      {
-        ...form,
-        [e.target.name]: e.target.value,
-      },
-      dispatchLines
-    );
+    let updated = {
+      ...form,
+      [e.target.name]: e.target.value,
+    };
 
+    if (
+      e.target.name === "productionDate" ||
+      e.target.name === "productionShift"
+    ) {
+      updated.dispatchId = makeDispatchId(
+        e.target.name === "productionDate" ? e.target.value : form.productionDate,
+        e.target.name === "productionShift" ? e.target.value : form.productionShift
+      );
+
+      setDispatchLines([{ ...blankLine }]);
+      updated = autoCalculate(updated, [{ ...blankLine }]);
+      setForm(updated);
+      return;
+    }
+
+    updated = autoCalculate(updated, dispatchLines);
     setForm(updated);
   }
-
   function updateLine(index, key, value) {
     let updatedLines = dispatchLines.map((line, i) =>
       i === index ? { ...line, [key]: value } : line
     );
 
     if (key === "sourceExtrusionBatchId") {
-      const selected = extrusionRows.find(
+      const selected = allLiveLots.find(
         (x) => String(x.extrusionBatchId) === String(value)
       );
 
@@ -217,6 +296,8 @@ export default function Dispatch() {
             sourceExtrusionBatchId: selected.extrusionBatchId,
             lotNo: selected.lotNo || selected.extrusionBatchId,
             grade: selected.productionGrade || "",
+            productionDate: extrusionDate(selected),
+            productionShift: extrusionShift(selected),
             availableKg: available,
             dispatchQtyKg: "",
           };
@@ -236,7 +317,8 @@ export default function Dispatch() {
 
   function removeLine(index) {
     const updatedLines = dispatchLines.filter((_, i) => i !== index);
-    const finalLines = updatedLines.length > 0 ? updatedLines : [{ ...blankLine }];
+    const finalLines =
+      updatedLines.length > 0 ? updatedLines : [{ ...blankLine }];
 
     setDispatchLines(finalLines);
     setForm(autoCalculate({ ...form }, finalLines));
@@ -280,14 +362,23 @@ export default function Dispatch() {
         }
       }
 
-      const finalForm = autoCalculate({ ...form }, cleanLines);
+      const finalForm = autoCalculate(
+        {
+          ...form,
+          dispatchId:
+            form.dispatchId ||
+            makeDispatchId(form.productionDate, form.productionShift),
+        },
+        cleanLines
+      );
 
       let res;
 
-      if (editingId) {
+      if (editingRow?.dispatchId) {
         res = await apiCall({
           fn: "dispatch.update",
           ...finalForm,
+          dispatchId: editingRow.dispatchId,
         });
       } else {
         res = await apiCall({
@@ -296,15 +387,16 @@ export default function Dispatch() {
         });
       }
 
-      if (res.ok) {
-        setStatus(editingId ? "Dispatch updated" : "Dispatch saved");
-        setEditingId(null);
-        setForm(blankForm);
-        setDispatchLines([{ ...blankLine }]);
-        loadData();
-      } else {
+      if (res.ok === false) {
         setStatus(res.error || "Error saving dispatch");
+        return;
       }
+
+      setStatus(editingRow?.dispatchId ? "Dispatch updated" : "Dispatch saved");
+      setEditingRow(null);
+      setForm(blankForm);
+      setDispatchLines([{ ...blankLine }]);
+      loadData();
     } catch (err) {
       setStatus(err.message);
     }
@@ -313,16 +405,31 @@ export default function Dispatch() {
   function editRow(row) {
     const parsed = parseLines(row);
 
-    setEditingId(row.dispatchId);
-    setDispatchLines(parsed);
+    const productionDate =
+      dateForInput(row.productionDate) || dateForInput(row.date) || "";
+
+    const productionShift = row.productionShift || "";
+
+    const normalizedLines = parsed.map((line) => ({
+      ...line,
+      productionDate: dateForInput(line.productionDate) || productionDate || "",
+      productionShift: line.productionShift || productionShift || "",
+    }));
+
+    setEditingRow(row);
+    setDispatchLines(normalizedLines);
 
     const updated = autoCalculate(
       {
         ...blankForm,
         ...row,
-        date: row.date ? new Date(row.date).toISOString().split("T")[0] : today,
+        date: dateForInput(row.date) || today,
+        productionDate,
+        productionShift,
+        dispatchId:
+          row.dispatchId || makeDispatchId(productionDate, productionShift),
       },
-      parsed
+      normalizedLines
     );
 
     setForm(updated);
@@ -337,16 +444,39 @@ export default function Dispatch() {
     const confirmed = window.confirm("Delete dispatch?");
     if (!confirmed) return;
 
-    await apiCall({
-      fn: "dispatch.update",
-      dispatchId: row.dispatchId,
-      dispatchStatus: "DELETED",
-    });
+    try {
+      const res = await apiCall({
+        fn: "dispatch.update",
+        ...row,
+        dispatchId: row.dispatchId,
+        dispatchStatus: "DELETED",
+        status: "DELETED",
+      });
 
-    loadData();
+      if (res.ok === false) {
+        setStatus(res.error || "Delete failed");
+        return;
+      }
+
+      setStatus("Dispatch deleted");
+      loadData();
+    } catch (err) {
+      setStatus(err.message);
+    }
   }
 
-  const activeRows = rows.filter((r) => r.dispatchStatus !== "DELETED");
+  function clearForm() {
+    setEditingRow(null);
+    setForm(blankForm);
+    setDispatchLines([{ ...blankLine }]);
+    setStatus("Ready for new dispatch");
+  }
+
+  const activeRows = rows.filter(
+    (r) =>
+      String(r.dispatchStatus || "").toUpperCase() !== "DELETED" &&
+      String(r.status || "").toUpperCase() !== "DELETED"
+  );
 
   const totalDispatch = activeRows.reduce(
     (sum, r) => sum + Number(r.quantityKg || 0),
@@ -363,12 +493,14 @@ export default function Dispatch() {
     totalDispatch > 0 ? (totalSales / totalDispatch).toFixed(2) : "0.00";
 
   const currentDispatchQty = getLineTotal(dispatchLines);
-  const currentSalesValue =
-    currentDispatchQty * Number(form.ratePerKg || 0);
+  const currentSalesValue = currentDispatchQty * Number(form.ratePerKg || 0);
 
   const truckTargetKg = 25000;
+
   const truckFillPercent =
-    truckTargetKg > 0 ? ((currentDispatchQty / truckTargetKg) * 100).toFixed(1) : 0;
+    truckTargetKg > 0
+      ? ((currentDispatchQty / truckTargetKg) * 100).toFixed(1)
+      : 0;
 
   const customerSummary = useMemo(() => {
     const map = {};
@@ -400,7 +532,8 @@ export default function Dispatch() {
         <h1 style={{ margin: 0 }}>Dispatch Workflow</h1>
 
         <div style={subText}>
-          Multi-lot truck dispatch from FG stock. Supports E1/E2/E3 requests and Mold-Tek unit-wise loading.
+          Multi-lot truck dispatch from FG stock. FG lots show by default and
+          can be filtered by production date and shift.
         </div>
       </div>
 
@@ -408,19 +541,71 @@ export default function Dispatch() {
         <KPI title="Dispatch Qty" value={`${totalDispatch.toFixed(0)} Kg`} />
         <KPI title="Sales" value={`₹ ${totalSales.toFixed(0)}`} />
         <KPI title="Avg Realization" value={`₹ ${avgRealization}`} />
-        <KPI title="Live Lots" value={liveLots.length} />
+        <KPI title="Live Lots" value={allLiveLots.length} />
+        <KPI title="Filtered Lots" value={filteredLiveLots.length} />
       </div>
+
+      {status && <div style={statusStyle}>{status}</div>}
 
       <form
         onSubmit={submit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && e.target.tagName !== "TEXTAREA") {
+            e.preventDefault();
+          }
+        }}
         style={{
           display: "flex",
           flexDirection: "column",
           gap: 16,
         }}
       >
+        <FormSection title={editingRow ? "Edit Dispatch" : "New Dispatch"}>
+          <Field label="Production Date Filter">
+            <input
+              type="date"
+              name="productionDate"
+              value={form.productionDate}
+              onChange={onChange}
+              style={inputStyle}
+            />
+          </Field>
+
+          <Field label="Production Shift Filter">
+            <select
+              name="productionShift"
+              value={form.productionShift}
+              onChange={onChange}
+              style={inputStyle}
+            >
+              <option value="">All Shifts</option>
+              <option value="A">A</option>
+              <option value="B">B</option>
+              <option value="C">C</option>
+            </select>
+          </Field>
+
+          <Field label="Dispatch Code">
+            <input
+              readOnly
+              value={
+                form.dispatchId ||
+                makeDispatchId(form.productionDate, form.productionShift)
+              }
+              style={readonlyStyle}
+            />
+          </Field>
+
+          <Field label="Available FG Lots">
+            <input
+              readOnly
+              value={`${filteredLiveLots.length} lots available`}
+              style={readonlyStyle}
+            />
+          </Field>
+        </FormSection>
         <FormSection title="Customer & Logistics">
-          <Field label="Date">
+          <Field label="Dispatch Entry Date">
             <input
               type="date"
               name="date"
@@ -553,6 +738,8 @@ export default function Dispatch() {
               <thead>
                 <tr style={lineHeader}>
                   <th style={lineTh}>FG Lot / Extrusion Batch</th>
+                  <th style={lineTh}>Production Date</th>
+                  <th style={lineTh}>Shift</th>
                   <th style={lineTh}>Grade</th>
                   <th style={lineTh}>Available Kg</th>
                   <th style={lineTh}>Dispatch Kg</th>
@@ -568,23 +755,37 @@ export default function Dispatch() {
                       <select
                         value={line.sourceExtrusionBatchId || ""}
                         onChange={(e) =>
-                          updateLine(
-                            index,
-                            "sourceExtrusionBatchId",
-                            e.target.value
-                          )
+                          updateLine(index, "sourceExtrusionBatchId", e.target.value)
                         }
                         style={inputStyle}
                       >
                         <option value="">Select FG Lot</option>
 
-                        {liveLots.map((x, i) => (
+                        {filteredLiveLots.map((x, i) => (
                           <option key={i} value={x.extrusionBatchId}>
                             {x.lotNo || x.extrusionBatchId} |{" "}
+                            {x.productionDate || "No Date"} |{" "}
+                            {x.productionShift || "No Shift"} |{" "}
                             {x.productionGrade || "NA"} | {x.available} Kg
                           </option>
                         ))}
                       </select>
+                    </td>
+
+                    <td style={lineTd}>
+                      <input
+                        readOnly
+                        value={line.productionDate || ""}
+                        style={readonlyStyle}
+                      />
+                    </td>
+
+                    <td style={lineTd}>
+                      <input
+                        readOnly
+                        value={line.productionShift || ""}
+                        style={readonlyStyle}
+                      />
                     </td>
 
                     <td style={lineTd}>
@@ -613,9 +814,7 @@ export default function Dispatch() {
                     <td style={lineTd}>
                       <input
                         value={line.remarks || ""}
-                        onChange={(e) =>
-                          updateLine(index, "remarks", e.target.value)
-                        }
+                        onChange={(e) => updateLine(index, "remarks", e.target.value)}
                         placeholder="Example: E1 5T / Unit 1"
                         style={inputStyle}
                       />
@@ -663,13 +862,15 @@ export default function Dispatch() {
         </FormSection>
 
         <div style={stickyBar}>
-          <button type="submit" style={editingId ? updateButton : saveButton}>
-            {editingId ? "Update Dispatch" : "Save Dispatch"}
+          <button type="button" onClick={clearForm} style={clearButton}>
+            Clear / New Dispatch
+          </button>
+
+          <button type="submit" style={editingRow ? updateButton : saveButton}>
+            {editingRow ? "Update Dispatch" : "Save Dispatch"}
           </button>
         </div>
       </form>
-
-      {status && <div style={statusStyle}>{status}</div>}
 
       <div style={sectionCard}>
         <div style={sectionTitle}>Top Customers</div>
@@ -708,13 +909,23 @@ export default function Dispatch() {
           "invoiceNo",
           "vehicleNo",
           "lotNo",
+          "productionDate",
+          "productionShift",
         ]}
         columns={[
           {
             key: "date",
-            label: "Date",
+            label: "Entry Date",
             render: (r) => formatDate(r.date),
+            renderExport: (r) => formatDate(r.date),
           },
+          {
+            key: "productionDate",
+            label: "Production Date",
+            render: (r) => formatDate(r.productionDate || r.date),
+            renderExport: (r) => formatDate(r.productionDate || r.date),
+          },
+          { key: "productionShift", label: "Shift" },
           { key: "dispatchId", label: "Dispatch" },
           { key: "customerName", label: "Customer" },
           { key: "customerUnit", label: "Unit" },
@@ -749,9 +960,7 @@ function KPI({ title, value }) {
   );
 }
 
-const pageStyle = {
-  padding: 20,
-};
+const pageStyle = { padding: 20 };
 
 const headerCard = {
   background: "white",
@@ -850,7 +1059,7 @@ const lineTable = {
   width: "100%",
   borderCollapse: "collapse",
   marginBottom: 10,
-  minWidth: 1050,
+  minWidth: 1250,
 };
 
 const lineHeader = {
@@ -913,6 +1122,16 @@ const updateButton = {
   background: "#ea580c",
 };
 
+const clearButton = {
+  background: "#64748b",
+  color: "white",
+  border: "none",
+  padding: "12px 20px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 600,
+};
+
 const stickyBar = {
   position: "sticky",
   bottom: 0,
@@ -921,6 +1140,7 @@ const stickyBar = {
   borderTop: "1px solid #ddd",
   display: "flex",
   justifyContent: "flex-end",
+  gap: 10,
   zIndex: 10,
 };
 

@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
-
 import { apiCall } from "../api/api";
-
 import { formatDate } from "../utils/date";
+import DataTable from "../components/DataTable";
 
 import {
   pageStyle,
@@ -13,10 +12,6 @@ import {
   textareaStyle,
   readonlyStyle,
   primaryButton,
-  tableCard,
-  tableStyle,
-  thStyle,
-  tdStyle,
 } from "../ui/styles";
 
 export default function StoresInward() {
@@ -72,6 +67,9 @@ export default function StoresInward() {
   const [newItem, setNewItem] = useState(blankNewItem);
   const [savingItem, setSavingItem] = useState(false);
 
+  const [editingRow, setEditingRow] = useState(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+
   useEffect(() => {
     loadData();
   }, []);
@@ -88,42 +86,62 @@ export default function StoresInward() {
 
   async function loadData() {
     try {
-      const [inwardRows, consumableRows, storesMasterRows] = await Promise.all([
+      const [inwardRows, storesMasterRows] = await Promise.all([
         safeList("storesInward.list"),
-        safeList("consumables.list"),
         safeList("storesMaster.list"),
       ]);
 
-      setRows(inwardRows);
+      setRows(
+        inwardRows.filter(
+          (r) =>
+            String(r.status || "").toUpperCase() !== "DELETED" &&
+            String(r.inwardStatus || "").toUpperCase() !== "DELETED"
+        )
+      );
 
       const mergedMap = {};
 
-      [...consumableRows, ...storesMasterRows].forEach((x) => {
+      storesMasterRows.forEach((x) => {
         const itemName = x.itemName || x.item || x.name || "";
 
         if (!itemName) return;
-
         if (String(x.status || "").toUpperCase() === "DELETED") return;
         if (String(x.isActive || "TRUE").toUpperCase() === "FALSE") return;
 
         mergedMap[itemName] = {
-          ...x,
+          itemId: x.itemId || x.id || "",
           itemName,
           category: x.category || "",
           unit: x.unit || "",
           standardRate: x.standardRate || x.rate || x.ratePerUnit || "",
-          preferredSupplier:
-            x.preferredSupplier || x.supplier || x.vendor || "",
+          preferredSupplier: x.preferredSupplier || x.supplier || x.vendor || "",
         };
       });
 
-      setItems(Object.values(mergedMap).sort((a, b) =>
-        String(a.itemName).localeCompare(String(b.itemName))
-      ));
+      setItems(
+        Object.values(mergedMap).sort((a, b) =>
+          String(a.itemName).localeCompare(String(b.itemName))
+        )
+      );
     } catch (err) {
       console.log(err);
       setStatus(err.message);
     }
+  }
+
+  function calcAmount(qty, rate) {
+    return Number(qty || 0) * Number(rate || 0);
+  }
+
+  function getStoresInwardId(row) {
+    return (
+      row.storesInwardId ||
+      row.inwardId ||
+      row.id ||
+      row.entryId ||
+      row.uuid ||
+      ""
+    );
   }
 
   function onChange(e) {
@@ -139,15 +157,11 @@ export default function StoresInward() {
         updated.category = selected.category || "";
         updated.unit = selected.unit || "";
         updated.rate = selected.standardRate || updated.rate || "";
-        updated.supplier =
-          selected.preferredSupplier || updated.supplier || "";
+        updated.supplier = selected.preferredSupplier || updated.supplier || "";
       }
     }
 
-    const qty = Number(updated.qty || 0);
-    const rate = Number(updated.rate || 0);
-    updated.totalAmount = qty * rate;
-
+    updated.totalAmount = calcAmount(updated.qty, updated.rate);
     setForm(updated);
   }
 
@@ -161,21 +175,14 @@ export default function StoresInward() {
   async function saveNewConsumable(e) {
     e.preventDefault();
 
-    if (!newItem.itemName) {
-      alert("Item name is required");
-      return;
-    }
-
-    if (!newItem.category) {
-      alert("Category is required");
-      return;
-    }
+    if (!newItem.itemName) return alert("Item name is required");
+    if (!newItem.category) return alert("Category is required");
 
     try {
       setSavingItem(true);
 
       const res = await apiCall({
-        fn: "consumables.add",
+        fn: "storesMaster.add",
         ...newItem,
       });
 
@@ -208,43 +215,144 @@ export default function StoresInward() {
   async function submit(e) {
     e.preventDefault();
 
-    if (!form.date) {
-      alert("Date is mandatory");
-      return;
-    }
-
-    if (!form.itemName) {
-      alert("Select item");
-      return;
-    }
-
-    if (!form.qty) {
-      alert("Enter quantity");
-      return;
-    }
+    if (!form.date) return alert("Date is mandatory");
+    if (!form.itemName) return alert("Select item");
+    if (!form.qty) return alert("Enter quantity");
 
     try {
       const res = await apiCall({
         fn: "storesInward.add",
         ...form,
+        totalAmount: calcAmount(form.qty, form.rate),
       });
 
-      if (res.ok) {
-        setStatus("Stores inward saved successfully");
-        setForm(blankForm);
-        loadData();
-      } else {
-        setStatus(res.error || "Error");
+      if (res.ok === false) {
+        setStatus(res.error || "Error saving stores inward");
+        return;
       }
+
+      setStatus("Stores inward saved successfully");
+      setForm(blankForm);
+      loadData();
     } catch (err) {
       setStatus(err.message);
+    }
+  }
+
+  function clearMainForm() {
+    setForm(blankForm);
+    setStatus("Ready for new inward entry");
+  }
+
+  function editRow(row) {
+    setEditingRow({
+      ...row,
+      date: formatDateForInput(row.date) || today,
+      totalAmount: row.totalAmount || calcAmount(row.qty, row.rate),
+    });
+  }
+
+  function onEditChange(e) {
+    const updated = {
+      ...editingRow,
+      [e.target.name]: e.target.value,
+    };
+
+    if (e.target.name === "itemName") {
+      const selected = items.find((x) => x.itemName === e.target.value);
+
+      if (selected) {
+        updated.category = selected.category || updated.category || "";
+        updated.unit = selected.unit || updated.unit || "";
+        updated.rate = selected.standardRate || updated.rate || "";
+        updated.supplier = selected.preferredSupplier || updated.supplier || "";
+      }
+    }
+
+    updated.totalAmount = calcAmount(updated.qty, updated.rate);
+    setEditingRow(updated);
+  }
+
+  async function saveEdit() {
+    if (!editingRow) return;
+    if (!editingRow.itemName) return alert("Item name is required");
+    if (!editingRow.qty) return alert("Qty is required");
+
+    const idValue = getStoresInwardId(editingRow);
+
+    if (!idValue) {
+      alert(
+        "Missing Stores Inward ID. Cannot update this old row. Please check Apps Script column name."
+      );
+      return;
+    }
+
+    try {
+      setSavingEdit(true);
+
+      const res = await apiCall({
+        fn: "storesInward.update",
+        ...editingRow,
+        storesInwardId: idValue,
+        inwardId: idValue,
+        totalAmount: calcAmount(editingRow.qty, editingRow.rate),
+      });
+
+      if (res.ok === false) {
+        alert(res.error || "Update failed");
+        return;
+      }
+
+      setStatus("Stores inward updated");
+      setEditingRow(null);
+      loadData();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  async function deleteRow(row) {
+    const idValue = getStoresInwardId(row);
+
+    if (!idValue) {
+      alert(
+        "Missing Stores Inward ID. Cannot delete this row. Backend needs storesInwardId/inwardId."
+      );
+      return;
+    }
+
+    const ok = window.confirm(`Delete inward entry for ${row.itemName}?`);
+    if (!ok) return;
+
+    try {
+      const res = await apiCall({
+        fn: "storesInward.update",
+        ...row,
+        storesInwardId: idValue,
+        inwardId: idValue,
+        status: "DELETED",
+        inwardStatus: "DELETED",
+      });
+
+      if (res.ok === false) {
+        alert(res.error || "Delete failed");
+        return;
+      }
+
+      setStatus("Stores inward deleted");
+      loadData();
+    } catch (err) {
+      alert(err.message);
     }
   }
 
   const totalQty = rows.reduce((sum, r) => sum + Number(r.qty || 0), 0);
 
   const totalValue = rows.reduce(
-    (sum, r) => sum + Number(r.totalAmount || 0),
+    (sum, r) =>
+      sum + Number(r.totalAmount || Number(r.qty || 0) * Number(r.rate || 0)),
     0
   );
 
@@ -260,12 +368,12 @@ export default function StoresInward() {
         <div style={sectionTitle}>Stores Inward</div>
 
         <div style={{ color: "#64748b", fontSize: 13 }}>
-          Consumables inward entry connected to Consumables Master
+          Consumables inward entry connected to Stores Master.
         </div>
       </div>
 
       <div style={kpiGrid}>
-        <KPI title="Total Qty" value={totalQty} />
+        <KPI title="Total Qty" value={totalQty.toFixed(2)} />
         <KPI title="Inventory Value" value={`₹ ${totalValue.toFixed(0)}`} />
         <KPI title="Average Rate" value={`₹ ${avgRate}`} />
         <KPI title="Suppliers" value={supplierCount} />
@@ -274,9 +382,9 @@ export default function StoresInward() {
       <div style={sectionCard}>
         <div style={sectionHeader}>
           <div>
-            <div style={sectionTitle}>Inward Entry</div>
+            <div style={sectionTitle}>New Inward Entry</div>
             <div style={{ color: "#64748b", fontSize: 13 }}>
-              Select item from master or add a new consumable directly.
+              Main form is only for new entries. Use table Edit for corrections.
             </div>
           </div>
 
@@ -289,7 +397,15 @@ export default function StoresInward() {
           </button>
         </div>
 
-        <form onSubmit={submit} style={formGrid}>
+        <form
+          onSubmit={submit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && e.target.tagName !== "TEXTAREA") {
+              e.preventDefault();
+            }
+          }}
+          style={formGrid}
+        >
           <Field label="Date">
             <input
               type="date"
@@ -383,9 +499,13 @@ export default function StoresInward() {
             />
           </Field>
 
-          <div style={{ display: "flex", alignItems: "end" }}>
+          <div style={formActions}>
             <button type="submit" style={primaryButton}>
               Save Inward
+            </button>
+
+            <button type="button" style={clearButton} onClick={clearMainForm}>
+              Clear / New Entry
             </button>
           </div>
         </form>
@@ -393,45 +513,58 @@ export default function StoresInward() {
         {status && <div style={statusStyle}>{status}</div>}
       </div>
 
-      <div style={sectionCard}>
-        <div style={sectionTitle}>Recent Inward</div>
-
-        <div style={tableCard}>
-          <table style={tableStyle}>
-            <thead>
-              <tr>
-                <th style={thStyle}>Date</th>
-                <th style={thStyle}>Item</th>
-                <th style={thStyle}>Category</th>
-                <th style={thStyle}>Unit</th>
-                <th style={thStyle}>Qty</th>
-                <th style={thStyle}>Rate</th>
-                <th style={thStyle}>Amount</th>
-                <th style={thStyle}>Supplier</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={i}>
-                  <td style={tdStyle}>{formatDate(r.date)}</td>
-
-                  <td style={tdStyle}>
-                    <b>{r.itemName}</b>
-                  </td>
-
-                  <td style={tdStyle}>{r.category}</td>
-                  <td style={tdStyle}>{r.unit}</td>
-                  <td style={tdStyle}>{r.qty}</td>
-                  <td style={tdStyle}>₹ {r.rate}</td>
-                  <td style={tdStyle}>₹ {r.totalAmount}</td>
-                  <td style={tdStyle}>{r.supplier}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <DataTable
+        title="Stores Inward Ledger"
+        rows={rows}
+        searchFields={[
+          "itemName",
+          "category",
+          "unit",
+          "supplier",
+          "invoiceNo",
+          "remarks",
+        ]}
+        columns={[
+          {
+            key: "date",
+            label: "Date",
+            render: (r) => formatDate(r.date),
+            renderExport: (r) => formatDate(r.date),
+          },
+          { key: "itemName", label: "Item" },
+          { key: "category", label: "Category" },
+          { key: "unit", label: "Unit" },
+          {
+            key: "qty",
+            label: "Qty",
+            render: (r) => Number(r.qty || 0).toFixed(2),
+            renderExport: (r) => Number(r.qty || 0).toFixed(2),
+          },
+          {
+            key: "rate",
+            label: "Rate",
+            render: (r) => `₹ ${Number(r.rate || 0).toFixed(2)}`,
+            renderExport: (r) => Number(r.rate || 0).toFixed(2),
+          },
+          {
+            key: "totalAmount",
+            label: "Amount",
+            render: (r) =>
+              `₹ ${Number(
+                r.totalAmount || Number(r.qty || 0) * Number(r.rate || 0)
+              ).toFixed(0)}`,
+            renderExport: (r) =>
+              Number(
+                r.totalAmount || Number(r.qty || 0) * Number(r.rate || 0)
+              ).toFixed(0),
+          },
+          { key: "supplier", label: "Supplier" },
+          { key: "invoiceNo", label: "Invoice" },
+          { key: "remarks", label: "Remarks" },
+        ]}
+        onEdit={editRow}
+        onDelete={deleteRow}
+      />
 
       {showAddItem && (
         <div style={modalOverlay}>
@@ -542,6 +675,134 @@ export default function StoresInward() {
           </div>
         </div>
       )}
+
+      {editingRow && (
+        <div style={modalOverlay}>
+          <div style={modal}>
+            <h2 style={{ marginTop: 0 }}>Edit Stores Inward</h2>
+
+            <div style={formGrid}>
+              <Field label="Date">
+                <input
+                  type="date"
+                  name="date"
+                  value={editingRow.date || ""}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Item">
+                <select
+                  name="itemName"
+                  value={editingRow.itemName || ""}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                >
+                  <option value="">Select Item</option>
+                  {items.map((x, i) => (
+                    <option key={i} value={x.itemName}>
+                      {x.itemName}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Category">
+                <input
+                  name="category"
+                  value={editingRow.category || ""}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Unit">
+                <input
+                  name="unit"
+                  value={editingRow.unit || ""}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Qty">
+                <input
+                  type="number"
+                  name="qty"
+                  value={editingRow.qty || ""}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Rate">
+                <input
+                  type="number"
+                  name="rate"
+                  value={editingRow.rate || ""}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Amount">
+                <input
+                  value={editingRow.totalAmount || ""}
+                  readOnly
+                  style={readonlyStyle}
+                />
+              </Field>
+
+              <Field label="Supplier">
+                <input
+                  name="supplier"
+                  value={editingRow.supplier || ""}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Invoice">
+                <input
+                  name="invoiceNo"
+                  value={editingRow.invoiceNo || ""}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Remarks">
+                <textarea
+                  name="remarks"
+                  value={editingRow.remarks || ""}
+                  onChange={onEditChange}
+                  style={textareaStyle}
+                />
+              </Field>
+            </div>
+
+            <div style={modalButtons}>
+              <button
+                type="button"
+                onClick={() => setEditingRow(null)}
+                style={cancelButton}
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={saveEdit}
+                disabled={savingEdit}
+                style={saveButton}
+              >
+                {savingEdit ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -562,6 +823,20 @@ function KPI({ title, value }) {
       <div style={kpiValue}>{value}</div>
     </div>
   );
+}
+
+function formatDateForInput(value) {
+  if (!value) return "";
+
+  const text = String(value);
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  if (text.includes("T")) return text.split("T")[0];
+
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return "";
+
+  return d.toISOString().split("T")[0];
 }
 
 const kpiGrid = {
@@ -622,6 +897,23 @@ const fieldLabel = {
   fontSize: 12,
 };
 
+const formActions = {
+  display: "flex",
+  alignItems: "end",
+  gap: 10,
+  flexWrap: "wrap",
+};
+
+const clearButton = {
+  background: "#64748b",
+  color: "white",
+  border: "none",
+  padding: "10px 14px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
 const modalOverlay = {
   position: "fixed",
   inset: 0,
@@ -648,6 +940,7 @@ const modalButtons = {
   justifyContent: "flex-end",
   gap: 10,
   alignItems: "end",
+  marginTop: 18,
 };
 
 const cancelButton = {

@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
+import DataTable from "../components/DataTable";
 
 export default function LiveStoresInventory() {
   const [rows, setRows] = useState([]);
   const [status, setStatus] = useState("");
+  const [editing, setEditing] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -30,17 +33,22 @@ export default function LiveStoresInventory() {
 
       const masterMap = {};
 
-      [...consumables, ...storesMaster].forEach((x) => {
+      [...storesMaster, ...consumables].forEach((x) => {
         const item = x.itemName || x.item || x.name || "";
         if (!item) return;
 
         masterMap[item] = {
+          itemName: item,
           category: x.category || "",
           unit: x.unit || "",
           minLevel: Number(x.minLevel || 0),
           reorderLevel: Number(x.reorderLevel || 0),
           standardRate: Number(x.standardRate || x.rate || x.ratePerUnit || 0),
-          supplier: x.preferredSupplier || x.supplier || x.vendor || "",
+          preferredSupplier: x.preferredSupplier || x.supplier || x.vendor || "",
+          location: x.location || x.rack || "",
+          remarks: x.remarks || "",
+          isActive: x.isActive || "TRUE",
+          createdBy: x.createdBy || "System",
         };
       });
 
@@ -62,12 +70,14 @@ export default function LiveStoresInventory() {
             issueQty: 0,
             inwardValue: 0,
             issueValue: 0,
-            balanceQty: 0,
-            balanceValue: 0,
-            avgRate: 0,
             minLevel: Number(master.minLevel || 0),
             reorderLevel: Number(master.reorderLevel || 0),
-            supplier: master.supplier || r.supplier || "",
+            standardRate: Number(master.standardRate || 0),
+            preferredSupplier: master.preferredSupplier || r.supplier || "",
+            location: master.location || "",
+            remarks: master.remarks || "",
+            isActive: master.isActive || "TRUE",
+            createdBy: master.createdBy || "System",
           };
         }
 
@@ -91,12 +101,14 @@ export default function LiveStoresInventory() {
             issueQty: 0,
             inwardValue: 0,
             issueValue: 0,
-            balanceQty: 0,
-            balanceValue: 0,
-            avgRate: Number(master.standardRate || 0),
             minLevel: Number(master.minLevel || 0),
             reorderLevel: Number(master.reorderLevel || 0),
-            supplier: master.supplier || "",
+            standardRate: Number(master.standardRate || 0),
+            preferredSupplier: master.preferredSupplier || "",
+            location: master.location || "",
+            remarks: master.remarks || "",
+            isActive: master.isActive || "TRUE",
+            createdBy: master.createdBy || "System",
           };
         }
 
@@ -104,20 +116,50 @@ export default function LiveStoresInventory() {
         map[item].issueValue += value;
       });
 
-      const finalRows = Object.values(map).map((r) => {
-        const balanceQty = r.inwardQty - r.issueQty;
-        const balanceValue = r.inwardValue - r.issueValue;
-        const avgRate =
-          r.inwardQty > 0 ? r.inwardValue / r.inwardQty : r.avgRate || 0;
+      Object.keys(masterMap).forEach((item) => {
+        const master = masterMap[item];
 
-        const avgDailyConsumption = r.issueQty / 30;
+        if (!map[item]) {
+          map[item] = {
+            itemName: item,
+            category: master.category || "",
+            unit: master.unit || "",
+            inwardQty: 0,
+            issueQty: 0,
+            inwardValue: 0,
+            issueValue: 0,
+            minLevel: Number(master.minLevel || 0),
+            reorderLevel: Number(master.reorderLevel || 0),
+            standardRate: Number(master.standardRate || 0),
+            preferredSupplier: master.preferredSupplier || "",
+            location: master.location || "",
+            remarks: master.remarks || "",
+            isActive: master.isActive || "TRUE",
+            createdBy: master.createdBy || "System",
+          };
+        }
+      });
+
+      const finalRows = Object.values(map).map((r) => {
+        const balanceQty = Number(r.inwardQty || 0) - Number(r.issueQty || 0);
+        const balanceValue =
+          Number(r.inwardValue || 0) - Number(r.issueValue || 0);
+
+        const avgRate =
+          Number(r.inwardQty || 0) > 0
+            ? Number(r.inwardValue || 0) / Number(r.inwardQty || 0)
+            : Number(r.standardRate || 0);
+
+        const avgDailyConsumption = Number(r.issueQty || 0) / 30;
+
         const daysRemaining =
           avgDailyConsumption > 0
             ? Math.floor(balanceQty / avgDailyConsumption)
             : 999;
 
-        const effectiveMin = r.minLevel || 0;
-        const effectiveReorder = r.reorderLevel || effectiveMin * 1.5;
+        const effectiveMin = Number(r.minLevel || 0);
+        const effectiveReorder =
+          Number(r.reorderLevel || 0) || effectiveMin * 1.5;
 
         let stockStatus = "OK";
 
@@ -145,6 +187,77 @@ export default function LiveStoresInventory() {
     }
   }
 
+  function startEdit(row) {
+    setEditing({
+      itemName: row.itemName || "",
+      category: row.category || "",
+      unit: row.unit || "Kg",
+      minLevel: row.minLevel || "",
+      reorderLevel: row.reorderLevel || "",
+      standardRate: row.standardRate || row.avgRate || "",
+      preferredSupplier: row.preferredSupplier || "",
+      location: row.location || "",
+      remarks: row.remarks || "",
+      isActive: row.isActive || "TRUE",
+      createdBy: row.createdBy || "Live Stores",
+    });
+  }
+
+  function onEditChange(e) {
+    setEditing({
+      ...editing,
+      [e.target.name]: e.target.value,
+    });
+  }
+
+  async function saveEdit() {
+    if (!editing?.itemName) {
+      alert("Item name missing");
+      return;
+    }
+
+    try {
+      setSaving(true);
+
+      const payload = {
+        fn: "consumables.update",
+        itemName: editing.itemName,
+        category: editing.category || "",
+        unit: editing.unit || "Kg",
+        minLevel: editing.minLevel || "",
+        reorderLevel: editing.reorderLevel || "",
+        standardRate: editing.standardRate || "",
+        preferredSupplier: editing.preferredSupplier || "",
+        location: editing.location || "",
+        remarks: editing.remarks || "",
+        isActive: editing.isActive || "TRUE",
+        createdBy: editing.createdBy || "Live Stores",
+      };
+
+      let res = await apiCall(payload);
+
+      if (res.ok === false) {
+        res = await apiCall({
+          fn: "consumables.add",
+          ...payload,
+        });
+      }
+
+      if (res.ok === false) {
+        alert(res.error || "Save failed");
+        return;
+      }
+
+      setStatus("Stores master updated successfully");
+      setEditing(null);
+      loadData();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const data = useMemo(() => {
     const totalItems = rows.length;
     const criticalItems = rows.filter((r) => r.status === "CRITICAL").length;
@@ -160,17 +273,18 @@ export default function LiveStoresInventory() {
       0
     );
 
-    const topValueItems = [...rows]
-      .sort((a, b) => b.balanceValue - a.balanceValue)
-      .slice(0, 10);
-
-    const topConsumption = [...rows]
-      .sort((a, b) => b.issueValue - a.issueValue)
-      .slice(0, 10);
+    const configuredItems = rows.filter(
+      (r) => Number(r.minLevel || 0) > 0 || Number(r.reorderLevel || 0) > 0
+    ).length;
 
     const lowStockList = rows
       .filter((r) => r.status !== "OK")
-      .sort((a, b) => a.daysRemaining - b.daysRemaining);
+      .sort((a, b) => a.daysRemaining - b.daysRemaining)
+      .slice(0, 10);
+
+    const topValueItems = [...rows]
+      .sort((a, b) => b.balanceValue - a.balanceValue)
+      .slice(0, 10);
 
     return {
       totalItems,
@@ -178,9 +292,9 @@ export default function LiveStoresInventory() {
       lowItems,
       totalStockQty,
       totalStockValue,
-      topValueItems,
-      topConsumption,
+      configuredItems,
       lowStockList,
+      topValueItems,
     };
   }, [rows]);
 
@@ -191,13 +305,14 @@ export default function LiveStoresInventory() {
           <div style={eyebrow}>Stores Intelligence</div>
           <h1 style={title}>Stores Control Tower</h1>
           <div style={subtitle}>
-            Live stores inventory, stock value, min-level alerts and consumption intelligence.
+            Live stores inventory, min-level alerts, reorder controls, export and print.
           </div>
         </div>
       </div>
 
       <div style={gridStyle}>
         <Card title="Items" value={data.totalItems} />
+        <Card title="Configured" value={data.configuredItems} />
         <Card title="Critical" value={data.criticalItems} color="#dc2626" />
         <Card title="Low Stock" value={data.lowItems} color="#d97706" />
         <Card title="Stock Qty" value={data.totalStockQty.toFixed(0)} />
@@ -234,68 +349,140 @@ export default function LiveStoresInventory() {
         </Panel>
       </div>
 
-      <Panel title="Live Stores Inventory">
-        <div style={{ overflowX: "auto" }}>
-          <table style={tableStyle}>
-            <thead>
-              <tr style={headerRowStyle}>
-                <th style={th}>Item</th>
-                <th style={th}>Category</th>
-                <th style={th}>Unit</th>
-                <th style={th}>Inward</th>
-                <th style={th}>Used</th>
-                <th style={th}>Balance</th>
-                <th style={th}>Avg Rate</th>
-                <th style={th}>Stock Value</th>
-                <th style={th}>Min</th>
-                <th style={th}>Reorder</th>
-                <th style={th}>Daily Avg</th>
-                <th style={th}>Days Left</th>
-                <th style={th}>Status</th>
-                <th style={th}>Supplier</th>
-              </tr>
-            </thead>
+      <DataTable
+        title="Live Stores Inventory"
+        rows={rows}
+        searchFields={[
+          "itemName",
+          "category",
+          "unit",
+          "preferredSupplier",
+          "status",
+          "location",
+          "remarks",
+        ]}
+        columns={[
+          { key: "itemName", label: "Item" },
+          { key: "category", label: "Category" },
+          { key: "unit", label: "Unit" },
+          {
+            key: "inwardQty",
+            label: "Inward",
+            render: (r) => num(r.inwardQty),
+            renderExport: (r) => num(r.inwardQty),
+          },
+          {
+            key: "issueQty",
+            label: "Used",
+            render: (r) => num(r.issueQty),
+            renderExport: (r) => num(r.issueQty),
+          },
+          {
+            key: "balanceQty",
+            label: "Balance",
+            render: (r) => num(r.balanceQty),
+            renderExport: (r) => num(r.balanceQty),
+          },
+          {
+            key: "avgRate",
+            label: "Avg Rate",
+            render: (r) => `₹ ${num(r.avgRate)}`,
+            renderExport: (r) => num(r.avgRate),
+          },
+          {
+            key: "balanceValue",
+            label: "Stock Value",
+            render: (r) => `₹ ${lakh(r.balanceValue)} L`,
+            renderExport: (r) => Number(r.balanceValue || 0).toFixed(2),
+          },
+          {
+            key: "minLevel",
+            label: "Min",
+            render: (r) => num(r.minLevel),
+            renderExport: (r) => num(r.minLevel),
+          },
+          {
+            key: "reorderLevel",
+            label: "Reorder",
+            render: (r) => num(r.reorderLevel),
+            renderExport: (r) => num(r.reorderLevel),
+          },
+          {
+            key: "avgDailyConsumption",
+            label: "Daily Avg",
+            render: (r) => num(r.avgDailyConsumption),
+            renderExport: (r) => num(r.avgDailyConsumption),
+          },
+          { key: "daysRemaining", label: "Days Left" },
+          { key: "status", label: "Status" },
+          { key: "preferredSupplier", label: "Supplier" },
+          { key: "location", label: "Location" },
+        ]}
+        onEdit={startEdit}
+      />
 
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={i} style={rowStyle}>
-                  <td style={td}>
-                    <b>{r.itemName}</b>
-                  </td>
-                  <td style={td}>{r.category}</td>
-                  <td style={td}>{r.unit}</td>
-                  <td style={td}>{num(r.inwardQty)}</td>
-                  <td style={td}>{num(r.issueQty)}</td>
-                  <td style={td}>
-                    <b>{num(r.balanceQty)}</b>
-                  </td>
-                  <td style={td}>₹ {num(r.avgRate)}</td>
-                  <td style={td}>₹ {lakh(r.balanceValue)} L</td>
-                  <td style={td}>{num(r.minLevel)}</td>
-                  <td style={td}>{num(r.reorderLevel)}</td>
-                  <td style={td}>{num(r.avgDailyConsumption)}</td>
-                  <td style={td}>{r.daysRemaining}</td>
-                  <td style={td}>
-                    <span style={badge(r.status)}>{r.status}</span>
-                  </td>
-                  <td style={td}>{r.supplier}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {editing && (
+        <div style={modalOverlay}>
+          <div style={modal}>
+            <h2 style={{ marginTop: 0 }}>Edit Stores Master</h2>
+
+            <div style={formGrid}>
+              <Field label="Item Name">
+                <input readOnly value={editing.itemName} style={readonlyInput} />
+              </Field>
+
+              <Field label="Category">
+                <input name="category" value={editing.category} onChange={onEditChange} style={inputStyle} />
+              </Field>
+
+              <Field label="Unit">
+                <input name="unit" value={editing.unit} onChange={onEditChange} style={inputStyle} />
+              </Field>
+
+              <Field label="Min Level">
+                <input type="number" name="minLevel" value={editing.minLevel} onChange={onEditChange} style={inputStyle} />
+              </Field>
+
+              <Field label="Reorder Level">
+                <input type="number" name="reorderLevel" value={editing.reorderLevel} onChange={onEditChange} style={inputStyle} />
+              </Field>
+
+              <Field label="Standard Rate">
+                <input type="number" name="standardRate" value={editing.standardRate} onChange={onEditChange} style={inputStyle} />
+              </Field>
+
+              <Field label="Preferred Supplier">
+                <input name="preferredSupplier" value={editing.preferredSupplier} onChange={onEditChange} style={inputStyle} />
+              </Field>
+
+              <Field label="Location / Rack">
+                <input name="location" value={editing.location} onChange={onEditChange} style={inputStyle} />
+              </Field>
+
+              <Field label="Active">
+                <select name="isActive" value={editing.isActive} onChange={onEditChange} style={inputStyle}>
+                  <option value="TRUE">TRUE</option>
+                  <option value="FALSE">FALSE</option>
+                </select>
+              </Field>
+
+              <Field label="Remarks">
+                <textarea name="remarks" value={editing.remarks} onChange={onEditChange} style={textareaStyle} />
+              </Field>
+            </div>
+
+            <div style={modalButtons}>
+              <button type="button" onClick={() => setEditing(null)} style={cancelButton}>
+                Cancel
+              </button>
+
+              <button type="button" onClick={saveEdit} disabled={saving} style={saveButton}>
+                {saving ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
+          </div>
         </div>
-      </Panel>
-
-      <Panel title="Top Consumption by Value">
-        <SimpleTable
-          columns={["Item", "Used Qty", "Used Value"]}
-          rows={data.topConsumption.map((r) => [
-            r.itemName,
-            `${num(r.issueQty)} ${r.unit || ""}`,
-            `₹ ${lakh(r.issueValue)} L`,
-          ])}
-        />
-      </Panel>
+      )}
     </div>
   );
 }
@@ -313,6 +500,15 @@ function Panel({ title, children }) {
   return (
     <div style={tableCardStyle}>
       <h3 style={{ marginTop: 0 }}>{title}</h3>
+      {children}
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div>
+      <div style={labelStyle}>{label}</div>
       {children}
     </div>
   );
@@ -364,25 +560,6 @@ function num(value) {
   return Number(value || 0).toFixed(2);
 }
 
-const badge = (status) => ({
-  background:
-    status === "CRITICAL"
-      ? "#fee2e2"
-      : status === "LOW"
-      ? "#fef3c7"
-      : "#dcfce7",
-  color:
-    status === "CRITICAL"
-      ? "#991b1b"
-      : status === "LOW"
-      ? "#92400e"
-      : "#166534",
-  padding: "5px 10px",
-  borderRadius: 999,
-  fontSize: 11,
-  fontWeight: 800,
-});
-
 const page = {
   width: "100%",
   paddingBottom: 30,
@@ -416,7 +593,7 @@ const subtitle = {
 
 const gridStyle = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))",
+  gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))",
   gap: 16,
   marginBottom: 20,
 };
@@ -471,7 +648,7 @@ const tableCardStyle = {
 const tableStyle = {
   width: "100%",
   borderCollapse: "collapse",
-  minWidth: 950,
+  minWidth: 900,
 };
 
 const headerRowStyle = {
@@ -500,4 +677,89 @@ const empty = {
   padding: 18,
   textAlign: "center",
   color: "#64748b",
+};
+
+const modalOverlay = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.45)",
+  display: "flex",
+  justifyContent: "center",
+  alignItems: "center",
+  zIndex: 9999,
+};
+
+const modal = {
+  background: "white",
+  padding: 24,
+  borderRadius: 14,
+  width: 850,
+  maxWidth: "95vw",
+  maxHeight: "90vh",
+  overflowY: "auto",
+  boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
+};
+
+const formGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))",
+  gap: 14,
+};
+
+const labelStyle = {
+  fontSize: 12,
+  fontWeight: 700,
+  marginBottom: 5,
+  color: "#334155",
+};
+
+const inputStyle = {
+  width: "100%",
+  height: 40,
+  padding: "0 10px",
+  borderRadius: 8,
+  border: "1px solid #cbd5e1",
+  boxSizing: "border-box",
+};
+
+const readonlyInput = {
+  ...inputStyle,
+  background: "#f8fafc",
+  fontWeight: 800,
+};
+
+const textareaStyle = {
+  width: "100%",
+  padding: 10,
+  borderRadius: 8,
+  border: "1px solid #cbd5e1",
+  minHeight: 80,
+  boxSizing: "border-box",
+};
+
+const modalButtons = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 10,
+  marginTop: 22,
+};
+
+const cancelButton = {
+  background: "#64748b",
+  color: "white",
+  border: "none",
+  padding: "10px 16px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const saveButton = {
+  background: "#0f766e",
+  color: "white",
+  border: "none",
+  padding: "10px 16px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
 };

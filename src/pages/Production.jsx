@@ -1,45 +1,33 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
 import FormSection from "../components/FormSection";
+import InventoryFeedTable from "../components/InventoryFeedTable";
+import { generateExtrusionBatchId } from "../utils/idGenerator";
+import { buildInventoryLots } from "../utils/inventoryLots";
 
 export default function Production() {
   const today = new Date().toISOString().split("T")[0];
   const currentMonth = new Date().toISOString().slice(0, 7);
 
-  const feedMaterials = [
-    "SORTED_FLAKES",
-    "WASHED_FLAKES",
-    "WHITE_FLAKES",
-    "MILKY_FLAKES",
-    "COLOUR_FLAKES",
-    "GREY_FLAKES",
-    "ALL_MIX_FLAKES",
-    "COMMODITY_FLAKES",
-    "RECOVERY_LUMPS",
-    "RECOVERY_GRANULES",
-    "REWORK_LUMPS",
-    "REWORK_GRANULES",
-    "PURGING_REWORK",
-    "COLOUR_REGRIND",
-    "FLOTATION_TANK_REGRIND",
-    "SINK_MATERIAL_REGRIND",
-    "FLOAT_MATERIAL_REGRIND",
-    "SORTER_REJECT_REGRIND",
-    "BATTERY_REGRIND",
-    "VIRGIN_PP",
-    "MASTERBATCH",
-    "ANTIOXIDANT",
-    "ADDITIVE_PACKAGE",
+  const productionGrades = [
+    "E1",
+    "E2",
+    "E3",
+    "E4",
+    "E5",
+    "E6",
+    "E7",
+    "REWORK",
+    "TRIAL",
     "OTHER",
   ];
 
   const blankFeedRow = {
-    sourceType: "SORTING",
-    sourceBatchId: "",
-    materialType: "SORTED_FLAKES",
-    qtyKg: "",
-    remarks: "",
-  };
+  sourceType: "",
+  materialType: "",
+  qtyKg: "",
+  remarks: "",
+};
 
   const blank = {
     date: today,
@@ -78,6 +66,7 @@ export default function Production() {
     whiteGreyKg: "",
     sorterRejectKg: "",
 
+    extrusionBatchId: "",
     fgOutputKg: "",
     lumpsKg: "",
     purgingKg: "",
@@ -88,20 +77,23 @@ export default function Production() {
     floorSpillageKg: "",
     productionGrade: "",
 
-    visualCleanlinessRating: "5",
-    moistureRating: "5",
-    odourRating: "5",
-    blackSpecsRating: "5",
-    colorConsistencyRating: "5",
-    qcRemarks: "",
-
+    
     remarks: "",
   };
 
   const [form, setForm] = useState(blank);
   const [feedRows, setFeedRows] = useState([{ ...blankFeedRow }]);
+
   const [machines, setMachines] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [productionMaterials, setProductionMaterials] = useState([]);
+
+  const [rmRows, setRmRows] = useState([]);
+  const [washRows, setWashRows] = useState([]);
+  const [sortingRows, setSortingRows] = useState([]);
+  const [extrusionRows, setExtrusionRows] = useState([]);
+  const [dispatchRows, setDispatchRows] = useState([]);
+
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -109,55 +101,145 @@ export default function Production() {
     loadMasters();
   }, []);
 
+  async function safeList(fn) {
+    try {
+      const res = await apiCall({ fn });
+      return res.rows || [];
+    } catch (err) {
+      console.log(fn, err);
+      return [];
+    }
+  }
+
   async function loadMasters() {
     try {
-      const [machineRes, catRes] = await Promise.all([
-        apiCall({ fn: "machines.list" }),
-        apiCall({ fn: "categories.list" }),
+      const [
+        machineRows,
+        categoryRows,
+        prodMatRows,
+        rmData,
+        washData,
+        sortingData,
+        extrusionData,
+        dispatchData,
+      ] = await Promise.all([
+        safeList("machines.list"),
+        safeList("categories.list"),
+        safeList("productionMaterials.list"),
+        safeList("rm.list"),
+        safeList("wash.list"),
+        safeList("sorting.list"),
+        safeList("extrusion.list"),
+        safeList("dispatch.list"),
       ]);
 
-      setMachines(machineRes.rows || []);
-      setCategories(catRes.rows || []);
+      setMachines(machineRows);
+      setCategories(categoryRows);
+      setRmRows(rmData);
+      setWashRows(washData);
+      setSortingRows(sortingData);
+      setExtrusionRows(extrusionData);
+      setDispatchRows(dispatchData);
+
+      setProductionMaterials(
+        prodMatRows
+          .filter((r) => String(r.status || "").toUpperCase() !== "DELETED")
+          .filter((r) => String(r.isActive || "TRUE").toUpperCase() === "TRUE")
+          .sort(
+            (a, b) =>
+              Number(a.sortOrder || 999) - Number(b.sortOrder || 999)
+          )
+      );
     } catch (err) {
       setMessage(err.message);
     }
   }
 
+  function uniqueList(list) {
+    return (list || []).filter((v, i, arr) => v && arr.indexOf(v) === i);
+  }
+
+  function productionMaterialOptions(stage = "") {
+    const requestedStage = String(stage || "").toUpperCase();
+
+    const filtered = productionMaterials.filter((m) => {
+      const materialStage = String(m.stage || "All").toUpperCase();
+
+      return (
+        materialStage === "ALL" ||
+        materialStage === "PRODUCTION" ||
+        materialStage === requestedStage
+      );
+    });
+
+    return filtered.map((m) => m.materialName).filter(Boolean);
+  }
+
+  const washMaterialOptions = useMemo(() => {
+    const master = productionMaterialOptions("Wash");
+    const fallback = categories.map((c) => c.categoryName).filter(Boolean);
+    return uniqueList([...master, ...fallback]);
+  }, [productionMaterials, categories]);
+
+  const sortingMaterialOptions = useMemo(() => {
+    const master = productionMaterialOptions("Sorting");
+    const fallback = categories.map((c) => c.categoryName).filter(Boolean);
+    return uniqueList([...master, ...fallback]);
+  }, [productionMaterials, categories]);
+
+  const inventoryLots = useMemo(() => {
+    return buildInventoryLots({
+      rmRows,
+      washRows,
+      sortingRows,
+      extrusionRows,
+      dispatchRows,
+    });
+  }, [rmRows, washRows, sortingRows, extrusionRows, dispatchRows]);
+
   function n(v) {
     return Number(v || 0);
   }
 
-  function onChange(e) {
-    setForm({
-      ...form,
-      [e.target.name]: e.target.value,
-    });
-  }
+  function buildExtrusionBatchId(updatedForm = form) {
+    if (!updatedForm.productionGrade) return "";
 
-  function updateFeedRow(index, key, value) {
-    setFeedRows((prev) =>
-      prev.map((r, i) => (i === index ? { ...r, [key]: value } : r))
+    return generateExtrusionBatchId(
+      updatedForm.date,
+      updatedForm.shift,
+      updatedForm.productionGrade,
+      extrusionRows
     );
   }
 
-  function addFeedRow() {
-    setFeedRows((prev) => [
-      ...prev,
-      {
-        sourceType: "RECOVERY",
-        sourceBatchId: "",
-        materialType: "REWORK_GRANULES",
-        qtyKg: "",
-        remarks: "",
-      },
-    ]);
+  function onChange(e) {
+    const updated = {
+      ...form,
+      [e.target.name]: e.target.value,
+    };
+
+    if (
+      e.target.name === "date" ||
+      e.target.name === "shift" ||
+      e.target.name === "productionGrade"
+    ) {
+      updated.extrusionBatchId = buildExtrusionBatchId(updated);
+    }
+
+    setForm(updated);
   }
 
-  function removeFeedRow(index) {
-    setFeedRows((prev) => {
-      const updated = prev.filter((_, i) => i !== index);
-      return updated.length > 0 ? updated : [{ ...blankFeedRow }];
-    });
+  function resetForm() {
+    const fresh = {
+      ...blank,
+      date: new Date().toISOString().split("T")[0],
+      shift: "A",
+    };
+
+    fresh.extrusionBatchId = buildExtrusionBatchId(fresh);
+
+    setForm(fresh);
+    setFeedRows([{ ...blankFeedRow }]);
   }
 
   function cleanFeedRows() {
@@ -171,31 +253,39 @@ export default function Production() {
   function feedSummary() {
     return cleanFeedRows()
       .map((r) => {
-        const ref = r.sourceBatchId ? ` (${r.sourceBatchId})` : "";
-        return `${r.materialType}${ref}: ${r.qtyKg} Kg`;
+        return `${r.materialType || r.sourceType}: ${r.qtyKg} Kg`;
       })
       .join(" + ");
   }
 
   function isRecoveryMaterial(materialType = "") {
-    return [
-      "RECOVERY_LUMPS",
-      "RECOVERY_GRANULES",
-      "REWORK_LUMPS",
-      "REWORK_GRANULES",
-      "PURGING_REWORK",
-      "COLOUR_REGRIND",
-      "FLOTATION_TANK_REGRIND",
-      "SINK_MATERIAL_REGRIND",
-      "FLOAT_MATERIAL_REGRIND",
-      "SORTER_REJECT_REGRIND",
-    ].includes(materialType);
+    const m = String(materialType || "").toUpperCase();
+
+    return (
+      m.includes("RECOVERY") ||
+      m.includes("REWORK") ||
+      m.includes("REGRIND") ||
+      m.includes("LUMPS") ||
+      m.includes("PURGING")
+    );
   }
 
   function isAdditiveMaterial(materialType = "") {
-    return ["MASTERBATCH", "ANTIOXIDANT", "ADDITIVE_PACKAGE"].includes(
-      materialType
+    const m = String(materialType || "").toUpperCase();
+
+    return (
+      m.includes("MASTERBATCH") ||
+      m.includes("ANTIOXIDANT") ||
+      m.includes("ADDITIVE")
     );
+  }
+
+  function isVirginMaterial(materialType = "") {
+    return String(materialType || "").toUpperCase().includes("VIRGIN");
+  }
+
+  function isBatteryMaterial(materialType = "") {
+    return String(materialType || "").toUpperCase().includes("BATTERY");
   }
 
   const washLoss =
@@ -243,22 +333,23 @@ export default function Production() {
     n(form.floorSpillageKg);
 
   const extrusionTotalOutput = extrusionRecoverable + extrusionNonRecoverable;
-
   const extrusionVariance = totalFeedKg - extrusionTotalOutput;
 
   const extrusionRecovery =
-    totalFeedKg > 0 ? ((n(form.fgOutputKg) / totalFeedKg) * 100).toFixed(2) : "";
+    totalFeedKg > 0
+      ? ((n(form.fgOutputKg) / totalFeedKg) * 100).toFixed(2)
+      : "";
 
   const recoveryFeedKg = cleanFeedRows()
     .filter((r) => isRecoveryMaterial(r.materialType))
     .reduce((s, r) => s + n(r.qtyKg), 0);
 
   const virginFeedKg = cleanFeedRows()
-    .filter((r) => r.materialType === "VIRGIN_PP")
+    .filter((r) => isVirginMaterial(r.materialType))
     .reduce((s, r) => s + n(r.qtyKg), 0);
 
   const batteryFeedKg = cleanFeedRows()
-    .filter((r) => r.materialType === "BATTERY_REGRIND")
+    .filter((r) => isBatteryMaterial(r.materialType))
     .reduce((s, r) => s + n(r.qtyKg), 0);
 
   const additiveFeedKg = cleanFeedRows()
@@ -277,30 +368,8 @@ export default function Production() {
   const additiveRatioPercent =
     totalFeedKg > 0 ? ((additiveFeedKg / totalFeedKg) * 100).toFixed(2) : "";
 
-  const overallQualityRating = (
-    (n(form.visualCleanlinessRating) +
-      n(form.moistureRating) +
-      n(form.odourRating) +
-      n(form.blackSpecsRating) +
-      n(form.colorConsistencyRating)) /
-    5
-  ).toFixed(2);
-
-  function commonQualityPayload() {
-    return {
-      machineRunningHours: form.machineRunningHours,
-      downtimeHours: form.downtimeHours,
-      downtimeReason: form.downtimeReason,
-      visualCleanlinessRating: form.visualCleanlinessRating,
-      moistureRating: form.moistureRating,
-      odourRating: form.odourRating,
-      blackSpecsRating: form.blackSpecsRating,
-      colorConsistencyRating: form.colorConsistencyRating,
-      overallQualityRating,
-      qcRemarks: form.qcRemarks,
-    };
-  }
-
+  
+ 
   async function submit(e) {
     e.preventDefault();
     setSaving(true);
@@ -337,7 +406,7 @@ export default function Production() {
           supervisorName: form.washSupervisorName,
           remarks: form.remarks,
           createdBy: "Production Screen",
-          ...commonQualityPayload(),
+          
         });
 
         washBatchId = wash.washBatchId || "";
@@ -366,7 +435,7 @@ export default function Production() {
           supervisorName: form.sorterSupervisorName,
           remarks: form.remarks,
           createdBy: "Production Screen",
-          ...commonQualityPayload(),
+          
         });
 
         sortingBatchId = sorting.sortingBatchId || "";
@@ -376,12 +445,29 @@ export default function Production() {
 
       if (totalFeedKg > 0 || n(form.fgOutputKg) > 0) {
         if (finalFeedRows.length === 0) {
-          setMessage("Add at least one extruder feed material.");
+          setMessage("Add at least one inventory lot in extruder feed.");
+          setSaving(false);
+          return;
+        }
+
+        if (!form.productionGrade) {
+          setMessage("Select Production Grade before saving extrusion.");
+          setSaving(false);
+          return;
+        }
+
+        const finalExtrusionBatchId =
+          form.extrusionBatchId || buildExtrusionBatchId(form);
+
+        if (!finalExtrusionBatchId) {
+          setMessage("Production Batch ID could not be generated.");
+          setSaving(false);
           return;
         }
 
         await apiCall({
           fn: "extrusion.add",
+          extrusionBatchId: finalExtrusionBatchId,
           date: form.date,
           shift: form.shift,
           periodMonth: currentMonth,
@@ -417,7 +503,7 @@ export default function Production() {
           nextProcess: "Dispatch",
           status: "READY_FOR_DISPATCH",
           createdBy: "Production Screen",
-          ...commonQualityPayload(),
+          
         });
       }
 
@@ -428,12 +514,13 @@ export default function Production() {
         n(form.fgOutputKg) <= 0
       ) {
         setMessage("Enter wash, sorting or extrusion data before saving.");
+        setSaving(false);
         return;
       }
 
       setMessage("Shift production entry saved successfully.");
-      setForm(blank);
-      setFeedRows([{ ...blankFeedRow }]);
+      await loadMasters();
+      resetForm();
     } catch (err) {
       setMessage(err.message);
     } finally {
@@ -446,14 +533,20 @@ export default function Production() {
       <h1 style={{ color: "#0f766e", marginBottom: 8 }}>Production Entry</h1>
 
       <div style={infoBox}>
-        One shift entry screen for Washline, Colour Sorter, Extrusion, QC and
-        downtime. Use <b>+ Add Feed Material</b> when reuse, rework, virgin,
-        battery or additives are added.
+       One shift entry screen for Washline, Colour Sorter and Extrusion.
+Raw Material and Finished Goods quality testing is performed separately in the Quality Workbench.
       </div>
 
       {message && <div style={messageBox}>{message}</div>}
 
-      <form onSubmit={submit}>
+      <form
+        onSubmit={submit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && e.target.tagName !== "TEXTAREA") {
+            e.preventDefault();
+          }
+        }}
+      >
         <FormSection title="Batch Information">
           <Field
             label="Date"
@@ -473,10 +566,36 @@ export default function Production() {
         </FormSection>
 
         <FormSection title="Washline">
-          <Field label="Operator" name="washOperatorName" value={form.washOperatorName} onChange={onChange} />
-          <Field label="Supervisor" name="washSupervisorName" value={form.washSupervisorName} onChange={onChange} />
-          <SelectField label="Machine" name="machineWash" value={form.machineWash} onChange={onChange} options={machines.map((m) => m.machineName)} />
-          <SelectField label="Material" name="washInputMaterial" value={form.washInputMaterial} onChange={onChange} options={categories.map((c) => c.categoryName)} />
+          <Field
+            label="Operator"
+            name="washOperatorName"
+            value={form.washOperatorName}
+            onChange={onChange}
+          />
+
+          <Field
+            label="Supervisor"
+            name="washSupervisorName"
+            value={form.washSupervisorName}
+            onChange={onChange}
+          />
+
+          <SelectField
+            label="Machine"
+            name="machineWash"
+            value={form.machineWash}
+            onChange={onChange}
+            options={machines.map((m) => m.machineName)}
+          />
+
+          <SelectField
+            label="Material"
+            name="washInputMaterial"
+            value={form.washInputMaterial}
+            onChange={onChange}
+            options={washMaterialOptions}
+          />
+
           <Field label="Input Kg" name="washInputKg" value={form.washInputKg} onChange={onChange} />
           <Field label="Washed Output Kg" name="washedOutputKg" value={form.washedOutputKg} onChange={onChange} />
           <Field label="Dust Kg" name="dustKg" value={form.dustKg} onChange={onChange} />
@@ -492,8 +611,23 @@ export default function Production() {
         <FormSection title="Colour Sorter">
           <Field label="Operator" name="sorterOperatorName" value={form.sorterOperatorName} onChange={onChange} />
           <Field label="Supervisor" name="sorterSupervisorName" value={form.sorterSupervisorName} onChange={onChange} />
-          <SelectField label="Machine" name="machineSorter" value={form.machineSorter} onChange={onChange} options={machines.map((m) => m.machineName)} />
-          <Field label="Sorter Input Material" name="sorterInputMaterial" value={form.sorterInputMaterial} onChange={onChange} />
+
+          <SelectField
+            label="Machine"
+            name="machineSorter"
+            value={form.machineSorter}
+            onChange={onChange}
+            options={machines.map((m) => m.machineName)}
+          />
+
+          <SelectField
+            label="Sorter Input Material"
+            name="sorterInputMaterial"
+            value={form.sorterInputMaterial}
+            onChange={onChange}
+            options={sortingMaterialOptions}
+          />
+
           <Field label="Input Kg" name="sorterInputKg" value={form.sorterInputKg} onChange={onChange} />
           <Field label="White Kg" name="whiteSortedKg" value={form.whiteSortedKg} onChange={onChange} />
           <Field label="All Mix Kg" name="allMixSortedKg" value={form.allMixSortedKg} onChange={onChange} />
@@ -507,70 +641,34 @@ export default function Production() {
         <FormSection title="Extrusion">
           <Field label="Operator" name="extruderOperatorName" value={form.extruderOperatorName} onChange={onChange} />
           <Field label="Supervisor" name="extruderSupervisorName" value={form.extruderSupervisorName} onChange={onChange} />
-          <SelectField label="Machine" name="machineExtruder" value={form.machineExtruder} onChange={onChange} options={machines.map((m) => m.machineName)} />
-          <Field label="Production Grade" name="productionGrade" value={form.productionGrade} onChange={onChange} />
 
-          <div style={{ gridColumn: "1 / -1", overflowX: "auto" }}>
-            <div style={miniTitle}>Extruder Feed Composition</div>
+          <SelectField
+            label="Machine"
+            name="machineExtruder"
+            value={form.machineExtruder}
+            onChange={onChange}
+            options={machines.map((m) => m.machineName)}
+          />
 
-            <table style={feedTable}>
-              <thead>
-                <tr style={feedHeader}>
-                  <th style={feedTh}>Source Type</th>
-                  <th style={feedTh}>Batch / Reference</th>
-                  <th style={feedTh}>Material</th>
-                  <th style={feedTh}>Qty Kg</th>
-                  <th style={feedTh}>Remarks</th>
-                  <th style={feedTh}>Action</th>
-                </tr>
-              </thead>
+          <SelectField
+            label="Production Grade"
+            name="productionGrade"
+            value={form.productionGrade}
+            onChange={onChange}
+            options={productionGrades}
+          />
 
-              <tbody>
-                {feedRows.map((r, i) => (
-                  <tr key={i}>
-                    <td style={feedTd}>
-                      <select value={r.sourceType} onChange={(e) => updateFeedRow(i, "sourceType", e.target.value)} style={selectStyle}>
-                        <option value="SORTING">Sorting</option>
-                        <option value="WASH">Wash</option>
-                        <option value="RECOVERY">Recovery / Rework</option>
-                        <option value="VIRGIN">Virgin</option>
-                        <option value="ADDITIVE">Additive</option>
-                        <option value="MANUAL">Manual</option>
-                      </select>
-                    </td>
+          <Field
+            label="Production Batch ID"
+            value={form.extrusionBatchId}
+            readOnly
+          />
 
-                    <td style={feedTd}>
-                      <input value={r.sourceBatchId} onChange={(e) => updateFeedRow(i, "sourceBatchId", e.target.value)} style={inputStyle} />
-                    </td>
-
-                    <td style={feedTd}>
-                      <select value={r.materialType} onChange={(e) => updateFeedRow(i, "materialType", e.target.value)} style={selectStyle}>
-                        {feedMaterials.map((m) => (
-                          <option key={m} value={m}>{m}</option>
-                        ))}
-                      </select>
-                    </td>
-
-                    <td style={feedTd}>
-                      <input type="number" value={r.qtyKg} onChange={(e) => updateFeedRow(i, "qtyKg", e.target.value)} style={inputStyle} />
-                    </td>
-
-                    <td style={feedTd}>
-                      <input value={r.remarks} onChange={(e) => updateFeedRow(i, "remarks", e.target.value)} style={inputStyle} />
-                    </td>
-
-                    <td style={feedTd}>
-                      <button type="button" onClick={() => removeFeedRow(i)} style={removeButton}>Remove</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            <button type="button" onClick={addFeedRow} style={addButton}>
-              + Add Feed Material
-            </button>
-          </div>
+          <InventoryFeedTable
+            rows={feedRows}
+            setRows={setFeedRows}
+            inventoryLots={inventoryLots}
+          />
 
           <Field label="Total Feed Kg" value={totalFeedKg.toFixed(2)} readOnly />
           <Field label="Recovery / Rework %" value={recoveryMaterialPercent} readOnly />
@@ -591,21 +689,36 @@ export default function Production() {
           <Field label="Extrusion Variance Kg" value={extrusionVariance.toFixed(2)} readOnly />
         </FormSection>
 
-        <FormSection title="QC Ratings">
-          <SelectField label="Visual Cleanliness" name="visualCleanlinessRating" value={form.visualCleanlinessRating} onChange={onChange} options={["1", "2", "3", "4", "5"]} />
-          <SelectField label="Moisture" name="moistureRating" value={form.moistureRating} onChange={onChange} options={["1", "2", "3", "4", "5"]} />
-          <SelectField label="Odour" name="odourRating" value={form.odourRating} onChange={onChange} options={["1", "2", "3", "4", "5"]} />
-          <SelectField label="Black Specs" name="blackSpecsRating" value={form.blackSpecsRating} onChange={onChange} options={["1", "2", "3", "4", "5"]} />
-          <SelectField label="Color Consistency" name="colorConsistencyRating" value={form.colorConsistencyRating} onChange={onChange} options={["1", "2", "3", "4", "5"]} />
-          <Field label="Overall Quality Rating" value={overallQualityRating} readOnly />
-          <TextAreaField label="QC Remarks" name="qcRemarks" value={form.qcRemarks} onChange={onChange} />
-        </FormSection>
+
 
         <FormSection title="Downtime & Remarks">
-          <Field label="Machine Running Hours" name="machineRunningHours" value={form.machineRunningHours} onChange={onChange} />
-          <Field label="Downtime Hours" name="downtimeHours" value={form.downtimeHours} onChange={onChange} />
-          <TextAreaField label="Downtime Reason" name="downtimeReason" value={form.downtimeReason} onChange={onChange} />
-          <TextAreaField label="Remarks" name="remarks" value={form.remarks} onChange={onChange} />
+          <Field
+            label="Machine Running Hours"
+            name="machineRunningHours"
+            value={form.machineRunningHours}
+            onChange={onChange}
+          />
+
+          <Field
+            label="Downtime Hours"
+            name="downtimeHours"
+            value={form.downtimeHours}
+            onChange={onChange}
+          />
+
+          <TextAreaField
+            label="Downtime Reason"
+            name="downtimeReason"
+            value={form.downtimeReason}
+            onChange={onChange}
+          />
+
+          <TextAreaField
+            label="Remarks"
+            name="remarks"
+            value={form.remarks}
+            onChange={onChange}
+          />
         </FormSection>
 
         <div style={{ marginTop: 25 }}>
@@ -624,6 +737,7 @@ function Field(props) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <label style={labelStyle}>{label}</label>
+
       <input
         {...inputProps}
         readOnly={readOnly}
@@ -641,6 +755,7 @@ function TextAreaField({ label, name, value, onChange, readOnly }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <label style={labelStyle}>{label}</label>
+
       <textarea
         name={name}
         value={value}
@@ -660,10 +775,14 @@ function SelectField({ label, name, value, onChange, options }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <label style={labelStyle}>{label}</label>
+
       <select name={name} value={value} onChange={onChange} style={selectStyle}>
         <option value="">Select</option>
+
         {(options || []).map((o) => (
-          <option key={o} value={o}>{o}</option>
+          <option key={o} value={o}>
+            {o}
+          </option>
         ))}
       </select>
     </div>
@@ -721,53 +840,4 @@ const saveButton = {
   borderRadius: 8,
   fontWeight: 700,
   cursor: "pointer",
-};
-
-const miniTitle = {
-  fontWeight: 800,
-  color: "#0f766e",
-  marginBottom: 10,
-};
-
-const feedTable = {
-  width: "100%",
-  borderCollapse: "collapse",
-  marginBottom: 10,
-  minWidth: 1050,
-};
-
-const feedHeader = {
-  background: "#0f766e",
-  color: "white",
-};
-
-const feedTh = {
-  padding: 10,
-  textAlign: "left",
-  fontSize: 12,
-};
-
-const feedTd = {
-  padding: 8,
-  borderBottom: "1px solid #e5e7eb",
-};
-
-const addButton = {
-  background: "#2563eb",
-  color: "white",
-  border: "none",
-  padding: "9px 14px",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const removeButton = {
-  background: "#dc2626",
-  color: "white",
-  border: "none",
-  padding: "8px 12px",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 700,
 };

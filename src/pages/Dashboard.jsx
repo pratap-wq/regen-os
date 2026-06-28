@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
-
+import { calculateCostEngine } from "../services/costEngine";
 export default function Dashboard() {
   const now = new Date();
 
   const [rmRows, setRmRows] = useState([]);
   const [washRows, setWashRows] = useState([]);
+  const [sortingRows, setSortingRows] = useState([]);
   const [extrusionRows, setExtrusionRows] = useState([]);
   const [dispatchRows, setDispatchRows] = useState([]);
   const [storesInwardRows, setStoresInwardRows] = useState([]);
@@ -37,6 +38,7 @@ export default function Dashboard() {
     const [
       rm,
       wash,
+      sorting,
       extrusion,
       dispatch,
       inward,
@@ -46,16 +48,18 @@ export default function Dashboard() {
     ] = await Promise.all([
       safeLoad("rm.list"),
       safeLoad("wash.list"),
+      safeLoad("sorting.list"),
       safeLoad("extrusion.list"),
       safeLoad("dispatch.list"),
       safeLoad("storesInward.list"),
       safeLoad("storesIssue.list"),
       safeLoad("factoryExpenses.list"),
-      safeLoad("consumables.list"),
+      safeLoad("storesMaster.list"),
     ]);
 
     setRmRows(rm);
     setWashRows(wash);
+    setSortingRows(sorting);
     setExtrusionRows(extrusion);
     setDispatchRows(dispatch);
     setStoresInwardRows(inward);
@@ -64,9 +68,15 @@ export default function Dashboard() {
     setConsumableRows(consumables);
   }
 
+  function dateForCompare(value) {
+    if (!value) return null;
+    const d = new Date(value);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
   function inSelectedMonth(row) {
-    const d = new Date(row.date || row.createdAt || "");
-    if (isNaN(d.getTime())) return false;
+    const d = dateForCompare(row.date || row.createdAt || "");
+    if (!d) return false;
 
     return (
       String(d.getFullYear()) === year &&
@@ -104,6 +114,17 @@ export default function Dashboard() {
     return totalQty > 0 ? totalValue / totalQty : 0;
   }
 
+  function getSortingOutput(row) {
+    return Number(
+      row.acceptedQtyKg ||
+        row.acceptedWeightKg ||
+        Number(row.whiteSortedKg || 0) +
+          Number(row.allMixSortedKg || 0) +
+          Number(row.commodityKg || 0) +
+          Number(row.whiteGreyKg || 0)
+    );
+  }
+
   const data = useMemo(() => {
     const m = Number(month);
     const y = Number(year);
@@ -114,6 +135,7 @@ export default function Dashboard() {
 
     const rm = rmRows.filter(inSelectedMonth);
     const wash = washRows.filter(inSelectedMonth);
+    const sorting = sortingRows.filter(inSelectedMonth);
     const extrusion = extrusionRows.filter(inSelectedMonth);
     const dispatch = dispatchRows.filter(inSelectedMonth);
     const storesInward = storesInwardRows.filter(inSelectedMonth);
@@ -129,8 +151,15 @@ export default function Dashboard() {
     const washInput = sum(wash, "inputWeightKg");
     const washOutput = sum(wash, "washedOutputKg");
 
+    const sortingInput = sum(sorting, "inputWeightKg");
+    const sortingOutput = sorting.reduce((s, r) => s + getSortingOutput(r), 0);
+
+    const extrusionInput = extrusion.reduce(
+      (s, r) => s + Number(r.inputWeightKg || r.totalInputKg || 0),
+      0
+    );
+
     const fgProduced = sum(extrusion, "fgOutputKg");
-    const extrusionInput = sum(extrusion, "inputWeightKg");
 
     const dispatched = sum(dispatch, "quantityKg");
     const revenue = dispatch.reduce(
@@ -168,7 +197,18 @@ export default function Dashboard() {
         ),
       0
     );
-
+    const costEngine = calculateCostEngine({
+      rmRows,
+      washRows,
+      sortingRows,
+      extrusionRows,
+      dispatchRows,
+      storesIssueRows,
+      factoryExpenseRows,
+      month,
+      year,
+      assumedSellingPrice: 112,
+    });
     const avgRmRate = rmPurchased > 0 ? rmValue / rmPurchased : 0;
     const avgSaleRate = dispatched > 0 ? revenue / dispatched : 0;
 
@@ -186,11 +226,16 @@ export default function Dashboard() {
       estimatedRmConsumedValue -
       storesIssueValue -
       factoryExpenseValue;
-
     const profitPerKg = fgProduced > 0 ? estimatedProfit / fgProduced : 0;
 
     const overallRecovery =
       washInput > 0 ? (fgProduced / washInput) * 100 : 0;
+
+    const washRecovery =
+      washInput > 0 ? (washOutput / washInput) * 100 : 0;
+
+    const sortingRecovery =
+      sortingInput > 0 ? (sortingOutput / sortingInput) * 100 : 0;
 
     const extrusionRecovery =
       extrusionInput > 0 ? (fgProduced / extrusionInput) * 100 : 0;
@@ -210,6 +255,8 @@ export default function Dashboard() {
     const actualDailyAvg = currentDay > 0 ? fgProduced / currentDay : 0;
 
     const rmClosing = rmPurchased - washInput;
+    const washClosing = washOutput - sortingInput;
+    const sortedClosing = sortingOutput - extrusionInput;
     const fgClosing = fgProduced - dispatched;
 
     const daily = [];
@@ -218,8 +265,8 @@ export default function Dashboard() {
     for (let day = 1; day <= currentDay; day++) {
       const actualKg = extrusion
         .filter((r) => {
-          const d = new Date(r.date || r.createdAt || "");
-          return !isNaN(d.getTime()) && d.getDate() === day;
+          const d = dateForCompare(r.date || r.createdAt || "");
+          return d && d.getDate() === day;
         })
         .reduce((s, r) => s + Number(r.fgOutputKg || 0), 0);
 
@@ -301,6 +348,8 @@ export default function Dashboard() {
       rmValue,
       washInput,
       washOutput,
+      sortingInput,
+      sortingOutput,
       fgProduced,
       extrusionInput,
       dispatched,
@@ -318,6 +367,8 @@ export default function Dashboard() {
       estimatedProfit,
       profitPerKg,
       overallRecovery,
+      washRecovery,
+      sortingRecovery,
       extrusionRecovery,
       achievement,
       phase2Achievement,
@@ -327,16 +378,20 @@ export default function Dashboard() {
       requiredRunRate,
       actualDailyAvg,
       rmClosing,
+      washClosing,
+      sortedClosing,
       fgClosing,
       daily,
       suppliers,
       topConsumables,
       daysInMonth,
       currentDay,
+      costEngine,
     };
   }, [
     rmRows,
     washRows,
+    sortingRows,
     extrusionRows,
     dispatchRows,
     storesInwardRows,
@@ -400,7 +455,9 @@ export default function Dashboard() {
       </div>
 
       <div style={kpiGrid}>
-        <KPI title="Production MTD" value={`${ton(data.fgProduced)} T`} />
+        <KPI title="Wash Output MTD" value={`${ton(data.washOutput)} T`} />
+        <KPI title="Sorting Output MTD" value={`${ton(data.sortingOutput)} T`} />
+        <KPI title="FG Production MTD" value={`${ton(data.fgProduced)} T`} />
         <KPI title="Target" value={`${ton(monthlyTargetKg)} T`} />
         <KPI title="Achievement" value={`${data.achievement.toFixed(1)}%`} />
         <KPI title="900T Progress" value={`${data.phase2Achievement.toFixed(1)}%`} />
@@ -412,12 +469,28 @@ export default function Dashboard() {
         <KPI title="Factory Cost/Kg" value={`₹ ${data.factoryCostPerKg.toFixed(2)}`} color="#7c3aed" />
         <KPI title="Estimated Profit" value={`₹ ${lakh(data.estimatedProfit)} L`} color={data.estimatedProfit >= 0 ? "#16a34a" : "#dc2626"} />
         <KPI title="Profit/Kg" value={`₹ ${data.profitPerKg.toFixed(2)}`} color={data.profitPerKg >= 0 ? "#16a34a" : "#dc2626"} />
-      </div>
+        <KPI
+          title="Manufacturing Cost/Kg"
+          value={`₹ ${data.costEngine.manufacturingCostPerKg.toFixed(2)}`}
+          color="#7c3aed"
+        />
 
+        <KPI
+          title="Effective RM Cost/Kg"
+          value={`₹ ${data.costEngine.effectiveRmCostPerKg.toFixed(2)}`}
+          color="#b45309"
+        />
+
+        <KPI
+          title="Gross Margin/Kg"
+          value={`₹ ${data.costEngine.grossMarginPerKg.toFixed(2)}`}
+          color={data.costEngine.grossMarginPerKg >= 0 ? "#16a34a" : "#dc2626"}
+        />
+      </div>
       <div style={twoCol}>
         <Panel title="Monthly Target Tracking">
           <Progress percent={data.achievement} />
-          <Metric label="Achieved" value={`${ton(data.fgProduced)} T`} />
+          <Metric label="FG Achieved" value={`${ton(data.fgProduced)} T`} />
           <Metric label="Target Till Date" value={`${ton(data.targetTillDate)} T`} />
           <Metric
             label="Gap"
@@ -451,8 +524,16 @@ export default function Dashboard() {
       <div style={twoCol}>
         <Panel title="Material Flow">
           <FlowRow label="RM Purchased" value={`${ton(data.rmPurchased)} T`} />
-          <FlowRow label="RM Consumed" value={`${ton(data.washInput)} T`} />
+          <FlowRow label="RM Consumed in Wash" value={`${ton(data.washInput)} T`} />
           <FlowRow label="RM Closing" value={`${ton(data.rmClosing)} T`} />
+          <Divider />
+          <FlowRow label="Washed Output" value={`${ton(data.washOutput)} T`} />
+          <FlowRow label="Sorting Input" value={`${ton(data.sortingInput)} T`} />
+          <FlowRow label="Washed Closing" value={`${ton(data.washClosing)} T`} />
+          <Divider />
+          <FlowRow label="Sorted Output" value={`${ton(data.sortingOutput)} T`} />
+          <FlowRow label="Extrusion Input" value={`${ton(data.extrusionInput)} T`} />
+          <FlowRow label="Sorted Closing" value={`${ton(data.sortedClosing)} T`} />
           <Divider />
           <FlowRow label="FG Produced" value={`${ton(data.fgProduced)} T`} />
           <FlowRow label="Dispatched" value={`${ton(data.dispatched)} T`} />
@@ -460,8 +541,10 @@ export default function Dashboard() {
         </Panel>
 
         <Panel title="Recovery & Cost Control">
-          <Metric label="Wash-to-FG Recovery" value={`${data.overallRecovery.toFixed(1)}%`} color="#d97706" />
+          <Metric label="Wash Recovery" value={`${data.washRecovery.toFixed(1)}%`} color="#d97706" />
+          <Metric label="Sorting Recovery" value={`${data.sortingRecovery.toFixed(1)}%`} color="#d97706" />
           <Metric label="Extrusion Recovery" value={`${data.extrusionRecovery.toFixed(1)}%`} color="#d97706" />
+          <Metric label="Wash-to-FG Recovery" value={`${data.overallRecovery.toFixed(1)}%`} color="#d97706" />
           <Metric label="Average RM Rate" value={`₹ ${data.avgRmRate.toFixed(2)}/kg`} />
           <Metric label="Average Sale Rate" value={`₹ ${data.avgSaleRate.toFixed(2)}/kg`} />
           <Metric label="Stores Cost / Kg" value={`₹ ${data.storesCostPerKg.toFixed(2)}`} color="#b45309" />

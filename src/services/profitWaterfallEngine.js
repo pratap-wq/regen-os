@@ -5,34 +5,41 @@ export function calculateProfitWaterfall(cost) {
   const recoveryLoss = n(cost.effectiveRmCostPerKg) - n(cost.avgRmCostPerKg);
   const stores = n(cost.storesCostPerKg);
   const factory = n(cost.factoryCostPerKg);
+  const fixed = n(cost.fixedCostPerKg);
   const manufacturing = n(cost.manufacturingCostPerKg);
   const selling = n(cost.avgSellingPricePerKg);
   const margin = n(cost.grossMarginPerKg);
 
   return [
     {
-      label: "RM Purchase",
+      label: "RM Landed Cost",
       type: "cost",
       value: round2(rmPurchase),
-      note: "Average raw material purchase cost/kg",
+      note: "RM purchase + Regen-paid transport",
     },
     {
       label: "Recovery Loss",
       type: "cost",
       value: round2(recoveryLoss),
-      note: "Cost added due to yield loss from RM to FG",
+      note: "Cost added due to recovery loss",
     },
     {
       label: "Stores / Consumables",
       type: "cost",
       value: round2(stores),
-      note: "Stores issue cost allocated per kg FG",
+      note: "Stores issue allocated per kg FG",
     },
     {
       label: "Factory Expenses",
       type: "cost",
       value: round2(factory),
       note: "Factory expenses allocated per kg FG",
+    },
+    {
+      label: "Fixed Costs",
+      type: "cost",
+      value: round2(fixed),
+      note: "Labour, food, rent, admin, finance and other fixed costs",
     },
     {
       label: "Manufacturing Cost",

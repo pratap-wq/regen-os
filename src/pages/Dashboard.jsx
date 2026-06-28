@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
 import { calculateCostEngine } from "../services/costEngine";
+import { calculateProfitWaterfall } from "../services/profitWaterfallEngine";
+
 export default function Dashboard() {
   const now = new Date();
 
@@ -12,6 +14,7 @@ export default function Dashboard() {
   const [storesInwardRows, setStoresInwardRows] = useState([]);
   const [storesIssueRows, setStoresIssueRows] = useState([]);
   const [factoryExpenseRows, setFactoryExpenseRows] = useState([]);
+  const [factoryCostMasterRows, setFactoryCostMasterRows] = useState([]);
   const [consumableRows, setConsumableRows] = useState([]);
 
   const [month, setMonth] = useState(
@@ -44,6 +47,7 @@ export default function Dashboard() {
       inward,
       issue,
       factoryExpenses,
+      factoryCostMaster,
       consumables,
     ] = await Promise.all([
       safeLoad("rm.list"),
@@ -54,6 +58,7 @@ export default function Dashboard() {
       safeLoad("storesInward.list"),
       safeLoad("storesIssue.list"),
       safeLoad("factoryExpenses.list"),
+      safeLoad("factoryCostMaster.list"),
       safeLoad("storesMaster.list"),
     ]);
 
@@ -65,6 +70,7 @@ export default function Dashboard() {
     setStoresInwardRows(inward);
     setStoresIssueRows(issue);
     setFactoryExpenseRows(factoryExpenses);
+    setFactoryCostMasterRows(factoryCostMaster);
     setConsumableRows(consumables);
   }
 
@@ -95,8 +101,7 @@ export default function Dashboard() {
 
     const inwardForItem = storesInwardRows.filter(
       (x) =>
-        String(x.itemName) === String(itemName) &&
-        Number(x.rate || 0) > 0
+        String(x.itemName) === String(itemName) && Number(x.rate || 0) > 0
     );
 
     const totalQty = inwardForItem.reduce(
@@ -106,8 +111,7 @@ export default function Dashboard() {
 
     const totalValue = inwardForItem.reduce(
       (s, r) =>
-        s +
-        Number(r.totalAmount || Number(r.qty || 0) * Number(r.rate || 0)),
+        s + Number(r.totalAmount || Number(r.qty || 0) * Number(r.rate || 0)),
       0
     );
 
@@ -169,8 +173,7 @@ export default function Dashboard() {
 
     const storesInwardValue = storesInward.reduce(
       (s, r) =>
-        s +
-        Number(r.totalAmount || Number(r.qty || 0) * Number(r.rate || 0)),
+        s + Number(r.totalAmount || Number(r.qty || 0) * Number(r.rate || 0)),
       0
     );
 
@@ -188,15 +191,10 @@ export default function Dashboard() {
     const factoryExpenseValue = factoryExpenses.reduce(
       (s, r) =>
         s +
-        Number(
-          r.amount ||
-            r.expenseAmount ||
-            r.totalAmount ||
-            r.value ||
-            0
-        ),
+        Number(r.amount || r.expenseAmount || r.totalAmount || r.value || 0),
       0
     );
+
     const costEngine = calculateCostEngine({
       rmRows,
       washRows,
@@ -205,10 +203,14 @@ export default function Dashboard() {
       dispatchRows,
       storesIssueRows,
       factoryExpenseRows,
+      factoryCostMasterRows,
       month,
       year,
       assumedSellingPrice: 112,
     });
+
+    const profitWaterfall = calculateProfitWaterfall(costEngine);
+
     const avgRmRate = rmPurchased > 0 ? rmValue / rmPurchased : 0;
     const avgSaleRate = dispatched > 0 ? revenue / dispatched : 0;
 
@@ -225,7 +227,9 @@ export default function Dashboard() {
       revenue -
       estimatedRmConsumedValue -
       storesIssueValue -
-      factoryExpenseValue;
+      factoryExpenseValue -
+      costEngine.fixedCostValue;
+
     const profitPerKg = fgProduced > 0 ? estimatedProfit / fgProduced : 0;
 
     const overallRecovery =
@@ -246,7 +250,6 @@ export default function Dashboard() {
     const phase2TargetKg = 900000;
     const phase2Achievement =
       phase2TargetKg > 0 ? (fgProduced / phase2TargetKg) * 100 : 0;
-
     const targetTillDate = (monthlyTargetKg / daysInMonth) * currentDay;
     const gap = fgProduced - targetTillDate;
     const balance = Math.max(monthlyTargetKg - fgProduced, 0);
@@ -387,6 +390,7 @@ export default function Dashboard() {
       daysInMonth,
       currentDay,
       costEngine,
+      profitWaterfall,
     };
   }, [
     rmRows,
@@ -397,6 +401,7 @@ export default function Dashboard() {
     storesInwardRows,
     storesIssueRows,
     factoryExpenseRows,
+    factoryCostMasterRows,
     consumableRows,
     month,
     year,
@@ -415,11 +420,7 @@ export default function Dashboard() {
         </div>
 
         <div style={filters}>
-          <select
-            value={month}
-            onChange={(e) => setMonth(e.target.value)}
-            style={filter}
-          >
+          <select value={month} onChange={(e) => setMonth(e.target.value)} style={filter}>
             <option value="01">Jan</option>
             <option value="02">Feb</option>
             <option value="03">Mar</option>
@@ -434,11 +435,7 @@ export default function Dashboard() {
             <option value="12">Dec</option>
           </select>
 
-          <select
-            value={year}
-            onChange={(e) => setYear(e.target.value)}
-            style={filter}
-          >
+          <select value={year} onChange={(e) => setYear(e.target.value)} style={filter}>
             <option>2025</option>
             <option>2026</option>
             <option>2027</option>
@@ -467,8 +464,31 @@ export default function Dashboard() {
         <KPI title="Stores Cost/Kg" value={`₹ ${data.storesCostPerKg.toFixed(2)}`} color="#b45309" />
         <KPI title="Factory Expenses" value={`₹ ${lakh(data.factoryExpenseValue)} L`} color="#7c3aed" />
         <KPI title="Factory Cost/Kg" value={`₹ ${data.factoryCostPerKg.toFixed(2)}`} color="#7c3aed" />
-        <KPI title="Estimated Profit" value={`₹ ${lakh(data.estimatedProfit)} L`} color={data.estimatedProfit >= 0 ? "#16a34a" : "#dc2626"} />
-        <KPI title="Profit/Kg" value={`₹ ${data.profitPerKg.toFixed(2)}`} color={data.profitPerKg >= 0 ? "#16a34a" : "#dc2626"} />
+
+        <KPI
+          title="Fixed Cost/Kg"
+          value={`₹ ${data.costEngine.fixedCostPerKg.toFixed(2)}`}
+          color="#9333ea"
+        />
+
+        <KPI
+          title="Fixed Cost Total"
+          value={`₹ ${lakh(data.costEngine.fixedCostValue)} L`}
+          color="#9333ea"
+        />
+
+        <KPI
+          title="Estimated Profit"
+          value={`₹ ${lakh(data.estimatedProfit)} L`}
+          color={data.estimatedProfit >= 0 ? "#16a34a" : "#dc2626"}
+        />
+
+        <KPI
+          title="Profit/Kg"
+          value={`₹ ${data.profitPerKg.toFixed(2)}`}
+          color={data.profitPerKg >= 0 ? "#16a34a" : "#dc2626"}
+        />
+
         <KPI
           title="Manufacturing Cost/Kg"
           value={`₹ ${data.costEngine.manufacturingCostPerKg.toFixed(2)}`}
@@ -507,6 +527,11 @@ export default function Dashboard() {
           <Metric label="Estimated RM Consumed" value={`₹ ${lakh(data.estimatedRmConsumedValue)} L`} />
           <Metric label="Stores Issue Value" value={`₹ ${lakh(data.storesIssueValue)} L`} color="#dc2626" />
           <Metric label="Factory Expenses" value={`₹ ${lakh(data.factoryExpenseValue)} L`} color="#7c3aed" />
+          <Metric
+            label="Fixed Cost Master"
+            value={`₹ ${lakh(data.costEngine.fixedCostValue)} L`}
+            color="#9333ea"
+          />
           <Divider />
           <Metric
             label="Estimated Profit"
@@ -549,6 +574,8 @@ export default function Dashboard() {
           <Metric label="Average Sale Rate" value={`₹ ${data.avgSaleRate.toFixed(2)}/kg`} />
           <Metric label="Stores Cost / Kg" value={`₹ ${data.storesCostPerKg.toFixed(2)}`} color="#b45309" />
           <Metric label="Factory Cost / Kg" value={`₹ ${data.factoryCostPerKg.toFixed(2)}`} color="#7c3aed" />
+          <Metric label="Fixed Cost / Kg" value={`₹ ${data.costEngine.fixedCostPerKg.toFixed(2)}`} color="#9333ea" />
+          <Metric label="Manufacturing Cost / Kg" value={`₹ ${data.costEngine.manufacturingCostPerKg.toFixed(2)}`} color="#7c3aed" />
         </Panel>
       </div>
 
@@ -575,6 +602,27 @@ export default function Dashboard() {
       </Panel>
 
       <div style={twoCol}>
+        <Panel title="Profit Waterfall - ₹/kg">
+          {data.profitWaterfall.map((x, i) => (
+            <Metric
+              key={i}
+              label={x.label}
+              value={`₹ ${Number(x.value || 0).toFixed(2)}`}
+              color={
+                x.type === "margin"
+                  ? x.value >= 0
+                    ? "#16a34a"
+                    : "#dc2626"
+                  : x.type === "revenue"
+                  ? "#2563eb"
+                  : x.type === "subtotal"
+                  ? "#7c3aed"
+                  : "#0f172a"
+              }
+            />
+          ))}
+        </Panel>
+
         <Panel title="Top Consumables This Month">
           {data.topConsumables.length === 0 ? (
             <div style={empty}>No stores issue data for selected month.</div>
@@ -584,7 +632,8 @@ export default function Dashboard() {
                 <div>
                   <b>{x.itemName}</b>
                   <div style={muted}>
-                    {x.category || "No category"} | Qty {Number(x.qty || 0).toFixed(2)}
+                    {x.category || "No category"} | Qty{" "}
+                    {Number(x.qty || 0).toFixed(2)}
                   </div>
                 </div>
                 <b>₹ {lakh(x.value)} L</b>
@@ -592,7 +641,9 @@ export default function Dashboard() {
             ))
           )}
         </Panel>
+      </div>
 
+      <div style={twoCol}>
         <Panel title="Top Procurement Sources">
           {data.suppliers.length === 0 ? (
             <div style={empty}>No supplier data for selected month.</div>
@@ -602,7 +653,9 @@ export default function Dashboard() {
                 <div>
                   <b>{s.supplier}</b>
                   <div style={muted}>
-                    Avg ₹{s.avgRate.toFixed(2)} | Moisture {s.avgMoisture.toFixed(1)}% | Contam {s.avgContamination.toFixed(1)}%
+                    Avg ₹{s.avgRate.toFixed(2)} | Moisture{" "}
+                    {s.avgMoisture.toFixed(1)}% | Contam{" "}
+                    {s.avgContamination.toFixed(1)}%
                   </div>
                 </div>
                 <b>{ton(s.qty)} T</b>

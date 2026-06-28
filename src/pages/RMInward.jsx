@@ -25,6 +25,9 @@ export default function RMInward() {
     grossWeight: "",
     tareWeight: "",
     netWeight: "",
+    transportPaidBy: "SUPPLIER",
+    transportCost: "",
+    transportRemarks: "",
     weightDifferenceKg: "",
     weightDifferencePercent: "",
     differenceType: "MATCH",
@@ -456,6 +459,36 @@ export default function RMInward() {
         <Field label="Factory Net Kg">
           <input name="netWeight" value={form.netWeight} readOnly style={readonlyStyle} />
         </Field>
+        <Field label="Transport Paid By">
+          <select
+            name="transportPaidBy"
+            value={form.transportPaidBy}
+            onChange={onChange}
+            style={inputStyle}
+          >
+            <option value="SUPPLIER">Supplier</option>
+            <option value="REGEN">Regen</option>
+          </select>
+        </Field>
+
+        <Field label="Transport Cost ₹">
+          <input
+            type="number"
+            name="transportCost"
+            value={form.transportCost}
+            onChange={onChange}
+            style={inputStyle}
+          />
+        </Field>
+
+        <Field label="Transport Remarks">
+          <input
+            name="transportRemarks"
+            value={form.transportRemarks}
+            onChange={onChange}
+            style={inputStyle}
+          />
+        </Field>
 
         <Field label="Difference Kg">
           <input value={form.weightDifferenceKg} readOnly style={differenceStyle(form.differenceType)} />
@@ -542,6 +575,13 @@ export default function RMInward() {
           { key: "color", label: "Color" },
           { key: "supplierInvoiceQtyKg", label: "Invoice Kg" },
           { key: "netWeight", label: "Factory Net Kg" },
+          { key: "transportPaidBy", label: "Transport Paid By" },
+          {
+            key: "transportCost",
+            label: "Transport Cost",
+            render: (r) => `₹ ${Number(r.transportCost || 0).toFixed(0)}`,
+            renderExport: (r) => Number(r.transportCost || 0).toFixed(0),
+          },
           { key: "weightDifferenceKg", label: "Diff Kg" },
           { key: "differenceType", label: "Type" },
           { key: "deductionRequired", label: "Deduction" },
@@ -639,6 +679,36 @@ export default function RMInward() {
 
               <Field label="Factory Net Kg">
                 <input value={editingRow.netWeight || ""} readOnly style={readonlyStyle} />
+              </Field>
+              <Field label="Transport Paid By">
+                <select
+                  name="transportPaidBy"
+                  value={editingRow.transportPaidBy || "SUPPLIER"}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                >
+                  <option value="SUPPLIER">Supplier</option>
+                  <option value="REGEN">Regen</option>
+                </select>
+              </Field>
+
+              <Field label="Transport Cost ₹">
+                <input
+                  type="number"
+                  name="transportCost"
+                  value={editingRow.transportCost || ""}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Transport Remarks">
+                <input
+                  name="transportRemarks"
+                  value={editingRow.transportRemarks || ""}
+                  onChange={onEditChange}
+                  style={inputStyle}
+                />
               </Field>
 
               <Field label="Difference Kg">

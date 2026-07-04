@@ -1,6 +1,5 @@
 const API_URL =
-  import.meta.env
-    .VITE_REGEN_OS_API_URL;
+  import.meta.env.VITE_REGEN_API_URL;
 
 export async function apiCall(
   payload = {}

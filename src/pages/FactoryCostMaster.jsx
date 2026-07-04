@@ -335,10 +335,10 @@ export default function FactoryCostMaster() {
   );
 }
 
-function Field({ label, children }) {
+function Field({ label: labelText, children }) {
   return (
     <div>
-      <div style={label}>{label}</div>
+      <div style={labelStyle}>{labelText}</div>
       {children}
     </div>
   );
@@ -421,7 +421,7 @@ const formGrid = {
   gap: 14,
 };
 
-const label = {
+const labelStyle = {
   fontSize: 12,
   color: "#475569",
   fontWeight: 700,

@@ -75,10 +75,35 @@ export default function Dashboard() {
   }
 
   function dateForCompare(value) {
-    if (!value) return null;
-    const d = new Date(value);
+  if (!value) return null;
+
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return value;
+  }
+
+  let s = String(value).trim();
+
+  // yyyy-mm-dd
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+    const d = new Date(s);
     return isNaN(d.getTime()) ? null : d;
   }
+
+  // dd/mm/yyyy
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) {
+    const [dd, mm, yyyy] = s.split("/");
+    return new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+  }
+
+  // dd-mm-yyyy
+  if (/^\d{2}-\d{2}-\d{4}$/.test(s)) {
+    const [dd, mm, yyyy] = s.split("-");
+    return new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+  }
+
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
 
   function inSelectedMonth(row) {
     const d = dateForCompare(row.date || row.createdAt || "");
@@ -142,6 +167,15 @@ export default function Dashboard() {
     const sorting = sortingRows.filter(inSelectedMonth);
     const extrusion = extrusionRows.filter(inSelectedMonth);
     const dispatch = dispatchRows.filter(inSelectedMonth);
+console.log({
+  month,
+  year,
+  rm: rm.length,
+  wash: wash.length,
+  sorting: sorting.length,
+  extrusion: extrusion.length,
+  dispatch: dispatch.length,
+});
     const storesInward = storesInwardRows.filter(inSelectedMonth);
     const storesIssue = storesIssueRows.filter(inSelectedMonth);
     const factoryExpenses = factoryExpenseRows.filter(inSelectedMonth);

@@ -15,6 +15,28 @@ export const regenTheme = {
     info: "#2563eb",
     success: "#15803d",
   },
+  modes: {
+    light: {
+      page: "#f7faf5",
+      shell: "rgba(255, 255, 255, 0.78)",
+      surface: "rgba(255, 255, 255, 0.9)",
+      elevated: "#ffffff",
+      text: "#123026",
+      subtleText: "#64748b",
+      border: "rgba(0, 93, 52, 0.14)",
+      glow: "rgba(0, 178, 107, 0.24)",
+    },
+    dark: {
+      page: "#06140f",
+      shell: "rgba(10, 31, 23, 0.76)",
+      surface: "rgba(12, 39, 29, 0.82)",
+      elevated: "#0f2a20",
+      text: "#eefbf3",
+      subtleText: "#a7c7b6",
+      border: "rgba(166, 206, 57, 0.2)",
+      glow: "rgba(166, 206, 57, 0.18)",
+    },
+  },
   fonts: {
     body:
       "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif",
@@ -30,6 +52,7 @@ export const regenTheme = {
   shadow: {
     card: "0 10px 28px rgba(0, 93, 52, 0.08)",
     soft: "0 6px 18px rgba(15, 35, 30, 0.06)",
+    premium: "0 24px 80px rgba(0, 93, 52, 0.16)",
   },
   spacing: {
     xs: 6,
@@ -39,6 +62,10 @@ export const regenTheme = {
     xl: 30,
   },
 };
+
+export function getMode(mode = "light") {
+  return regenTheme.modes[mode] || regenTheme.modes.light;
+}
 
 export const card = {
   background: regenTheme.colors.card,
@@ -119,4 +146,3 @@ export const statusPill = (tone = "success") => {
     whiteSpace: "nowrap",
   };
 };
-

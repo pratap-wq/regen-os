@@ -1,93 +1,94 @@
 import { NavLink } from "react-router-dom";
-import { regenTheme } from "../theme/regenTheme";
+import LucideIcon from "./LucideIcon";
+import { getMode, regenTheme } from "../theme/regenTheme";
 
-export default function Sidebar() {
+export default function Sidebar({ mode = "light" }) {
+  const m = getMode(mode);
   const menu = [
     {
-      section: "Dashboards",
+      section: "Command",
+      icon: "command",
       items: [
-        { label: "CEO Dashboard", path: "/dashboard" },
-        { label: "Factory Dashboard", path: "/production-control-center" },
-        { label: "Procurement Dashboard", path: "/procurement-dashboard" },
-        { label: "Inventory Dashboard", path: "/inventory-dashboard" },
-        { label: "Stores Dashboard", path: "/stores-dashboard" },
-        { label: "Live Stores", path: "/live-stores" },
+        { label: "Command Center", path: "/command-center", icon: "sparkles" },
+        { label: "CEO Cockpit", path: "/dashboard", icon: "chart" },
+        { label: "Factory Pulse", path: "/production-control-center", icon: "gauge" },
       ],
     },
     {
-      section: "Operations",
+      section: "Production Workflow",
+      icon: "factory",
       items: [
-        { label: "Production Entry", path: "/production" },
-        { label: "Production History", path: "/production-history" },
-        { label: "Traceability", path: "/traceability" },
-        { label: "Quality", path: "/quality" },
-        { label: "RM Inward", path: "/rm-inward" },
-        { label: "Dispatch", path: "/dispatch" },
+        { label: "Live Flow", path: "/production", icon: "activity" },
+        { label: "RM Inward", path: "/rm-inward", icon: "package" },
+        { label: "Color Sorter", path: "/color-sorter-batches", icon: "sparkles" },
+        { label: "Extrusion", path: "/extrusion-batches", icon: "factory" },
+        { label: "Dispatch", path: "/dispatch", icon: "truck" },
       ],
     },
     {
-      section: "Stores",
+      section: "Inventory & Stores",
+      icon: "boxes",
       items: [
-        { label: "Consumables", path: "/consumables" },
-        { label: "Stores Inward", path: "/stores-inward" },
-        { label: "Stores Issue", path: "/stores-issue" },
+        { label: "Stores Hub", path: "/stores-dashboard", icon: "boxes" },
+        { label: "Stores Inward", path: "/stores-inward", icon: "package" },
+        { label: "Stores Issue", path: "/stores-issue", icon: "truck" },
+        { label: "Live Inventory", path: "/live-inventory", icon: "activity" },
       ],
     },
     {
-      section: "RM / Procurement",
+      section: "Control Rooms",
+      icon: "lock",
       items: [
-        { label: "Suppliers", path: "/suppliers" },
-        { label: "RM List", path: "/rm-list" },
-        { label: "Live Inventory", path: "/live-inventory" },
+        { label: "Month Close", path: "/monthly-close", icon: "lock" },
+        { label: "Adjustments", path: "/inventory-adjustments", icon: "alert" },
+        { label: "Cost Control", path: "/factory-cost-master", icon: "chart" },
+        { label: "Factory Expenses", path: "/factory-expenses", icon: "package" },
       ],
     },
-   {
-  section: "Management",
-  items: [
-    { label: "Monthly Close", path: "/monthly-close" },
-    { label: "Inventory Adjustments", path: "/inventory-adjustments" },
-    { label: "Factory Expenses", path: "/factory-expenses" },
-    { label: "FG Rates", path: "/fg-rates" },
-    { label: "Production Materials", path: "/production-materials" },
-    { label: "Factory Cost Master", path: "/factory-cost-master" },
-  ],
-},
     {
-      section: "Administration",
+      section: "Masters & Admin",
+      icon: "settings",
       items: [
-        { label: "Alert Center", path: "/alert-center" },
-        { label: "Alert Settings", path: "/alert-settings" },
+        { label: "Suppliers", path: "/suppliers", icon: "boxes" },
+        { label: "RM List", path: "/rm-list", icon: "package" },
+        { label: "FG Rates", path: "/fg-rates", icon: "chart" },
+        { label: "Materials", path: "/production-materials", icon: "factory" },
+        { label: "Alerts", path: "/alert-center", icon: "alert" },
       ],
     },
   ];
 
   return (
-    <nav style={sidebar}>
+    <nav style={sidebar(m)}>
       <div style={logoBlock}>
         <img src="/assets/regen-logo.png" alt="Regen" style={logo} />
 
         <div>
-          <div style={brand}>Regen OS</div>
-          <div style={tagline}>Manufacturing Intelligence</div>
+          <div style={brand(m)}>RegenOS</div>
+          <div style={tagline}>Super App</div>
         </div>
       </div>
 
       {menu.map((section) => (
         <div key={section.section} style={sectionBlock}>
-          <div style={sectionTitle}>{section.section}</div>
+          <div style={sectionTitle(m)}>
+            <LucideIcon name={section.icon} size={13} />
+            {section.section}
+          </div>
 
           {section.items.map((item) => (
             <NavLink
               key={item.path}
               to={item.path}
               style={({ isActive }) => ({
-                ...navItem,
-                background: isActive ? "white" : "transparent",
-                color: isActive ? regenTheme.colors.deepGreen : "white",
+                ...navItem(m),
+                background: isActive ? m.elevated : "transparent",
+                color: isActive ? regenTheme.colors.green : m.text,
                 fontWeight: isActive ? 900 : 650,
-                boxShadow: isActive ? "0 8px 20px rgba(0,0,0,0.16)" : "none",
+                boxShadow: isActive ? regenTheme.shadow.soft : "none",
               })}
             >
+              <LucideIcon name={item.icon} size={16} />
               {item.label}
             </NavLink>
           ))}
@@ -103,18 +104,21 @@ export default function Sidebar() {
   );
 }
 
-const sidebar = {
+const sidebar = (m) => ({
   height: "100vh",
   width: "100%",
   overflowY: "auto",
-  background: `linear-gradient(180deg, ${regenTheme.colors.deepGreen}, #033f26)`,
-  color: "white",
+  background:
+    `linear-gradient(180deg, ${m.shell}, ${m.surface}), radial-gradient(circle at top, ${m.glow}, transparent 32%)`,
+  color: m.text,
   padding: "18px 12px",
   boxSizing: "border-box",
   position: "relative",
   zIndex: 999,
   fontFamily: regenTheme.fonts.body,
-};
+  borderRight: `1px solid ${m.border}`,
+  backdropFilter: "blur(24px)",
+});
 
 const logoBlock = {
   display: "flex",
@@ -122,7 +126,7 @@ const logoBlock = {
   gap: 10,
   marginBottom: 22,
   paddingBottom: 16,
-  borderBottom: "1px solid rgba(255,255,255,0.16)",
+  borderBottom: "1px solid rgba(0, 178, 107, 0.16)",
 };
 
 const logo = {
@@ -135,12 +139,13 @@ const logo = {
   boxShadow: "0 10px 24px rgba(0,0,0,0.18)",
 };
 
-const brand = {
+const brand = (m) => ({
   fontSize: 21,
   fontWeight: 900,
   lineHeight: 1,
   fontFamily: regenTheme.fonts.heading,
-};
+  color: m.text,
+});
 
 const tagline = {
   fontSize: 11,
@@ -153,20 +158,25 @@ const sectionBlock = {
   marginBottom: 20,
 };
 
-const sectionTitle = {
+const sectionTitle = (m) => ({
+  display: "flex",
+  alignItems: "center",
+  gap: 7,
   fontSize: 11,
   textTransform: "uppercase",
   letterSpacing: 1,
-  opacity: 0.65,
+  color: m.subtleText,
   marginBottom: 8,
   paddingLeft: 10,
   fontWeight: 900,
-};
+});
 
-const navItem = {
-  display: "block",
+const navItem = (m) => ({
+  display: "flex",
+  alignItems: "center",
+  gap: 9,
   textDecoration: "none",
-  color: "white",
+  color: m.text,
   padding: "10px 12px",
   borderRadius: 12,
   fontSize: 14,
@@ -174,7 +184,7 @@ const navItem = {
   pointerEvents: "auto",
   marginBottom: 4,
   transition: "background 120ms ease, color 120ms ease, transform 120ms ease",
-};
+});
 
 const footer = {
   marginTop: 28,

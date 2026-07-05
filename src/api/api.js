@@ -1,9 +1,18 @@
-const API_URL =
-  import.meta.env.VITE_REGEN_API_URL;
+const API_URL = String(
+  import.meta.env.VITE_REGEN_API_URL ||
+  import.meta.env.VITE_API_URL ||
+  ""
+).trim();
 
 export async function apiCall(
   payload = {}
 ) {
+
+  if (!API_URL) {
+    throw new Error(
+      "Missing VITE_REGEN_API_URL. Configure the Apps Script /exec URL before deployment."
+    );
+  }
 
   const fn = payload.fn || "";
 

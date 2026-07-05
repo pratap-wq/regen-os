@@ -235,7 +235,10 @@ export default function MonthlyAudit() {
         )
         .reduce((s, a) => s + num(a.quantityKg), 0);
 
-      const hasPhysical = String(line.physicalKg || "") !== "";
+      const hasPhysical =
+        line.physicalKg !== "" &&
+        line.physicalKg !== null &&
+        line.physicalKg !== undefined;
       const physicalKg = num(line.physicalKg);
       const varianceKg = hasPhysical ? physicalKg - num(line.systemKg) : 0;
       const remainingKg = varianceKg + approvedAdjustmentKg;
@@ -338,12 +341,24 @@ export default function MonthlyAudit() {
   }, [close, materialLines]);
 
   const hasPhysicalStock = materialLines.every((x) => x.hasPhysical);
+  const hasStoresPhysical =
+    physical.storesPhysicalValue !== "" &&
+    physical.storesPhysicalValue !== null &&
+    physical.storesPhysicalValue !== undefined;
+  const signoffsComplete = [
+    physical.productionSignoff,
+    physical.storesSignoff,
+    physical.accountsSignoff,
+    physical.qcSignoff,
+    physical.ceoSignoff,
+  ].every((value) => String(value || "").trim());
 
   const readyToClose =
     exceptions.filter((e) => e.type === "danger").length === 0 &&
     hasPhysicalStock &&
+    hasStoresPhysical &&
     materialReady &&
-    physical.ceoSignoff.trim();
+    signoffsComplete;
 
   function onPhysicalChange(e) {
     const { name, value } = e.target;

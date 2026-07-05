@@ -63,11 +63,17 @@ function doGet(e) {
     if (p.fn === "fgRates.add") return addFgRate(p);
     if (p.fn === "fgRates.list") return listMaster("FG_Rates");
     if (p.fn === "fgRates.update") return updateFgRate(p);
+    if (p.fn === "fgRate.add") return addFgRate(p);
+    if (p.fn === "fgRate.list") return listMaster("FG_Rates");
+    if (p.fn === "fgRate.update") return updateFgRate(p);
 
     // Factory Expenses
     if (p.fn === "factoryExpenses.add") return addFactoryExpense(p);
     if (p.fn === "factoryExpenses.list") return listMaster("Factory_Expenses");
     if (p.fn === "factoryExpenses.update") return updateFactoryExpense(p);
+    if (p.fn === "factoryExpense.add") return addFactoryExpense(p);
+    if (p.fn === "factoryExpense.list") return listMaster("Factory_Expenses");
+    if (p.fn === "factoryExpense.update") return updateFactoryExpense(p);
     if (p.fn === "factoryCostMaster.add") return addFactoryCostMaster(p);
     if (p.fn === "factoryCostMaster.list") return listMaster("Factory_Cost_Master");
     if (p.fn === "factoryCostMaster.update") return updateFactoryCostMaster(p);
@@ -75,6 +81,24 @@ function doGet(e) {
 if (p.fn === "factoryCostMaster.add") return addFactoryCostMaster(p);
 if (p.fn === "factoryCostMaster.list") return listMaster("Factory_Cost_Master");
 if (p.fn === "factoryCostMaster.update") return updateFactoryCostMaster(p);
+
+    // Stores / Consumables
+    if (p.fn === "storesMaster.add") return addStoresMaster(p);
+    if (p.fn === "storesMaster.list") return listMaster("Stores_Master");
+    if (p.fn === "storesMaster.update") return updateStoresMaster(p);
+    if (p.fn === "storesInward.add") return addStoresInward(p);
+    if (p.fn === "storesInward.list") return listMaster("Stores_Inward");
+    if (p.fn === "storesInward.update") return updateStoresInward(p);
+    if (p.fn === "storesIssue.add") return addStoresIssue(p);
+    if (p.fn === "storesIssue.list") return listMaster("Stores_Issue");
+    if (p.fn === "storesIssue.update") return updateStoresIssue(p);
+    if (p.fn === "consumables.add") return addStoresMaster(p);
+    if (p.fn === "consumables.list") return listMaster("Stores_Master");
+    if (p.fn === "consumables.update") return updateStoresMaster(p);
+
+    // Monthly Close v1 compatibility
+    if (p.fn === "monthClose.add") return addMonthClose(p);
+    if (p.fn === "monthClose.list") return listMaster("Month_Close");
 
     // MONTH CLOSE
     
@@ -2727,7 +2751,7 @@ function ensureMonthAuditSheets_() {
     "status",
   ]);
 
-  createSheetIfMissing_("Physical_Counts", [
+  createSheetIfMissing_("Physical_Count_Lines", [
     "countId",
     "periodMonth",
     "itemType",
@@ -2907,7 +2931,7 @@ function closeMonthAudit(data = {}) {
 
    const closingSh = getSheet("Monthly_Closings");
   const openingSh = getSheet("Opening_Balances");
-  const countSh = getSheet("Physical_Counts");
+  const countSh = getSheet("Physical_Count_Lines");
   const adjustmentSh = getSheet("Stock_Adjustments");
 
   items.forEach((x) => {
@@ -3630,56 +3654,71 @@ function approveInventoryAdjustment(data = {}) {
     });
   }
 
-  const rows = getRowsAsObjects("Inventory_Adjustments");
-  const existing = rows.find(
-    (r) => String(r.adjustmentId) === String(data.adjustmentId)
-  );
-
-  if (!existing) {
-    return output({
-      ok: false,
-      error: "Adjustment not found",
-    });
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    return output({ ok: false, error: "Adjustment approval is already in progress" });
   }
 
-  validateMonthLock(existing.periodMonth);
+  try {
+    const rows = getRowsAsObjects("Inventory_Adjustments");
+    const existing = rows.find(
+      (r) => String(r.adjustmentId) === String(data.adjustmentId)
+    );
 
-  updateById(
-    "Inventory_Adjustments",
-    "adjustmentId",
-    data.adjustmentId,
-    {
+    if (!existing) {
+      return output({ ok: false, error: "Adjustment not found" });
+    }
+
+    const status = String(existing.status || "").toUpperCase();
+    if (status === "APPROVED") {
+      return output({
+        ok: true,
+        adjustmentId: data.adjustmentId,
+        alreadyApproved: true,
+        message: "Adjustment was already approved",
+      });
+    }
+
+    if (status === "REJECTED") {
+      return output({ ok: false, error: "Rejected adjustment cannot be approved" });
+    }
+
+    validateMonthLock(existing.periodMonth);
+
+    updateById("Inventory_Adjustments", "adjustmentId", data.adjustmentId, {
       status: "APPROVED",
       approvedBy: data.approvedBy || data.createdBy || "System",
       approvedAt: new Date(),
       updatedAt: new Date(),
-    }
-  );
+    });
 
-  addInventoryLedger({
-    date: existing.date || todayYmd(),
-    module: "INVENTORY_ADJUSTMENT",
-    movementType: num(existing.quantityKg) >= 0 ? "IN" : "OUT",
-    itemType: existing.itemType || "",
-    itemName: existing.itemCode || "",
-    sourceRef: existing.sourceRef || "",
-    targetRef: existing.adjustmentId || "",
-    qtyIn: num(existing.quantityKg) > 0 ? num(existing.quantityKg) : 0,
-    qtyOut: num(existing.quantityKg) < 0 ? Math.abs(num(existing.quantityKg)) : 0,
-    unit: "Kg",
-    remarks:
-      "Approved adjustment: " +
-      (existing.adjustmentType || "") +
-      " | " +
-      (existing.reason || ""),
-    createdBy: data.approvedBy || data.createdBy || "System",
-  });
+    addInventoryLedger({
+      date: existing.date || todayYmd(),
+      module: "INVENTORY_ADJUSTMENT",
+      movementType: num(existing.quantityKg) >= 0 ? "IN" : "OUT",
+      itemType: existing.itemType || "",
+      itemName: existing.itemCode || "",
+      sourceRef: existing.sourceRef || "",
+      targetRef: existing.adjustmentId || "",
+      qtyIn: num(existing.quantityKg) > 0 ? num(existing.quantityKg) : 0,
+      qtyOut: num(existing.quantityKg) < 0 ? Math.abs(num(existing.quantityKg)) : 0,
+      unit: "Kg",
+      remarks:
+        "Approved adjustment: " +
+        (existing.adjustmentType || "") +
+        " | " +
+        (existing.reason || ""),
+      createdBy: data.approvedBy || data.createdBy || "System",
+    });
 
-  return output({
-    ok: true,
-    adjustmentId: data.adjustmentId,
-    message: "Adjustment approved and posted to inventory ledger",
-  });
+    return output({
+      ok: true,
+      adjustmentId: data.adjustmentId,
+      message: "Adjustment approved and posted to inventory ledger",
+    });
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function rejectInventoryAdjustment(data = {}) {
@@ -3692,18 +3731,46 @@ function rejectInventoryAdjustment(data = {}) {
     });
   }
 
-  return updateById(
-    "Inventory_Adjustments",
-    "adjustmentId",
-    data.adjustmentId,
-    {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    return output({ ok: false, error: "Adjustment update is already in progress" });
+  }
+
+  try {
+    const rows = getRowsAsObjects("Inventory_Adjustments");
+    const existing = rows.find(
+      (r) => String(r.adjustmentId) === String(data.adjustmentId)
+    );
+
+    if (!existing) {
+      return output({ ok: false, error: "Adjustment not found" });
+    }
+
+    const status = String(existing.status || "").toUpperCase();
+    if (status === "APPROVED") {
+      return output({ ok: false, error: "Approved adjustment cannot be rejected" });
+    }
+    if (status === "REJECTED") {
+      return output({
+        ok: true,
+        adjustmentId: data.adjustmentId,
+        alreadyRejected: true,
+        message: "Adjustment was already rejected",
+      });
+    }
+
+    validateMonthLock(existing.periodMonth);
+
+    return updateById("Inventory_Adjustments", "adjustmentId", data.adjustmentId, {
       status: "REJECTED",
       remarks: data.remarks || "Rejected",
       approvedBy: data.rejectedBy || data.createdBy || "System",
       approvedAt: new Date(),
       updatedAt: new Date(),
-    }
-  );
+    });
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function inventoryAdjustmentsSummary(data = {}) {
@@ -3787,11 +3854,11 @@ function savePhysicalCount(data = {}) {
   appendObjectRow(sh, {
     countId: generateBatchId("PC"),
     periodMonth,
-    rmPhysicalKg: num(data.rmPhysicalKg),
-    washPhysicalKg: num(data.washPhysicalKg),
-    sortingPhysicalKg: num(data.sortingPhysicalKg),
-    fgPhysicalKg: num(data.fgPhysicalKg),
-    storesPhysicalValue: num(data.storesPhysicalValue),
+    rmPhysicalKg: optionalNumber_(data.rmPhysicalKg),
+    washPhysicalKg: optionalNumber_(data.washPhysicalKg),
+    sortingPhysicalKg: optionalNumber_(data.sortingPhysicalKg),
+    fgPhysicalKg: optionalNumber_(data.fgPhysicalKg),
+    storesPhysicalValue: optionalNumber_(data.storesPhysicalValue),
     productionSignoff: data.productionSignoff || "",
     storesSignoff: data.storesSignoff || "",
     accountsSignoff: data.accountsSignoff || "",
@@ -3804,4 +3871,9 @@ function savePhysicalCount(data = {}) {
   });
 
   return output({ ok: true, message: "Physical stock saved", periodMonth });
+}
+
+function optionalNumber_(value) {
+  if (value === "" || value === null || value === undefined) return "";
+  return num(value);
 }

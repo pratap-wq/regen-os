@@ -1,0 +1,4 @@
+# Code.js is the only Apps Script backend source of truth.
+.clasp.json
+.claspignore
+Code.gs

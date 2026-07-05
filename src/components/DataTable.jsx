@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import DateQuickFilters from "./DateQuickFilters";
+import { button, card, input, regenTheme } from "../theme/regenTheme";
 
 export default function DataTable({
   title = "",
@@ -216,22 +218,17 @@ export default function DataTable({
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search all..."
+            placeholder="Search or scan..."
             style={searchStyle}
           />
 
-          <input
-            type="date"
-            value={fromDate}
-            onChange={(e) => setFromDate(e.target.value)}
-            style={dateStyle}
-          />
-
-          <input
-            type="date"
-            value={toDate}
-            onChange={(e) => setToDate(e.target.value)}
-            style={dateStyle}
+          <DateQuickFilters
+            fromDate={fromDate}
+            toDate={toDate}
+            onChange={({ fromDate: nextFrom, toDate: nextTo }) => {
+              setFromDate(nextFrom);
+              setToDate(nextTo);
+            }}
           />
 
           <button onClick={clearFilters} style={secondaryButton}>
@@ -310,7 +307,7 @@ export default function DataTable({
                     <div style={actionWrap}>
                       {onEdit && (
                         <button onClick={() => onEdit(r)} style={editButtonStyle}>
-                          ✏ Edit
+                          Edit
                         </button>
                       )}
 
@@ -348,13 +345,10 @@ function safeFileName(name) {
 }
 
 const cardStyle = {
-  background: "white",
+  ...card,
   padding: 0,
-  borderRadius: 14,
-  boxShadow: "0 6px 18px rgba(15,23,42,0.06)",
   width: "100%",
   boxSizing: "border-box",
-  border: "1px solid #e5e7eb",
   overflow: "hidden",
 };
 
@@ -362,14 +356,14 @@ const topBarStyle = {
   position: "sticky",
   top: 0,
   zIndex: 20,
-  background: "white",
+  background: "linear-gradient(180deg,#ffffff,#fbfef8)",
   display: "flex",
   justifyContent: "space-between",
   alignItems: "flex-start",
   padding: 16,
   gap: 16,
   flexWrap: "wrap",
-  borderBottom: "1px solid #e5e7eb",
+  borderBottom: `1px solid ${regenTheme.colors.line}`,
 };
 
 const toolbarStyle = {
@@ -380,47 +374,32 @@ const toolbarStyle = {
 };
 
 const searchStyle = {
-  padding: 10,
-  borderRadius: 8,
-  border: "1px solid #cbd5e1",
+  ...input,
   width: 220,
   maxWidth: "100%",
-};
-
-const dateStyle = {
-  padding: 10,
-  borderRadius: 8,
-  border: "1px solid #cbd5e1",
+  height: 38,
 };
 
 const secondaryButton = {
-  background: "#64748b",
-  color: "white",
-  border: "none",
-  padding: "10px 14px",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 700,
+  ...button.secondary,
+  background: "#f1f5f9",
+  borderColor: "#cbd5e1",
+  color: regenTheme.colors.ink,
+  minHeight: 38,
 };
 
 const exportStyle = {
-  background: "#2563eb",
-  color: "white",
-  border: "none",
-  padding: "10px 14px",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 700,
+  ...button.secondary,
+  background: "#eef6ff",
+  borderColor: "#bfdbfe",
+  color: "#1d4ed8",
+  minHeight: 38,
 };
 
 const printStyle = {
-  background: "#0f766e",
-  color: "white",
-  border: "none",
-  padding: "10px 14px",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 700,
+  ...button.primary,
+  minHeight: 38,
+  padding: "8px 14px",
 };
 
 const tableWrapStyle = {
@@ -438,12 +417,12 @@ const tableStyle = {
 };
 
 const headerRowStyle = {
-  background: "#0f766e",
+  background: regenTheme.colors.deepGreen,
   color: "white",
 };
 
 const filterRowStyle = {
-  background: "#f8fafc",
+  background: regenTheme.colors.muted,
 };
 
 const th = {
@@ -451,7 +430,7 @@ const th = {
   textAlign: "left",
   position: "sticky",
   top: 0,
-  background: "#0f766e",
+  background: regenTheme.colors.deepGreen,
   zIndex: 10,
   whiteSpace: "nowrap",
 };
@@ -471,9 +450,9 @@ const filterCell = {
   padding: 6,
   position: "sticky",
   top: 40,
-  background: "#f8fafc",
+  background: regenTheme.colors.muted,
   zIndex: 9,
-  borderBottom: "1px solid #e5e7eb",
+  borderBottom: `1px solid ${regenTheme.colors.line}`,
 };
 
 const columnFilterInput = {
@@ -481,13 +460,13 @@ const columnFilterInput = {
   minWidth: 90,
   padding: 7,
   borderRadius: 6,
-  border: "1px solid #cbd5e1",
+  border: `1px solid ${regenTheme.colors.line}`,
   boxSizing: "border-box",
   fontSize: 12,
 };
 
 const rowStyle = {
-  borderBottom: "1px solid #e5e7eb",
+  borderBottom: `1px solid ${regenTheme.colors.line}`,
 };
 
 const td = {
@@ -504,23 +483,15 @@ const actionWrap = {
 };
 
 const editButtonStyle = {
-  background: "#2563eb",
-  color: "white",
-  border: "none",
+  ...button.secondary,
   padding: "6px 10px",
-  borderRadius: 6,
-  cursor: "pointer",
-  fontWeight: 700,
+  minHeight: 32,
 };
 
 const deleteButtonStyle = {
-  background: "#dc2626",
-  color: "white",
-  border: "none",
+  ...button.danger,
   padding: "6px 10px",
-  borderRadius: 6,
-  cursor: "pointer",
-  fontWeight: 700,
+  minHeight: 32,
 };
 
 const emptyStyle = {
@@ -539,7 +510,7 @@ const bottomBarStyle = {
   position: "sticky",
   bottom: 0,
   background: "white",
-  borderTop: "1px solid #e5e7eb",
+  borderTop: `1px solid ${regenTheme.colors.line}`,
   padding: "10px 16px",
   display: "flex",
   justifyContent: "space-between",

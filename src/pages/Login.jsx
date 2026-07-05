@@ -1,4 +1,5 @@
 import { loginWithGoogle } from "../firebase";
+import { button, card, regenTheme } from "../theme/regenTheme";
 
 export default function Login() {
 
@@ -26,48 +27,57 @@ export default function Login() {
         display: "flex",
         justifyContent: "center",
         alignItems: "center",
-        background: "#f3f4f6",
+        background:
+          "radial-gradient(circle at top left, rgba(166,206,57,0.24), transparent 28%), linear-gradient(135deg, #f7faf5, #ecfdf5)",
+        fontFamily: regenTheme.fonts.body,
       }}
     >
 
       <div
         style={{
+          ...card,
           background: "white",
           padding: 40,
-          borderRadius: 12,
-          width: 350,
+          width: 380,
+          maxWidth: "calc(100vw - 32px)",
           textAlign: "center",
-          boxShadow: "0 2px 20px rgba(0,0,0,0.08)",
         }}
       >
+        <img
+          src="/assets/regen-logo.png"
+          alt="Regen Plastics"
+          style={{
+            width: 74,
+            height: 74,
+            objectFit: "contain",
+            marginBottom: 12,
+          }}
+        />
 
         <h1
           style={{
             marginBottom: 10,
-            color: "#0f766e",
+            color: regenTheme.colors.deepGreen,
+            fontFamily: regenTheme.fonts.heading,
+            fontWeight: 900,
           }}
         >
-          Regen OS
+          RegenOS
         </h1>
 
         <p
           style={{
-            color: "#666",
+            color: regenTheme.colors.slate,
             marginBottom: 30,
           }}
         >
-          Internal ERP Access
+          v1.0 RC1 · Factory ERP Access
         </p>
 
         <button
           onClick={handleLogin}
           style={{
-            background: "#0f766e",
-            color: "white",
-            border: "none",
-            padding: "14px 20px",
-            borderRadius: 8,
-            cursor: "pointer",
+            ...button.primary,
             width: "100%",
             fontSize: 16,
           }}

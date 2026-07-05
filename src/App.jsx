@@ -7,6 +7,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { auth, logout } from "./firebase";
 
 import Sidebar from "./components/Sidebar";
+import { button, regenTheme } from "./theme/regenTheme";
 
 import Login from "./pages/Login";
 import Traceability from "./pages/Traceability";
@@ -63,7 +64,7 @@ export default function App() {
   }, []);
 
   if (loading) {
-    return <div style={loadingStyle}>Loading Regen OS...</div>;
+    return <div style={loadingStyle}>Loading RegenOS...</div>;
   }
 
   if (!user) {
@@ -83,7 +84,7 @@ export default function App() {
               <div style={brandTitle}>Regen OS</div>
 
               <div style={brandSub}>
-                Logged in: <b>{user.email}</b>
+                RegenOS v1.0 RC1 · Logged in: <b>{user.email}</b>
               </div>
             </div>
 
@@ -159,6 +160,8 @@ export default function App() {
 const loadingStyle = {
   padding: 40,
   fontSize: 18,
+  color: regenTheme.colors.deepGreen,
+  fontFamily: regenTheme.fonts.body,
 };
 
 const appShell = {
@@ -167,8 +170,10 @@ const appShell = {
   height: "100vh",
   margin: 0,
   padding: 0,
-  background: "#f8fafc",
+  background: regenTheme.colors.page,
   overflow: "hidden",
+  fontFamily: regenTheme.fonts.body,
+  color: regenTheme.colors.black,
 };
 
 const sideWrap = {
@@ -184,7 +189,7 @@ const sideWrap = {
   position: "sticky",
   top: 0,
   alignSelf: "flex-start",
-  background: "#005d34",
+  background: regenTheme.colors.deepGreen,
 };
 
 const mainWrap = {
@@ -199,47 +204,45 @@ const mainWrap = {
 };
 
 const topBar = {
-  background: "white",
-  padding: "12px 22px",
+  background: "rgba(255, 255, 255, 0.94)",
+  padding: "14px 24px",
   display: "flex",
   justifyContent: "space-between",
   alignItems: "center",
-  borderBottom: "1px solid #e5e7eb",
-  boxShadow: "0 2px 10px rgba(15,23,42,0.04)",
+  borderBottom: `1px solid ${regenTheme.colors.line}`,
+  boxShadow: regenTheme.shadow.soft,
   flexShrink: 0,
   position: "sticky",
   top: 0,
   zIndex: 150,
+  backdropFilter: "blur(10px)",
 };
 
 const brandTitle = {
-  fontWeight: 800,
-  fontSize: 18,
-  color: "#0f766e",
+  fontWeight: 900,
+  fontSize: 20,
+  color: regenTheme.colors.deepGreen,
+  fontFamily: regenTheme.fonts.heading,
 };
 
 const brandSub = {
   fontSize: 13,
-  color: "#64748b",
+  color: regenTheme.colors.slate,
   marginTop: 3,
 };
 
 const logoutButton = {
-  background: "#dc2626",
-  color: "white",
-  border: "none",
-  padding: "10px 16px",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 700,
+  ...button.danger,
+  background: "#fff1f2",
 };
 
 const pageWrap = {
   flex: 1,
   overflowX: "hidden",
   overflowY: "auto",
-  padding: "16px 20px",
+  padding: "18px 22px",
   width: "100%",
   boxSizing: "border-box",
-  background: "#f8fafc",
+  background:
+    "radial-gradient(circle at top left, rgba(166,206,57,0.18), transparent 28%), #f7faf5",
 };

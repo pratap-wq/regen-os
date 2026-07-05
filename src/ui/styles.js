@@ -1,100 +1,64 @@
+import { button, card, input, regenTheme } from "../theme/regenTheme";
+
 export const pageStyle = {
-  padding: 16,
+  padding: 18,
+  background: regenTheme.colors.page,
+  fontFamily: regenTheme.fonts.body,
 };
 
 export const sectionCard = {
-  background: "white",
-  border: "1px solid #e5e7eb",
-  borderRadius: 12,
-  padding: 16,
-  marginBottom: 16,
+  ...card,
+  padding: 18,
+  marginBottom: 18,
 };
 
 export const sectionTitle = {
-  fontSize: 18,
-  fontWeight: 700,
+  fontSize: 19,
+  fontWeight: 900,
   marginBottom: 14,
-  color: "#0f172a",
+  color: regenTheme.colors.deepGreen,
+  fontFamily: regenTheme.fonts.heading,
 };
 
 export const formGrid = {
   display: "grid",
-  gridTemplateColumns:
-    "repeat(auto-fit,minmax(180px,1fr))",
-  gap: 12,
+  gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))",
+  gap: 14,
 };
 
-export const inputStyle = {
-  width: "100%",
-  padding: "8px 10px",
-  height: 38,
-  borderRadius: 6,
-  border: "1px solid #cbd5e1",
-  fontSize: 13,
-  boxSizing: "border-box",
-  background: "white",
-};
+export const inputStyle = input;
 
 export const textareaStyle = {
-  ...inputStyle,
-  height: 70,
+  ...input,
+  height: 76,
   resize: "vertical",
   paddingTop: 10,
 };
 
 export const readonlyStyle = {
-  ...inputStyle,
-  background: "#f8fafc",
-  color: "#475569",
-  fontWeight: 600,
+  ...input,
+  background: regenTheme.colors.muted,
+  color: regenTheme.colors.ink,
+  fontWeight: 800,
 };
 
-export const primaryButton = {
-  background: "#005d34",
-  color: "white",
-  border: "none",
-  borderRadius: 8,
-  padding: "10px 16px",
-  fontWeight: 600,
-  cursor: "pointer",
-  height: 40,
-};
+export const primaryButton = button.primary;
 
 export const warningButton = {
-  background: "#ea580c",
-  color: "white",
-  border: "none",
-  borderRadius: 8,
-  padding: "10px 16px",
-  fontWeight: 600,
-  cursor: "pointer",
-  height: 40,
+  ...button.primary,
+  background: regenTheme.colors.warning,
+  boxShadow: "none",
 };
 
-export const dangerButton = {
-  background: "#dc2626",
-  color: "white",
-  border: "none",
-  borderRadius: 8,
-  padding: "8px 12px",
-  fontWeight: 600,
-  cursor: "pointer",
-};
+export const dangerButton = button.danger;
 
 export const editButton = {
-  background: "#2563eb",
-  color: "white",
-  border: "none",
-  borderRadius: 8,
-  padding: "8px 12px",
-  fontWeight: 600,
-  cursor: "pointer",
+  ...button.secondary,
+  background: "#ecfdf5",
 };
 
 export const tableCard = {
-  background: "white",
-  border: "1px solid #e5e7eb",
-  borderRadius: 12,
+  ...card,
   overflowX: "auto",
 };
 
@@ -104,17 +68,19 @@ export const tableStyle = {
 };
 
 export const thStyle = {
-  background: "#005d34",
+  background: regenTheme.colors.deepGreen,
   color: "white",
-  padding: "10px 12px",
+  padding: "11px 12px",
   textAlign: "left",
   fontSize: 12,
+  letterSpacing: 0.2,
 };
 
 export const tdStyle = {
   padding: "10px 12px",
-  borderBottom: "1px solid #e5e7eb",
+  borderBottom: `1px solid ${regenTheme.colors.line}`,
   fontSize: 13,
+  color: regenTheme.colors.ink,
 };
 
 export const badge = (color) => ({
@@ -123,5 +89,5 @@ export const badge = (color) => ({
   borderRadius: 999,
   padding: "4px 10px",
   fontSize: 11,
-  fontWeight: 700,
+  fontWeight: 800,
 });

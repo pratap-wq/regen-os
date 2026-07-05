@@ -1,4 +1,5 @@
 import { NavLink } from "react-router-dom";
+import { regenTheme } from "../theme/regenTheme";
 
 export default function Sidebar() {
   const menu = [
@@ -81,8 +82,10 @@ export default function Sidebar() {
               to={item.path}
               style={({ isActive }) => ({
                 ...navItem,
-                background: isActive ? "rgba(255,255,255,0.2)" : "transparent",
+                background: isActive ? "white" : "transparent",
+                color: isActive ? regenTheme.colors.deepGreen : "white",
                 fontWeight: isActive ? 900 : 650,
+                boxShadow: isActive ? "0 8px 20px rgba(0,0,0,0.16)" : "none",
               })}
             >
               {item.label}
@@ -92,9 +95,9 @@ export default function Sidebar() {
       ))}
 
       <div style={footer}>
-        RegenOS v3.5
+        RegenOS v1.0 RC1
         <br />
-        Recycling Operations Platform
+        Factory testing build
       </div>
     </nav>
   );
@@ -104,12 +107,13 @@ const sidebar = {
   height: "100vh",
   width: "100%",
   overflowY: "auto",
-  background: "#005d34",
+  background: `linear-gradient(180deg, ${regenTheme.colors.deepGreen}, #033f26)`,
   color: "white",
-  padding: "16px 12px",
+  padding: "18px 12px",
   boxSizing: "border-box",
   position: "relative",
   zIndex: 999,
+  fontFamily: regenTheme.fonts.body,
 };
 
 const logoBlock = {
@@ -118,7 +122,7 @@ const logoBlock = {
   gap: 10,
   marginBottom: 22,
   paddingBottom: 16,
-  borderBottom: "1px solid rgba(255,255,255,0.14)",
+  borderBottom: "1px solid rgba(255,255,255,0.16)",
 };
 
 const logo = {
@@ -126,20 +130,23 @@ const logo = {
   height: 46,
   objectFit: "contain",
   background: "white",
-  borderRadius: 10,
+  borderRadius: 14,
   padding: 4,
+  boxShadow: "0 10px 24px rgba(0,0,0,0.18)",
 };
 
 const brand = {
   fontSize: 21,
   fontWeight: 900,
   lineHeight: 1,
+  fontFamily: regenTheme.fonts.heading,
 };
 
 const tagline = {
   fontSize: 11,
   opacity: 0.8,
   marginTop: 4,
+  color: "#d9f99d",
 };
 
 const sectionBlock = {
@@ -153,18 +160,20 @@ const sectionTitle = {
   opacity: 0.65,
   marginBottom: 8,
   paddingLeft: 10,
+  fontWeight: 900,
 };
 
 const navItem = {
   display: "block",
   textDecoration: "none",
   color: "white",
-  padding: "11px 12px",
-  borderRadius: 9,
+  padding: "10px 12px",
+  borderRadius: 12,
   fontSize: 14,
   cursor: "pointer",
   pointerEvents: "auto",
   marginBottom: 4,
+  transition: "background 120ms ease, color 120ms ease, transform 120ms ease",
 };
 
 const footer = {

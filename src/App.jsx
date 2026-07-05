@@ -30,6 +30,7 @@ import ColorSorterBatches from "./pages/ColorSorterBatches";
 import ProductionMaterials from "./pages/ProductionMaterials";
 import LiveInventory from "./pages/LiveInventory";
 import MonthlyAudit from "./pages/MonthlyAudit";
+import InventoryAdjustments from "./pages/InventoryAdjustments";
 import Quality from "./pages/Quality";
 import FGRates from "./pages/FGRates";
 import FactoryExpenses from "./pages/FactoryExpenses";
@@ -138,7 +139,8 @@ export default function App() {
               <Route path="/stores-dashboard" element={<StoresCosting />} />
               <Route path="/stores-costing" element={<StoresCosting />} />
 
-              <Route path="/monthly-audit" element={<MonthlyAudit />} />
+              <Route path="/monthly-close" element={<MonthlyAudit />} />
+              <Route path="/inventory-adjustments" element={<InventoryAdjustments />} />
               <Route path="/fg-rates" element={<FGRates />} />
               <Route path="/factory-expenses" element={<FactoryExpenses />} />
               <Route path="/factory-cost-master" element={<FactoryCostMaster />} />

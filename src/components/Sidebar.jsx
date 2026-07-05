@@ -40,16 +40,17 @@ export default function Sidebar() {
         { label: "Live Inventory", path: "/live-inventory" },
       ],
     },
-    {
-      section: "Management",
-      items: [
-        { label: "Monthly Audit", path: "/monthly-audit" },
-        { label: "Factory Expenses", path: "/factory-expenses" },
-        { label: "FG Rates", path: "/fg-rates" },
-        { label: "Production Materials", path: "/production-materials" },
-        { label: "Factory Cost Master", path: "/factory-cost-master" },
-      ],
-    },
+   {
+  section: "Management",
+  items: [
+    { label: "Monthly Close", path: "/monthly-close" },
+    { label: "Inventory Adjustments", path: "/inventory-adjustments" },
+    { label: "Factory Expenses", path: "/factory-expenses" },
+    { label: "FG Rates", path: "/fg-rates" },
+    { label: "Production Materials", path: "/production-materials" },
+    { label: "Factory Cost Master", path: "/factory-cost-master" },
+  ],
+},
     {
       section: "Administration",
       items: [
@@ -91,7 +92,7 @@ export default function Sidebar() {
       ))}
 
       <div style={footer}>
-        RegenOS v3.4
+        RegenOS v3.5
         <br />
         Recycling Operations Platform
       </div>

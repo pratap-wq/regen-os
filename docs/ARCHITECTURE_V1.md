@@ -15,6 +15,60 @@ RegenOS v1 keeps the familiar operator workflow and stabilizes the data model be
 | Production recipes | `Production_Recipes` and `Recipe_Components` |
 | Quality results | `RM_Quality` and `FG_Quality` |
 
+## Inventory-First Manufacturing Doctrine
+
+Every manufacturing process in RegenOS is an inventory transformation.
+
+A process consumes one or more inventory materials and produces one or more inventory materials.
+
+Operators work from available inventory, not historical batch lists.
+
+Batch/source history remains preserved for:
+
+- QC traceability
+- audit
+- investigation
+- recall
+- month-end reconciliation
+
+Primary operating view:
+
+- RM available
+- WIP available
+- FG available
+- Rework available
+- Waste available
+- Stores available
+
+Every production entry must post:
+
+- inventory consumed
+- inventory produced
+- variance/loss/rework where applicable
+
+Operators select:
+
+- process
+- machine
+- input material from available inventory
+- output material
+- quantities
+
+Operators must not select:
+
+- old GRNs
+- historical wash batches
+- historical sorting batches
+- FG lots
+
+Traceability is drill-down only:
+
+- Why is this stock available?
+- Which receiving/production/dispatch records created it?
+- Which quality result is linked?
+
+This doctrine is mandatory for RegenOS v1.
+
 ## Material Master
 
 `Material_Master` is the only approved source for inventory-affecting material definitions.

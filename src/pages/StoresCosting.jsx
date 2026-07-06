@@ -35,7 +35,7 @@ export default function StoresCosting() {
       const [inward, issue, master, extrusion] = await Promise.all([
         safeLoad("storesInward.list"),
         safeLoad("storesIssue.list"),
-        safeLoad("consumables.list"),
+        safeLoad("storesMaster.list"),
         safeLoad("extrusion.list"),
       ]);
 
@@ -235,6 +235,26 @@ export default function StoresCosting() {
 
     const stockMap = {};
 
+    consumables.forEach((r) => {
+      const item = r.itemName || r.item || r.name || "";
+      if (!item) return;
+      if (String(r.status || "").toUpperCase() === "DELETED") return;
+
+      stockMap[item] = {
+        itemName: item,
+        category: r.category || "",
+        inwardQty: 0,
+        issueQty: 0,
+        stockQty: 0,
+        stockValue: 0,
+        rate: 0,
+        minLevel: Number(r.minLevel || 0),
+        maxLevel: Number(r.maxLevel || 0),
+        reorderLevel: Number(r.reorderLevel || r.minLevel || 0),
+        unit: r.unit || "",
+      };
+    });
+
     inwardRows.forEach((r) => {
       const item = r.itemName || "Unknown";
       const value = Number(
@@ -250,9 +270,15 @@ export default function StoresCosting() {
           stockQty: 0,
           stockValue: 0,
           rate: 0,
+          minLevel: 0,
+          maxLevel: 0,
+          reorderLevel: 0,
+          unit: r.unit || "",
         };
       }
 
+      stockMap[item].category = stockMap[item].category || r.category || "";
+      stockMap[item].unit = stockMap[item].unit || r.unit || "";
       stockMap[item].inwardQty += Number(r.qty || 0);
       stockMap[item].stockValue += value;
     });
@@ -271,9 +297,15 @@ export default function StoresCosting() {
           stockQty: 0,
           stockValue: 0,
           rate,
+          minLevel: 0,
+          maxLevel: 0,
+          reorderLevel: 0,
+          unit: r.unit || "",
         };
       }
 
+      stockMap[item].category = stockMap[item].category || r.category || "";
+      stockMap[item].unit = stockMap[item].unit || r.unit || "";
       stockMap[item].issueQty += Number(r.qty || 0);
       stockMap[item].stockValue -= value;
     });
@@ -281,11 +313,18 @@ export default function StoresCosting() {
     Object.values(stockMap).forEach((x) => {
       x.stockQty = x.inwardQty - x.issueQty;
       x.rate = getItemRate(x.itemName);
+      x.currentQty = x.inwardQty;
+      x.usedQty = x.issueQty;
+      x.availableQty = x.stockQty;
+      x.status = stockStatus(x.availableQty, x.minLevel, x.reorderLevel);
     });
 
     const stockList = Object.values(stockMap)
-      .sort((a, b) => b.stockValue - a.stockValue)
-      .slice(0, 50);
+      .sort(
+        (a, b) =>
+          statusRank(a.status) - statusRank(b.status) ||
+          String(a.itemName).localeCompare(String(b.itemName))
+      );
 
     return {
       openingStockValue,
@@ -401,14 +440,27 @@ export default function StoresCosting() {
           />
         </Panel>
 
-        <Panel title="Current Stores Stock Value">
+        <Panel title="Stores Stock Status">
           <SimpleTable
-            columns={["Item", "Stock Qty", "Value", "Rate"]}
+            columns={[
+              "Item",
+              "Current Quantity",
+              "Used Quantity",
+              "Available Quantity",
+              "Minimum Level",
+              "Maximum Level",
+              "Reorder Level",
+              "Status",
+            ]}
             rows={data.stockList.map((x) => [
               x.itemName,
-              qty(x.stockQty),
-              `₹ ${lakh(x.stockValue)} L`,
-              `₹ ${Number(x.rate || 0).toFixed(2)}`,
+              qty(x.currentQty),
+              qty(x.usedQty),
+              qty(x.availableQty),
+              qty(x.minLevel),
+              qty(x.maxLevel),
+              qty(x.reorderLevel),
+              x.status,
             ])}
           />
         </Panel>
@@ -518,6 +570,22 @@ function ton(value) {
 
 function qty(value) {
   return Number(value || 0).toFixed(2);
+}
+
+function stockStatus(availableQty, minLevel, reorderLevel) {
+  const available = Number(availableQty || 0);
+  const reorder = Number(reorderLevel || 0);
+  const minimum = Number(minLevel || 0);
+
+  if (reorder > 0 && available <= reorder) return "🔴 Reorder";
+  if (minimum > 0 && available <= minimum) return "🟡 Low";
+  return "🟢 OK";
+}
+
+function statusRank(status) {
+  if (String(status || "").includes("Reorder")) return 1;
+  if (String(status || "").includes("Low")) return 2;
+  return 3;
 }
 
 const page = {

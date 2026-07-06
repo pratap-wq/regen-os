@@ -39,6 +39,7 @@ export default function Dispatch() {
 
     dispatchLines: JSON.stringify([blankLine]),
     quantityKg: "",
+    material: "",
     grade: "",
     lotNo: "",
     sourceExtrusionBatchId: "",
@@ -184,20 +185,35 @@ export default function Dispatch() {
       );
   }, [extrusionRows, rows, editingRow]);
 
-  const filteredLiveLots = useMemo(() => {
-    return allLiveLots
-      .filter((x) => {
-        if (!form.productionDate) return true;
-        return String(x.productionDate || "") === String(form.productionDate);
+  const materialInventory = useMemo(() => {
+    const map = {};
+
+    allLiveLots.forEach((lot) => {
+      const material = String(lot.productionGrade || lot.grade || "").trim();
+      if (!material) return;
+
+      if (!map[material]) {
+        map[material] = {
+          material,
+          availableKg: 0,
+          lots: 0,
+        };
+      }
+
+      map[material].availableKg += Number(lot.available || 0);
+      map[material].lots += 1;
+    });
+
+    return Object.values(map).sort((a, b) =>
+      String(a.material).localeCompare(String(b.material), undefined, {
+        numeric: true,
       })
-      .filter((x) => {
-        if (!form.productionShift) return true;
-        return (
-          String(x.productionShift || "").toUpperCase() ===
-          String(form.productionShift || "").toUpperCase()
-        );
-      });
-  }, [allLiveLots, form.productionDate, form.productionShift]);
+    );
+  }, [allLiveLots]);
+
+  const selectedInventory = materialInventory.find(
+    (x) => String(x.material) === String(form.material || form.grade || "")
+  );
 
   function getLineTotal(lines = dispatchLines) {
     return lines.reduce((s, r) => s + Number(r.dispatchQtyKg || 0), 0);
@@ -241,7 +257,7 @@ export default function Dispatch() {
 
     updated.quantityKg = totalQty.toFixed(2);
     updated.dispatchLines = JSON.stringify(cleanLines);
-    updated.grade = getGradeSummary(cleanLines);
+    updated.grade = updated.material || getGradeSummary(cleanLines);
     updated.lotNo = getLotSummary(cleanLines);
     updated.sourceExtrusionBatchId = cleanLines
       .map((x) => x.sourceExtrusionBatchId)
@@ -257,117 +273,99 @@ export default function Dispatch() {
       [e.target.name]: e.target.value,
     };
 
-    if (
-      e.target.name === "productionDate" ||
-      e.target.name === "productionShift"
-    ) {
-      updated.dispatchId = makeDispatchId(
-        e.target.name === "productionDate" ? e.target.value : form.productionDate,
-        e.target.name === "productionShift" ? e.target.value : form.productionShift
-      );
-
-      setDispatchLines([{ ...blankLine }]);
-      updated = autoCalculate(updated, [{ ...blankLine }]);
-      setForm(updated);
-      return;
+    if (e.target.name === "material") {
+      updated.grade = e.target.value;
+      updated.lotNo = "";
+      updated.sourceExtrusionBatchId = "";
+      setDispatchLines([{ ...blankLine, grade: e.target.value }]);
     }
 
-    updated = autoCalculate(updated, dispatchLines);
+    if (e.target.name === "quantityKg") {
+      updated.dispatchLines = JSON.stringify([]);
+    } else {
+      updated = autoCalculate(updated, dispatchLines);
+    }
+
     setForm(updated);
   }
-  function updateLine(index, key, value) {
-    let updatedLines = dispatchLines.map((line, i) =>
-      i === index ? { ...line, [key]: value } : line
-    );
 
-    if (key === "sourceExtrusionBatchId") {
-      const selected = allLiveLots.find(
-        (x) => String(x.extrusionBatchId) === String(value)
+  function allocateMaterialLots(material, quantityKg) {
+    let remaining = Number(quantityKg || 0);
+    const allocated = [];
+
+    const matchingLots = allLiveLots
+      .filter(
+        (lot) =>
+          String(lot.productionGrade || lot.grade || "").trim() ===
+          String(material || "").trim()
+      )
+      .sort((a, b) =>
+        String(a.productionDate || "").localeCompare(String(b.productionDate || ""))
       );
 
-      if (selected) {
-        updatedLines = updatedLines.map((line, i) => {
-          if (i !== index) return line;
+    matchingLots.forEach((lot) => {
+      if (remaining <= 0) return;
 
-          const available = getAvailableFG(selected.extrusionBatchId);
+      const available = Number(lot.available || 0);
+      if (available <= 0) return;
 
-          return {
-            ...line,
-            sourceExtrusionBatchId: selected.extrusionBatchId,
-            lotNo: selected.lotNo || selected.extrusionBatchId,
-            grade: selected.productionGrade || "",
-            productionDate: extrusionDate(selected),
-            productionShift: extrusionShift(selected),
-            availableKg: available,
-            dispatchQtyKg: "",
-          };
-        });
-      }
+      const dispatchQtyKg = Math.min(available, remaining);
+      remaining -= dispatchQtyKg;
+
+      allocated.push({
+        sourceExtrusionBatchId: lot.extrusionBatchId,
+        lotNo: lot.lotNo || lot.extrusionBatchId,
+        grade: material,
+        productionDate: lot.productionDate || "",
+        productionShift: lot.productionShift || "",
+        availableKg: available,
+        dispatchQtyKg,
+        remarks: "Auto allocated from material inventory",
+      });
+    });
+
+    if (remaining > 0.01) {
+      throw new Error(
+        `Not enough ${material} inventory. Short by ${remaining.toFixed(2)} Kg.`
+      );
     }
 
-    setDispatchLines(updatedLines);
-    setForm(autoCalculate({ ...form }, updatedLines));
+    return allocated;
   }
-
-  function addLine() {
-    const updatedLines = [...dispatchLines, { ...blankLine }];
-    setDispatchLines(updatedLines);
-    setForm(autoCalculate({ ...form }, updatedLines));
-  }
-
-  function removeLine(index) {
-    const updatedLines = dispatchLines.filter((_, i) => i !== index);
-    const finalLines =
-      updatedLines.length > 0 ? updatedLines : [{ ...blankLine }];
-
-    setDispatchLines(finalLines);
-    setForm(autoCalculate({ ...form }, finalLines));
-  }
-
-  function fillFullAvailable(index) {
-    const updatedLines = dispatchLines.map((line, i) =>
-      i === index
-        ? {
-            ...line,
-            dispatchQtyKg: line.availableKg || "",
-          }
-        : line
-    );
-
-    setDispatchLines(updatedLines);
-    setForm(autoCalculate({ ...form }, updatedLines));
-  }
-
   async function submit(e) {
     e.preventDefault();
 
     try {
-      const cleanLines = dispatchLines.filter(
-        (x) => x.sourceExtrusionBatchId && Number(x.dispatchQtyKg || 0) > 0
-      );
-
-      if (cleanLines.length === 0) {
-        setStatus("Add at least one FG lot with dispatch quantity.");
+      if (!form.material) {
+        setStatus("Select material.");
         return;
       }
 
-      for (const line of cleanLines) {
-        if (Number(line.dispatchQtyKg || 0) > Number(line.availableKg || 0)) {
-          setStatus(
-            `Dispatch exceeds available stock for ${
-              line.lotNo || line.sourceExtrusionBatchId
-            }`
-          );
-          return;
-        }
+      if (Number(form.quantityKg || 0) <= 0) {
+        setStatus("Enter dispatch quantity.");
+        return;
       }
+
+      const available = Number(selectedInventory?.availableKg || 0);
+
+      if (Number(form.quantityKg || 0) > available) {
+        setStatus(
+          `Dispatch quantity exceeds available ${form.material} stock. Available: ${available.toFixed(
+            2
+          )} Kg`
+        );
+        return;
+      }
+
+      const cleanLines = allocateMaterialLots(form.material, form.quantityKg);
 
       const finalForm = autoCalculate(
         {
           ...form,
+          grade: form.material,
           dispatchId:
             form.dispatchId ||
-            makeDispatchId(form.productionDate, form.productionShift),
+            makeDispatchId(form.date, form.productionShift),
         },
         cleanLines
       );
@@ -415,6 +413,7 @@ export default function Dispatch() {
       productionDate: dateForInput(line.productionDate) || productionDate || "",
       productionShift: line.productionShift || productionShift || "",
     }));
+    const material = row.material || row.grade || normalizedLines[0]?.grade || "";
 
     setEditingRow(row);
     setDispatchLines(normalizedLines);
@@ -424,6 +423,8 @@ export default function Dispatch() {
         ...blankForm,
         ...row,
         date: dateForInput(row.date) || today,
+        material,
+        grade: material,
         productionDate,
         productionShift,
         dispatchId:
@@ -493,13 +494,14 @@ export default function Dispatch() {
     totalDispatch > 0 ? (totalSales / totalDispatch).toFixed(2) : "0.00";
 
   const currentDispatchQty = getLineTotal(dispatchLines);
-  const currentSalesValue = currentDispatchQty * Number(form.ratePerKg || 0);
+  const operatorDispatchQty = Number(form.quantityKg || 0) || currentDispatchQty;
+  const currentSalesValue = operatorDispatchQty * Number(form.ratePerKg || 0);
 
   const truckTargetKg = 25000;
 
   const truckFillPercent =
     truckTargetKg > 0
-      ? ((currentDispatchQty / truckTargetKg) * 100).toFixed(1)
+      ? ((operatorDispatchQty / truckTargetKg) * 100).toFixed(1)
       : 0;
 
   const customerSummary = useMemo(() => {
@@ -533,7 +535,7 @@ export default function Dispatch() {
 
         <div style={subText}>
           Multi-lot truck dispatch from FG stock. FG lots show by default and
-          can be filtered by production date and shift.
+          are allocated internally after the operator selects material and quantity.
         </div>
       </div>
 
@@ -541,8 +543,11 @@ export default function Dispatch() {
         <KPI title="Dispatch Qty" value={`${totalDispatch.toFixed(0)} Kg`} />
         <KPI title="Sales" value={`₹ ${totalSales.toFixed(0)}`} />
         <KPI title="Avg Realization" value={`₹ ${avgRealization}`} />
-        <KPI title="Live Lots" value={allLiveLots.length} />
-        <KPI title="Filtered Lots" value={filteredLiveLots.length} />
+        <KPI title="Materials Available" value={materialInventory.length} />
+        <KPI
+          title="Selected Available"
+          value={`${Number(selectedInventory?.availableKg || 0).toFixed(0)} Kg`}
+        />
       </div>
 
       {status && <div style={statusStyle}>{status}</div>}
@@ -561,50 +566,6 @@ export default function Dispatch() {
         }}
       >
         <FormSection title={editingRow ? "Edit Dispatch" : "New Dispatch"}>
-          <Field label="Production Date Filter">
-            <input
-              type="date"
-              name="productionDate"
-              value={form.productionDate}
-              onChange={onChange}
-              style={inputStyle}
-            />
-          </Field>
-
-          <Field label="Production Shift Filter">
-            <select
-              name="productionShift"
-              value={form.productionShift}
-              onChange={onChange}
-              style={inputStyle}
-            >
-              <option value="">All Shifts</option>
-              <option value="A">A</option>
-              <option value="B">B</option>
-              <option value="C">C</option>
-            </select>
-          </Field>
-
-          <Field label="Dispatch Code">
-            <input
-              readOnly
-              value={
-                form.dispatchId ||
-                makeDispatchId(form.productionDate, form.productionShift)
-              }
-              style={readonlyStyle}
-            />
-          </Field>
-
-          <Field label="Available FG Lots">
-            <input
-              readOnly
-              value={`${filteredLiveLots.length} lots available`}
-              style={readonlyStyle}
-            />
-          </Field>
-        </FormSection>
-        <FormSection title="Customer & Logistics">
           <Field label="Dispatch Entry Date">
             <input
               type="date"
@@ -615,6 +576,52 @@ export default function Dispatch() {
             />
           </Field>
 
+          <Field label="Material">
+            <select
+              name="material"
+              value={form.material}
+              onChange={onChange}
+              style={inputStyle}
+              required
+            >
+              <option value="">Select Material</option>
+              {materialInventory.map((x) => (
+                <option key={x.material} value={x.material}>
+                  {x.material}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Available Quantity">
+            <input
+              readOnly
+              value={`${Number(selectedInventory?.availableKg || 0).toFixed(2)} Kg`}
+              style={readonlyStyle}
+            />
+          </Field>
+
+          <Field label="Dispatch Quantity">
+            <input
+              type="number"
+              name="quantityKg"
+              value={form.quantityKg}
+              onChange={onChange}
+              max={selectedInventory?.availableKg || ""}
+              style={inputStyle}
+              required
+            />
+          </Field>
+
+          <Field label="Dispatch Code">
+            <input
+              readOnly
+              value={form.dispatchId || makeDispatchId(form.date, "")}
+              style={readonlyStyle}
+            />
+          </Field>
+        </FormSection>
+        <FormSection title="Customer & Logistics">
           <Field label="Customer">
             <input
               name="customerName"
@@ -694,7 +701,7 @@ export default function Dispatch() {
 
         <FormSection title="Truck Loading Summary">
           <Field label="Total Dispatch Qty Kg">
-            <input readOnly value={form.quantityKg} style={readonlyStyle} />
+            <input readOnly value={operatorDispatchQty.toFixed(2)} style={readonlyStyle} />
           </Field>
 
           <Field label="Truck Fill % vs 25T">
@@ -727,127 +734,17 @@ export default function Dispatch() {
             />
           </Field>
 
-          <Field label="Lot Summary">
-            <textarea readOnly value={form.lotNo} style={textareaStyle} />
+          <Field label="Internal Allocation">
+            <textarea
+              readOnly
+              value={
+                form.material
+                  ? "System will allocate oldest available inventory lots automatically on save."
+                  : "Select material to allocate inventory."
+              }
+              style={textareaStyle}
+            />
           </Field>
-        </FormSection>
-
-        <FormSection title="FG Lots / Grade Loading">
-          <div style={{ gridColumn: "1 / -1", overflowX: "auto" }}>
-            <table style={lineTable}>
-              <thead>
-                <tr style={lineHeader}>
-                  <th style={lineTh}>FG Lot / Extrusion Batch</th>
-                  <th style={lineTh}>Production Date</th>
-                  <th style={lineTh}>Shift</th>
-                  <th style={lineTh}>Grade</th>
-                  <th style={lineTh}>Available Kg</th>
-                  <th style={lineTh}>Dispatch Kg</th>
-                  <th style={lineTh}>Remarks</th>
-                  <th style={lineTh}>Action</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {dispatchLines.map((line, index) => (
-                  <tr key={index}>
-                    <td style={lineTd}>
-                      <select
-                        value={line.sourceExtrusionBatchId || ""}
-                        onChange={(e) =>
-                          updateLine(index, "sourceExtrusionBatchId", e.target.value)
-                        }
-                        style={inputStyle}
-                      >
-                        <option value="">Select FG Lot</option>
-
-                        {filteredLiveLots.map((x, i) => (
-                          <option key={i} value={x.extrusionBatchId}>
-                            {x.lotNo || x.extrusionBatchId} |{" "}
-                            {x.productionDate || "No Date"} |{" "}
-                            {x.productionShift || "No Shift"} |{" "}
-                            {x.productionGrade || "NA"} | {x.available} Kg
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-
-                    <td style={lineTd}>
-                      <input
-                        readOnly
-                        value={line.productionDate || ""}
-                        style={readonlyStyle}
-                      />
-                    </td>
-
-                    <td style={lineTd}>
-                      <input
-                        readOnly
-                        value={line.productionShift || ""}
-                        style={readonlyStyle}
-                      />
-                    </td>
-
-                    <td style={lineTd}>
-                      <input readOnly value={line.grade || ""} style={readonlyStyle} />
-                    </td>
-
-                    <td style={lineTd}>
-                      <input
-                        readOnly
-                        value={line.availableKg || ""}
-                        style={readonlyStyle}
-                      />
-                    </td>
-
-                    <td style={lineTd}>
-                      <input
-                        type="number"
-                        value={line.dispatchQtyKg || ""}
-                        onChange={(e) =>
-                          updateLine(index, "dispatchQtyKg", e.target.value)
-                        }
-                        style={inputStyle}
-                      />
-                    </td>
-
-                    <td style={lineTd}>
-                      <input
-                        value={line.remarks || ""}
-                        onChange={(e) => updateLine(index, "remarks", e.target.value)}
-                        placeholder="Example: E1 5T / Unit 1"
-                        style={inputStyle}
-                      />
-                    </td>
-
-                    <td style={lineTd}>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button
-                          type="button"
-                          onClick={() => fillFullAvailable(index)}
-                          style={miniButton}
-                        >
-                          Full
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => removeLine(index)}
-                          style={removeButton}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            <button type="button" onClick={addLine} style={addButton}>
-              + Add FG Lot
-            </button>
-          </div>
         </FormSection>
 
         <FormSection title="Remarks" defaultOpen={false}>
@@ -908,9 +805,6 @@ export default function Dispatch() {
           "grade",
           "invoiceNo",
           "vehicleNo",
-          "lotNo",
-          "productionDate",
-          "productionShift",
         ]}
         columns={[
           {
@@ -919,18 +813,10 @@ export default function Dispatch() {
             render: (r) => formatDate(r.date),
             renderExport: (r) => formatDate(r.date),
           },
-          {
-            key: "productionDate",
-            label: "Production Date",
-            render: (r) => formatDate(r.productionDate || r.date),
-            renderExport: (r) => formatDate(r.productionDate || r.date),
-          },
-          { key: "productionShift", label: "Shift" },
           { key: "dispatchId", label: "Dispatch" },
           { key: "customerName", label: "Customer" },
           { key: "customerUnit", label: "Unit" },
-          { key: "grade", label: "Grade Mix" },
-          { key: "lotNo", label: "Lots" },
+          { key: "grade", label: "Material" },
           { key: "quantityKg", label: "Qty Kg" },
           { key: "ratePerKg", label: "Rate" },
           { key: "dispatchStatus", label: "Status" },
@@ -1053,58 +939,6 @@ const readonlyStyle = {
 const textareaStyle = {
   ...inputStyle,
   height: 80,
-};
-
-const lineTable = {
-  width: "100%",
-  borderCollapse: "collapse",
-  marginBottom: 10,
-  minWidth: 1250,
-};
-
-const lineHeader = {
-  background: "#0f766e",
-  color: "white",
-};
-
-const lineTh = {
-  padding: 10,
-  textAlign: "left",
-};
-
-const lineTd = {
-  padding: 8,
-  borderBottom: "1px solid #e5e7eb",
-};
-
-const addButton = {
-  background: "#2563eb",
-  color: "white",
-  border: "none",
-  padding: "9px 14px",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const miniButton = {
-  background: "#0f766e",
-  color: "white",
-  border: "none",
-  padding: "8px 10px",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const removeButton = {
-  background: "#dc2626",
-  color: "white",
-  border: "none",
-  padding: "8px 10px",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 700,
 };
 
 const saveButton = {

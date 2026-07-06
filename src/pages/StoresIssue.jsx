@@ -50,6 +50,7 @@ export default function StoresIssue() {
   const [editingRow, setEditingRow] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
+  const [lastStockMovement, setLastStockMovement] = useState(null);
 
   useEffect(() => {
     loadData();
@@ -217,6 +218,12 @@ export default function StoresIssue() {
     return Number(item?.standardRate || item?.rate || item?.ratePerUnit || 0);
   }
 
+  function getAvailableStock(itemName) {
+    const stock = stockMap[itemName];
+    if (!stock) return 0;
+    return Number(stock.inwardQty || 0) - Number(stock.issueQty || 0);
+  }
+
   function calculateIssueValue(updated) {
     updated.issueValue = calcValue(updated.qty, updated.issueRate).toFixed(2);
     return updated;
@@ -257,6 +264,15 @@ export default function StoresIssue() {
 
     try {
       const finalForm = calculateIssueValue({ ...form });
+      const beforeQty = getAvailableStock(finalForm.itemName);
+      const issuedQty = Number(finalForm.qty || 0);
+
+      if (issuedQty > beforeQty) {
+        setStatus(
+          `Cannot issue ${issuedQty.toFixed(2)}. Available ${finalForm.itemName} stock is ${beforeQty.toFixed(2)}.`
+        );
+        return;
+      }
 
       const res = await apiCall({
         fn: "storesIssue.add",
@@ -265,6 +281,13 @@ export default function StoresIssue() {
 
       if (res.ok) {
         setStatus("Stores issue saved successfully");
+        setLastStockMovement({
+          itemName: finalForm.itemName,
+          before: beforeQty,
+          movementLabel: "Issued",
+          movement: issuedQty,
+          remaining: beforeQty - issuedQty,
+        });
         setForm(blankForm);
         loadData();
       } else {
@@ -636,6 +659,32 @@ export default function StoresIssue() {
         </form>
 
         {status && <div style={statusStyle}>{status}</div>}
+        {(form.itemName || lastStockMovement) && (
+          <StockSnapshot
+            title="Live Stock"
+            itemName={form.itemName || lastStockMovement?.itemName}
+            before={
+              lastStockMovement && !form.itemName
+                ? lastStockMovement.before
+                : getAvailableStock(form.itemName)
+            }
+            movementLabel={
+              lastStockMovement && !form.itemName
+                ? lastStockMovement.movementLabel
+                : "Issued"
+            }
+            movement={
+              lastStockMovement && !form.itemName
+                ? lastStockMovement.movement
+                : Number(form.qty || 0)
+            }
+            remaining={
+              lastStockMovement && !form.itemName
+                ? lastStockMovement.remaining
+                : getAvailableStock(form.itemName) - Number(form.qty || 0)
+            }
+          />
+        )}
       </div>
 
       <DataTable
@@ -876,6 +925,21 @@ function KPI({ title, value }) {
   );
 }
 
+function StockSnapshot({ title, itemName, before, movementLabel, movement, remaining }) {
+  if (!itemName) return null;
+
+  return (
+    <div style={stockSnapshot}>
+      <div style={sectionTitle}>{title}: {itemName}</div>
+      <div style={stockSnapshotGrid}>
+        <KPI title="Before" value={Number(before || 0).toFixed(2)} />
+        <KPI title={movementLabel} value={Number(movement || 0).toFixed(2)} />
+        <KPI title="Remaining" value={Number(remaining || 0).toFixed(2)} />
+      </div>
+    </div>
+  );
+}
+
 function SummaryTable({ title, columns, rows }) {
   return (
     <div style={sectionCard}>
@@ -945,6 +1009,20 @@ const kpiGrid = {
   gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))",
   gap: 14,
   marginBottom: 16,
+};
+
+const stockSnapshot = {
+  marginTop: 16,
+  background: "#f8fafc",
+  border: "1px solid #e5e7eb",
+  borderRadius: 12,
+  padding: 14,
+};
+
+const stockSnapshotGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))",
+  gap: 12,
 };
 
 const kpiCard = {

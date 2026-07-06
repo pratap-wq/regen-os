@@ -60,6 +60,9 @@ export default function StoresInward() {
 
   const [rows, setRows] = useState([]);
   const [items, setItems] = useState([]);
+  const [issueRows, setIssueRows] = useState([]);
+  const [stockMap, setStockMap] = useState({});
+  const [lastStockMovement, setLastStockMovement] = useState(null);
   const [status, setStatus] = useState("");
   const [form, setForm] = useState(blankForm);
 
@@ -86,18 +89,26 @@ export default function StoresInward() {
 
   async function loadData() {
     try {
-      const [inwardRows, storesMasterRows] = await Promise.all([
+      const [inwardRows, storesMasterRows, storesIssueRows] = await Promise.all([
         safeList("storesInward.list"),
         safeList("storesMaster.list"),
+        safeList("storesIssue.list"),
       ]);
 
-      setRows(
-        inwardRows.filter(
-          (r) =>
-            String(r.status || "").toUpperCase() !== "DELETED" &&
-            String(r.inwardStatus || "").toUpperCase() !== "DELETED"
-        )
+      const cleanInwardRows = inwardRows.filter(
+        (r) =>
+          String(r.status || "").toUpperCase() !== "DELETED" &&
+          String(r.inwardStatus || "").toUpperCase() !== "DELETED"
       );
+      const cleanIssueRows = storesIssueRows.filter(
+        (r) =>
+          String(r.status || "").toUpperCase() !== "DELETED" &&
+          String(r.issueStatus || "").toUpperCase() !== "DELETED"
+      );
+
+      setRows(cleanInwardRows);
+      setIssueRows(cleanIssueRows);
+      setStockMap(buildStockMap(cleanInwardRows, cleanIssueRows));
 
       const mergedMap = {};
 
@@ -131,6 +142,35 @@ export default function StoresInward() {
 
   function calcAmount(qty, rate) {
     return Number(qty || 0) * Number(rate || 0);
+  }
+
+  function buildStockMap(inwardList, issueList) {
+    const stock = {};
+
+    inwardList.forEach((r) => {
+      const item = r.itemName || "";
+      if (!item) return;
+      stock[item] = stock[item] || { inwardQty: 0, issueQty: 0, availableQty: 0 };
+      stock[item].inwardQty += Number(r.qty || 0);
+    });
+
+    issueList.forEach((r) => {
+      const item = r.itemName || "";
+      if (!item) return;
+      stock[item] = stock[item] || { inwardQty: 0, issueQty: 0, availableQty: 0 };
+      stock[item].issueQty += Number(r.qty || 0);
+    });
+
+    Object.keys(stock).forEach((item) => {
+      stock[item].availableQty =
+        Number(stock[item].inwardQty || 0) - Number(stock[item].issueQty || 0);
+    });
+
+    return stock;
+  }
+
+  function getAvailableStock(itemName) {
+    return Number(stockMap[itemName]?.availableQty || 0);
   }
 
   function getStoresInwardId(row) {
@@ -220,6 +260,8 @@ export default function StoresInward() {
     if (!form.qty) return alert("Enter quantity");
 
     try {
+      const beforeQty = getAvailableStock(form.itemName);
+      const addedQty = Number(form.qty || 0);
       const res = await apiCall({
         fn: "storesInward.add",
         ...form,
@@ -232,6 +274,13 @@ export default function StoresInward() {
       }
 
       setStatus("Stores inward saved successfully");
+      setLastStockMovement({
+        itemName: form.itemName,
+        before: beforeQty,
+        movementLabel: "Added",
+        movement: addedQty,
+        remaining: beforeQty + addedQty,
+      });
       setForm(blankForm);
       loadData();
     } catch (err) {
@@ -511,6 +560,24 @@ export default function StoresInward() {
         </form>
 
         {status && <div style={statusStyle}>{status}</div>}
+        {(form.itemName || lastStockMovement) && (
+          <StockSnapshot
+            title="Live Stock"
+            itemName={form.itemName || lastStockMovement?.itemName}
+            before={
+              lastStockMovement && !form.itemName
+                ? lastStockMovement.before
+                : getAvailableStock(form.itemName)
+            }
+            movementLabel={lastStockMovement && !form.itemName ? lastStockMovement.movementLabel : "Adding"}
+            movement={lastStockMovement && !form.itemName ? lastStockMovement.movement : Number(form.qty || 0)}
+            remaining={
+              lastStockMovement && !form.itemName
+                ? lastStockMovement.remaining
+                : getAvailableStock(form.itemName) + Number(form.qty || 0)
+            }
+          />
+        )}
       </div>
 
       <DataTable
@@ -825,6 +892,21 @@ function KPI({ title, value }) {
   );
 }
 
+function StockSnapshot({ title, itemName, before, movementLabel, movement, remaining }) {
+  if (!itemName) return null;
+
+  return (
+    <div style={stockSnapshot}>
+      <div style={sectionTitle}>{title}: {itemName}</div>
+      <div style={stockSnapshotGrid}>
+        <KPI title="Before" value={Number(before || 0).toFixed(2)} />
+        <KPI title={movementLabel} value={Number(movement || 0).toFixed(2)} />
+        <KPI title="Remaining" value={Number(remaining || 0).toFixed(2)} />
+      </div>
+    </div>
+  );
+}
+
 function formatDateForInput(value) {
   if (!value) return "";
 
@@ -844,6 +926,20 @@ const kpiGrid = {
   gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))",
   gap: 14,
   marginBottom: 16,
+};
+
+const stockSnapshot = {
+  marginTop: 16,
+  background: "#f8fafc",
+  border: "1px solid #e5e7eb",
+  borderRadius: 12,
+  padding: 14,
+};
+
+const stockSnapshotGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))",
+  gap: 12,
 };
 
 const kpiCard = {

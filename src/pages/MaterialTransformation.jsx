@@ -12,14 +12,6 @@ const blankRun = {
   remarks: "",
 };
 
-const blankBucket = {
-  bucketName: "",
-  bucketType: "RM",
-  materialFamily: "",
-  processStage: "",
-  defaultNextProcess: "",
-};
-
 export default function MaterialTransformation() {
   const [form, setForm] = useState(blankRun);
   const [inputs, setInputs] = useState([{ inputBucket: "", quantityKg: "" }]);
@@ -28,7 +20,6 @@ export default function MaterialTransformation() {
   ]);
   const [buckets, setBuckets] = useState([]);
   const [runs, setRuns] = useState([]);
-  const [bucketForm, setBucketForm] = useState(blankBucket);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -90,25 +81,6 @@ export default function MaterialTransformation() {
     );
   }
 
-  async function saveBucket(e) {
-    e.preventDefault();
-    setMessage("");
-
-    const res = await apiCall({
-      fn: "materialBuckets.add",
-      ...bucketForm,
-    });
-
-    if (!res.ok) {
-      setMessage(res.error || "Could not save material");
-      return;
-    }
-
-    setBucketForm(blankBucket);
-    setMessage("Material saved");
-    loadData();
-  }
-
   async function saveRun(e) {
     e.preventDefault();
     setSaving(true);
@@ -162,16 +134,15 @@ export default function MaterialTransformation() {
           <div style={eyebrow}>Operator Workflow</div>
           <h1 style={title}>Production Control</h1>
           <div style={subtitle}>
-            Select Wash, Sorting, Extrusion or Rework. Consume Material
-            Inventory, create output materials, and post inventory movements through
-            one transformation engine.
+            Select process, consume Material Inventory, enter output materials,
+            check variance, and save the run.
           </div>
         </div>
       </div>
 
       {message && <div style={messageBox}>{message}</div>}
 
-      <div style={twoCol}>
+      <div>
         <form onSubmit={saveRun} style={card}>
           <h2 style={cardTitle}>New Production Run</h2>
 
@@ -214,15 +185,6 @@ export default function MaterialTransformation() {
               </select>
             </Field>
 
-            <Field label="Machine">
-              <input
-                value={form.machine}
-                onChange={(e) => setForm({ ...form, machine: e.target.value })}
-                style={input}
-                placeholder="Line / machine"
-              />
-            </Field>
-
             <Field label="Operator">
               <input
                 value={form.operator}
@@ -232,14 +194,6 @@ export default function MaterialTransformation() {
               />
             </Field>
 
-            <Field label="Remarks">
-              <input
-                value={form.remarks}
-                onChange={(e) => setForm({ ...form, remarks: e.target.value })}
-                style={input}
-                placeholder="Optional"
-              />
-            </Field>
           </div>
 
           <BucketRows
@@ -295,95 +249,8 @@ export default function MaterialTransformation() {
           </div>
 
           <button disabled={saving} style={primaryButton}>
-            {saving ? "Saving..." : "Save Transformation"}
+            {saving ? "Saving..." : "Save Production Run"}
           </button>
-        </form>
-
-        <form onSubmit={saveBucket} style={card}>
-          <h2 style={cardTitle}>Quick Add Material</h2>
-          <div style={grid}>
-            <Field label="Material Name">
-              <input
-                value={bucketForm.bucketName}
-                onChange={(e) =>
-                  setBucketForm({ ...bucketForm, bucketName: e.target.value })
-                }
-                style={input}
-                placeholder="White Flakes"
-              />
-            </Field>
-
-            <Field label="Material Category">
-              <select
-                value={bucketForm.bucketType}
-                onChange={(e) =>
-                  setBucketForm({ ...bucketForm, bucketType: e.target.value })
-                }
-                style={input}
-              >
-                <option value="RM">RM</option>
-                <option value="WIP">WIP</option>
-                <option value="FG">FG</option>
-                <option value="WASTE">Waste</option>
-                <option value="STORES">Stores</option>
-              </select>
-            </Field>
-
-            <Field label="Material Family">
-              <input
-                value={bucketForm.materialFamily}
-                onChange={(e) =>
-                  setBucketForm({
-                    ...bucketForm,
-                    materialFamily: e.target.value,
-                  })
-                }
-                style={input}
-                placeholder="PP / HDPE / PET"
-              />
-            </Field>
-
-            <Field label="Process Stage">
-              <input
-                value={bucketForm.processStage}
-                onChange={(e) =>
-                  setBucketForm({ ...bucketForm, processStage: e.target.value })
-                }
-                style={input}
-                placeholder="Receiving / Wash / FG"
-              />
-            </Field>
-
-            <Field label="Default Next Process">
-              <input
-                value={bucketForm.defaultNextProcess}
-                onChange={(e) =>
-                  setBucketForm({
-                    ...bucketForm,
-                    defaultNextProcess: e.target.value,
-                  })
-                }
-                style={input}
-                placeholder="WASH / SORTING / EXTRUSION"
-              />
-            </Field>
-          </div>
-
-          <button style={secondaryButton}>Add Material</button>
-
-          <h3 style={smallTitle}>Active Materials</h3>
-          <div style={bucketList}>
-            {buckets.length === 0 ? (
-              <div style={empty}>No materials yet.</div>
-            ) : (
-              buckets.slice(0, 12).map((bucket) => (
-                <div key={bucket.bucketId || bucket.bucketName} style={bucketPill}>
-                  <b>{bucket.bucketName}</b>
-                  <span>{bucket.bucketType}</span>
-                </div>
-              ))
-            )}
-          </div>
         </form>
       </div>
 
@@ -554,13 +421,6 @@ const eyebrow = {
 const title = { margin: "6px 0", fontSize: 34, fontWeight: 950 };
 const subtitle = { opacity: 0.92, maxWidth: 760 };
 
-const twoCol = {
-  display: "grid",
-  gridTemplateColumns: "minmax(0,2fr) minmax(320px,1fr)",
-  gap: 18,
-  alignItems: "start",
-};
-
 const card = {
   background: "white",
   border: "1px solid #e5e7eb",
@@ -647,12 +507,6 @@ const primaryButton = {
   cursor: "pointer",
 };
 
-const secondaryButton = {
-  ...primaryButton,
-  background: "#005d34",
-  marginTop: 14,
-};
-
 const miniButton = {
   border: "1px solid #86efac",
   borderRadius: 10,
@@ -681,18 +535,6 @@ const messageBox = {
   fontWeight: 800,
 };
 
-const bucketList = { display: "grid", gap: 8, marginTop: 10 };
-const bucketPill = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 10,
-  background: "#f8fafc",
-  border: "1px solid #e2e8f0",
-  borderRadius: 999,
-  padding: "8px 12px",
-  fontSize: 13,
-};
-
 const tableWrap = { overflowX: "auto" };
 const table = { width: "100%", borderCollapse: "collapse", fontSize: 13 };
 const th = {
@@ -703,4 +545,3 @@ const th = {
   color: "#475569",
 };
 const td = { padding: 10, borderBottom: "1px solid #f1f5f9" };
-const empty = { color: "#64748b", padding: 10 };

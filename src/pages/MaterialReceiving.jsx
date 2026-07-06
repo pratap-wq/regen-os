@@ -109,8 +109,8 @@ export default function MaterialReceiving() {
           <div style={eyebrow}>Operator Workflow</div>
           <h1 style={title}>Material Receiving</h1>
           <div style={subtitle}>
-            Receive one truck with multiple materials, create meaningful GRNs,
-            and post each line into Material Inventory.
+            Select supplier, truck, materials and weight. RegenOS creates GRNs
+            and posts Material Inventory automatically.
           </div>
         </div>
 
@@ -152,25 +152,6 @@ export default function MaterialReceiving() {
             />
           </Field>
 
-          <Field label="Weighbridge Slip">
-            <input
-              value={form.weighbridgeSlipNo}
-              onChange={(e) =>
-                setForm({ ...form, weighbridgeSlipNo: e.target.value })
-              }
-              style={input}
-              placeholder="Optional"
-            />
-          </Field>
-
-          <Field label="Remarks">
-            <input
-              value={form.remarks}
-              onChange={(e) => setForm({ ...form, remarks: e.target.value })}
-              style={input}
-              placeholder="Optional"
-            />
-          </Field>
         </div>
 
         <div style={sectionHeader}>
@@ -203,13 +184,6 @@ export default function MaterialReceiving() {
             </select>
 
             <input
-              value={line.bucketType}
-              readOnly
-              style={readOnlyInput}
-              placeholder="Material Category"
-            />
-
-            <input
               type="number"
               min="0"
               step="0.01"
@@ -217,16 +191,6 @@ export default function MaterialReceiving() {
               onChange={(e) => updateLine(index, "quantityKg", e.target.value)}
               style={input}
               placeholder="Kg"
-            />
-
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={line.ratePerKg}
-              onChange={(e) => updateLine(index, "ratePerKg", e.target.value)}
-              style={input}
-              placeholder="Rate/Kg"
             />
 
             <select
@@ -261,7 +225,7 @@ export default function MaterialReceiving() {
         </div>
 
         <button disabled={saving} style={primaryButton}>
-          {saving ? "Saving..." : "Save Receiving + Create GRNs"}
+          {saving ? "Saving..." : "Save Receiving"}
         </button>
       </form>
 
@@ -381,7 +345,6 @@ const input = {
   padding: "0 10px",
   fontSize: 14,
 };
-const readOnlyInput = { ...input, background: "#f8fafc", color: "#64748b" };
 const sectionHeader = {
   display: "flex",
   justifyContent: "space-between",
@@ -391,7 +354,7 @@ const sectionHeader = {
 };
 const lineGrid = {
   display: "grid",
-  gridTemplateColumns: "minmax(220px,1fr) 110px 110px 110px 150px 90px",
+  gridTemplateColumns: "minmax(260px,1fr) 140px 150px 90px",
   gap: 10,
   marginBottom: 10,
 };

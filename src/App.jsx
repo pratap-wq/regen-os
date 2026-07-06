@@ -13,18 +13,27 @@ import CommandCenter from "./pages/CommandCenter";
 import Traceability from "./pages/Traceability";
 import MaterialTransformation from "./pages/MaterialTransformation";
 import MaterialReceiving from "./pages/MaterialReceiving";
+import Production from "./pages/Production";
+import ProductionHistory from "./pages/ProductionHistory";
 
 import Dashboard from "./pages/Dashboard";
 
 import Suppliers from "./pages/Suppliers";
+import SupplierEntry from "./pages/SupplierEntry";
 
 import Dispatch from "./pages/Dispatch";
 import ProductionMaterials from "./pages/ProductionMaterials";
 import LiveInventory from "./pages/LiveInventory";
 import MonthlyAudit from "./pages/MonthlyAudit";
+import InventoryAdjustments from "./pages/InventoryAdjustments";
 import Quality from "./pages/Quality";
 import FGRates from "./pages/FGRates";
 import FactoryExpenses from "./pages/FactoryExpenses";
+import RMInward from "./pages/RMInward";
+import RMList from "./pages/RMList";
+import WashBatches from "./pages/WashBatches";
+import ColorSorterBatches from "./pages/ColorSorterBatches";
+import ExtrusionBatches from "./pages/ExtrusionBatches";
 
 import Consumables from "./pages/Consumables";
 import StoresInward from "./pages/StoresInward";
@@ -159,6 +168,7 @@ export default function App() {
               <Route path="/material-inventory" element={<LiveInventory />} />
               <Route path="/live-inventory" element={<Navigate to="/material-inventory" replace />} />
               <Route path="/suppliers" element={<Suppliers />} />
+              <Route path="/supplier-entry" element={<SupplierEntry />} />
 
               <Route path="/dispatch" element={<Dispatch />} />
               <Route
@@ -184,18 +194,17 @@ export default function App() {
               <Route path="/alert-center" element={<AlertCenter />} />
               <Route path="/alert-settings" element={<AlertSettings />} />
 
-              <Route path="/production" element={<Navigate to="/production-control-center" replace />} />
-              <Route path="/production-history" element={<Navigate to="/production-control-center" replace />} />
+              <Route path="/production" element={<Production />} />
+              <Route path="/production-history" element={<ProductionHistory />} />
               <Route path="/factory-pulse" element={<Navigate to="/command-center" replace />} />
               <Route path="/procurement-dashboard" element={<Navigate to="/material-receiving" replace />} />
               <Route path="/inventory-dashboard" element={<Navigate to="/material-inventory" replace />} />
-              <Route path="/rm-inward" element={<Navigate to="/material-receiving" replace />} />
-              <Route path="/rm-list" element={<Navigate to="/production-materials" replace />} />
-              <Route path="/supplier-entry" element={<Navigate to="/suppliers" replace />} />
-              <Route path="/wash-batches" element={<Navigate to="/production-control-center" replace />} />
-              <Route path="/extrusion-batches" element={<Navigate to="/production-control-center" replace />} />
-              <Route path="/color-sorter-batches" element={<Navigate to="/production-control-center" replace />} />
-              <Route path="/inventory-adjustments" element={<Navigate to="/monthly-close" replace />} />
+              <Route path="/rm-inward" element={<RMInward />} />
+              <Route path="/rm-list" element={<RMList />} />
+              <Route path="/wash-batches" element={<WashBatches />} />
+              <Route path="/extrusion-batches" element={<ExtrusionBatches />} />
+              <Route path="/color-sorter-batches" element={<ColorSorterBatches />} />
+              <Route path="/inventory-adjustments" element={<InventoryAdjustments />} />
 
               <Route path="*" element={<Navigate to="/command-center" />} />
             </Routes>

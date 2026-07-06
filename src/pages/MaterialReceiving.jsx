@@ -321,6 +321,12 @@ const sectionHeader = {
   alignItems: "center",
   marginTop: 18,
 };
+const cardTitle = {
+  margin: 0,
+  color: "#0f172a",
+  fontSize: 18,
+  fontWeight: 900,
+};
 const lineGrid = {
   display: "grid",
   gridTemplateColumns: "minmax(260px,1fr) 140px 150px 90px",

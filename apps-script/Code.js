@@ -24,6 +24,10 @@ function doGet(e) {
     if (p.fn === "productionMaterials.add") return addProductionMaterial(p);
     if (p.fn === "productionMaterials.update") return updateProductionMaterial(p);
     if (p.fn === "productionMaterials.seedDefaults") return seedProductionMaterials();
+    if (p.fn === "materialBuckets.list") return listMaster("Material_Buckets");
+    if (p.fn === "materialBuckets.add") return addMaterialBucket(p);
+    if (p.fn === "transformationRuns.list") return listTransformationRuns(p);
+    if (p.fn === "transformationRuns.add") return addTransformationRun(p);
     if (p.fn === "physicalCounts.get") return getPhysicalCount(p);
     if (p.fn === "physicalCounts.save") return savePhysicalCount(p);
     // RM
@@ -935,6 +939,54 @@ const REGEN_DB_SCHEMA = {
     "createdBy",
     "createdAt",
   ],
+  Material_Buckets: [
+    "bucketId",
+    "bucketName",
+    "bucketType",
+    "materialFamily",
+    "processStage",
+    "defaultNextProcess",
+    "status",
+    "createdBy",
+    "createdAt",
+  ],
+  Transformation_Runs: [
+    "runId",
+    "date",
+    "periodMonth",
+    "shift",
+    "processType",
+    "machine",
+    "operator",
+    "remarks",
+    "totalInputKg",
+    "totalOutputKg",
+    "varianceKg",
+    "recoveryPercent",
+    "lossPercent",
+    "status",
+    "createdBy",
+    "createdAt",
+  ],
+  Transformation_Inputs: [
+    "inputId",
+    "runId",
+    "inputBucket",
+    "quantityKg",
+    "status",
+    "createdBy",
+    "createdAt",
+  ],
+  Transformation_Outputs: [
+    "outputId",
+    "runId",
+    "outputBucket",
+    "quantityKg",
+    "outputType",
+    "status",
+    "createdBy",
+    "createdAt",
+  ],
   RM_Quality: [
     "qualityId",
     "date",
@@ -1764,6 +1816,222 @@ function isMonthClosed_(periodMonth) {
   } catch (err) {
     return false;
   }
+}
+
+// =====================================================
+// MATERIAL BUCKETS + TRANSFORMATION RUNS
+// Bucket-based manufacturing foundation. Additive only.
+// Legacy wash/sorting/extrusion routes remain unchanged.
+// =====================================================
+
+function transformationSchemaHeaders_(sheetName) {
+  return REGEN_DB_SCHEMA[sheetName] || [];
+}
+
+function parseJsonArray_(value, fieldName) {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (err) {}
+  }
+
+  throw new Error(fieldName + " must be an array");
+}
+
+function addMaterialBucket(data = {}) {
+  const sh = getSheet("Material_Buckets");
+  ensureHeaders_("Material_Buckets", transformationSchemaHeaders_("Material_Buckets"));
+
+  const bucketName = String(data.bucketName || "").trim();
+  const bucketType = String(data.bucketType || "").trim().toUpperCase();
+
+  if (!bucketName) throw new Error("Material bucket name is required");
+  if (["RM", "WIP", "FG", "WASTE", "STORES"].indexOf(bucketType) === -1) {
+    throw new Error("Bucket type must be RM, WIP, FG, WASTE, or STORES");
+  }
+
+  const bucketId = data.bucketId || generateBatchId("BKT");
+
+  appendObjectRow(sh, {
+    bucketId,
+    bucketName,
+    bucketType,
+    materialFamily: data.materialFamily || "",
+    processStage: data.processStage || "",
+    defaultNextProcess: data.defaultNextProcess || "",
+    status: data.status || "ACTIVE",
+    createdBy: data.createdBy || "System",
+    createdAt: new Date(),
+  });
+
+  return output({ ok: true, bucketId });
+}
+
+function listTransformationRuns(data = {}) {
+  const runs = getRowsAsObjects("Transformation_Runs").filter((r) => !isDeleted_(r));
+  const inputs = getRowsAsObjects("Transformation_Inputs").filter((r) => !isDeleted_(r));
+  const outputs = getRowsAsObjects("Transformation_Outputs").filter((r) => !isDeleted_(r));
+
+  const rows = runs
+    .map((run) => ({
+      ...run,
+      inputs: inputs.filter((input) => String(input.runId || "") === String(run.runId || "")),
+      outputs: outputs.filter((out) => String(out.runId || "") === String(run.runId || "")),
+    }))
+    .sort((a, b) => String(b.createdAt || b.date || "").localeCompare(String(a.createdAt || a.date || "")));
+
+  return output({ ok: true, rows });
+}
+
+function addTransformationRun(data = {}) {
+  const runSh = getSheet("Transformation_Runs");
+  const inputSh = getSheet("Transformation_Inputs");
+  const outputSh = getSheet("Transformation_Outputs");
+
+  ensureHeaders_("Transformation_Runs", transformationSchemaHeaders_("Transformation_Runs"));
+  ensureHeaders_("Transformation_Inputs", transformationSchemaHeaders_("Transformation_Inputs"));
+  ensureHeaders_("Transformation_Outputs", transformationSchemaHeaders_("Transformation_Outputs"));
+
+  const date = normalizeDateOnly_(data.date || todayYmd());
+  const periodMonth = String(data.periodMonth || getPeriodMonth(date)).slice(0, 7);
+  const processType = String(data.processType || "").trim().toUpperCase();
+  const inputs = parseJsonArray_(data.inputs, "inputs")
+    .map((row) => ({
+      inputBucket: String(row.inputBucket || row.bucketName || "").trim(),
+      quantityKg: num(row.quantityKg),
+    }))
+    .filter((row) => row.inputBucket || row.quantityKg > 0);
+  const outputs = parseJsonArray_(data.outputs, "outputs")
+    .map((row) => ({
+      outputBucket: String(row.outputBucket || row.bucketName || "").trim(),
+      quantityKg: num(row.quantityKg),
+      outputType: String(row.outputType || "GOOD").trim().toUpperCase(),
+    }))
+    .filter((row) => row.outputBucket || row.quantityKg > 0);
+
+  if (["WASH", "SORTING", "EXTRUSION", "REWORK"].indexOf(processType) === -1) {
+    throw new Error("Process type must be WASH, SORTING, EXTRUSION, or REWORK");
+  }
+
+  if (inputs.length === 0) throw new Error("At least one input bucket is required");
+  if (outputs.length === 0) throw new Error("At least one output bucket is required");
+
+  inputs.forEach((row) => {
+    if (!row.inputBucket) throw new Error("Input bucket is required");
+    if (row.quantityKg <= 0) throw new Error("Input quantity must be greater than zero");
+  });
+
+  outputs.forEach((row) => {
+    if (!row.outputBucket) throw new Error("Output bucket is required");
+    if (row.quantityKg < 0) throw new Error("Output quantity cannot be negative");
+    if (["GOOD", "WASTE", "REWORK", "LOSS"].indexOf(row.outputType) === -1) {
+      throw new Error("Output type must be GOOD, WASTE, REWORK, or LOSS");
+    }
+  });
+
+  validateOperationalWrite_({ ...data, date, periodMonth });
+
+  const runId = data.runId || generateBatchId("TRN");
+  const totalInputKg = inputs.reduce((s, row) => s + num(row.quantityKg), 0);
+  const totalOutputKg = outputs.reduce((s, row) => s + num(row.quantityKg), 0);
+  const goodOutputKg = outputs
+    .filter((row) => row.outputType === "GOOD" || row.outputType === "REWORK")
+    .reduce((s, row) => s + num(row.quantityKg), 0);
+  const lossOutputKg = outputs
+    .filter((row) => row.outputType === "WASTE" || row.outputType === "LOSS")
+    .reduce((s, row) => s + num(row.quantityKg), 0);
+  const varianceKg = round2(totalInputKg - totalOutputKg);
+  const recoveryPercent = totalInputKg > 0 ? round2((goodOutputKg / totalInputKg) * 100) : 0;
+  const lossPercent = totalInputKg > 0 ? round2(((lossOutputKg + Math.max(varianceKg, 0)) / totalInputKg) * 100) : 0;
+  const createdBy = data.createdBy || data.operator || "System";
+
+  appendObjectRow(runSh, {
+    runId,
+    date,
+    periodMonth,
+    shift: data.shift || "",
+    processType,
+    machine: data.machine || "",
+    operator: data.operator || "",
+    remarks: data.remarks || "",
+    totalInputKg,
+    totalOutputKg,
+    varianceKg,
+    recoveryPercent,
+    lossPercent,
+    status: data.status || "ACTIVE",
+    createdBy,
+    createdAt: new Date(),
+  });
+
+  inputs.forEach((row) => {
+    appendObjectRow(inputSh, {
+      inputId: generateBatchId("TRI"),
+      runId,
+      inputBucket: row.inputBucket,
+      quantityKg: row.quantityKg,
+      status: "ACTIVE",
+      createdBy,
+      createdAt: new Date(),
+    });
+
+    addInventoryLedger({
+      date,
+      module: "Material Transformation",
+      movementType: "TRANSFORMATION_CONSUME",
+      itemType: "MATERIAL_BUCKET",
+      itemName: row.inputBucket,
+      sourceRef: runId,
+      targetRef: "",
+      qtyIn: 0,
+      qtyOut: row.quantityKg,
+      unit: "Kg",
+      remarks: processType + " input consumption",
+      createdBy,
+    });
+  });
+
+  outputs.forEach((row) => {
+    appendObjectRow(outputSh, {
+      outputId: generateBatchId("TRO"),
+      runId,
+      outputBucket: row.outputBucket,
+      quantityKg: row.quantityKg,
+      outputType: row.outputType,
+      status: "ACTIVE",
+      createdBy,
+      createdAt: new Date(),
+    });
+
+    addInventoryLedger({
+      date,
+      module: "Material Transformation",
+      movementType: "TRANSFORMATION_OUTPUT_" + row.outputType,
+      itemType: "MATERIAL_BUCKET",
+      itemName: row.outputBucket,
+      sourceRef: "",
+      targetRef: runId,
+      qtyIn: row.quantityKg,
+      qtyOut: 0,
+      unit: "Kg",
+      remarks: processType + " output posting",
+      createdBy,
+    });
+  });
+
+  return output({
+    ok: true,
+    runId,
+    totalInputKg,
+    totalOutputKg,
+    varianceKg,
+    recoveryPercent,
+    lossPercent,
+  });
 }
 // RM
 

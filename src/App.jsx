@@ -14,6 +14,7 @@ import Traceability from "./pages/Traceability";
 import Production from "./pages/Production";
 import ProductionHistory from "./pages/ProductionHistory";
 import ProductionControlCenter from "./pages/ProductionControlCenter";
+import MaterialTransformation from "./pages/MaterialTransformation";
 
 import Dashboard from "./pages/Dashboard";
 import ProcurementDashboard from "./pages/ProcurementDashboard";
@@ -159,6 +160,10 @@ export default function App() {
               <Route
                 path="/production-control-center"
                 element={<ProductionControlCenter />}
+              />
+              <Route
+                path="/material-transformation"
+                element={<MaterialTransformation />}
               />
 
               <Route path="/dashboard" element={<Dashboard />} />

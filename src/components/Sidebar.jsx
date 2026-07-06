@@ -19,6 +19,7 @@ export default function Sidebar({ mode = "light" }) {
       icon: "factory",
       items: [
         { label: "Live Flow", path: "/production", icon: "activity" },
+        { label: "Material Transformation", path: "/material-transformation", icon: "factory" },
         { label: "RM Inward", path: "/rm-inward", icon: "package" },
         { label: "Color Sorter", path: "/color-sorter-batches", icon: "sparkles" },
         { label: "Extrusion", path: "/extrusion-batches", icon: "factory" },

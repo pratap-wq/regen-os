@@ -159,11 +159,12 @@ export default function MaterialTransformation() {
     <div style={page}>
       <div style={hero}>
         <div>
-          <div style={eyebrow}>Phase 1 Foundation</div>
-          <h1 style={title}>Material Transformation</h1>
+          <div style={eyebrow}>Operator Workflow</div>
+          <h1 style={title}>Production Control</h1>
           <div style={subtitle}>
-            Consume Material Buckets, create output buckets, and post inventory
-            movements without replacing legacy production screens.
+            Select Wash, Sorting, Extrusion or Rework. Consume Material
+            Buckets, create output buckets, and post inventory movements through
+            one transformation engine.
           </div>
         </div>
       </div>
@@ -172,7 +173,7 @@ export default function MaterialTransformation() {
 
       <div style={twoCol}>
         <form onSubmit={saveRun} style={card}>
-          <h2 style={cardTitle}>New Transformation Run</h2>
+          <h2 style={cardTitle}>New Production Run</h2>
 
           <div style={grid}>
             <Field label="Date">

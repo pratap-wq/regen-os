@@ -11,19 +11,27 @@ export default function Sidebar({ mode = "light" }) {
       items: [
         { label: "Command Center", path: "/command-center", icon: "sparkles" },
         { label: "CEO Cockpit", path: "/dashboard", icon: "chart" },
-        { label: "Factory Pulse", path: "/production-control-center", icon: "gauge" },
+        { label: "Factory Pulse", path: "/factory-pulse", icon: "gauge" },
       ],
     },
     {
       section: "Production Workflow",
       icon: "factory",
       items: [
-        { label: "Live Flow", path: "/production", icon: "activity" },
-        { label: "Material Transformation", path: "/material-transformation", icon: "factory" },
-        { label: "RM Inward", path: "/rm-inward", icon: "package" },
-        { label: "Color Sorter", path: "/color-sorter-batches", icon: "sparkles" },
-        { label: "Extrusion", path: "/extrusion-batches", icon: "factory" },
+        { label: "Material Receiving", path: "/material-receiving", icon: "package" },
+        { label: "Production Control", path: "/production-control-center", icon: "factory" },
         { label: "Dispatch", path: "/dispatch", icon: "truck" },
+      ],
+    },
+    {
+      section: "Advanced",
+      icon: "settings",
+      items: [
+        { label: "Legacy Live Flow", path: "/production", icon: "activity" },
+        { label: "Legacy RM Inward", path: "/rm-inward", icon: "package" },
+        { label: "Legacy Color Sorter", path: "/color-sorter-batches", icon: "sparkles" },
+        { label: "Legacy Extrusion", path: "/extrusion-batches", icon: "factory" },
+        { label: "Material Transformation", path: "/material-transformation", icon: "factory" },
       ],
     },
     {

@@ -26,6 +26,8 @@ function doGet(e) {
     if (p.fn === "productionMaterials.seedDefaults") return seedProductionMaterials();
     if (p.fn === "materialBuckets.list") return listMaster("Material_Buckets");
     if (p.fn === "materialBuckets.add") return addMaterialBucket(p);
+    if (p.fn === "materialReceiving.list") return listMaterialReceiving(p);
+    if (p.fn === "materialReceiving.add") return addMaterialReceiving(p);
     if (p.fn === "transformationRuns.list") return listTransformationRuns(p);
     if (p.fn === "transformationRuns.add") return addTransformationRun(p);
     if (p.fn === "physicalCounts.get") return getPhysicalCount(p);
@@ -946,6 +948,34 @@ const REGEN_DB_SCHEMA = {
     "materialFamily",
     "processStage",
     "defaultNextProcess",
+    "status",
+    "createdBy",
+    "createdAt",
+  ],
+  Material_Receiving: [
+    "receivingId",
+    "date",
+    "periodMonth",
+    "supplier",
+    "vehicleNo",
+    "weighbridgeSlipNo",
+    "totalTruckWeightKg",
+    "qualitySampleRequired",
+    "remarks",
+    "status",
+    "createdBy",
+    "createdAt",
+  ],
+  Material_Receiving_Lines: [
+    "lineId",
+    "receivingId",
+    "grnId",
+    "materialBucket",
+    "bucketType",
+    "quantityKg",
+    "ratePerKg",
+    "value",
+    "qualitySampleRequired",
     "status",
     "createdBy",
     "createdAt",
@@ -1960,6 +1990,146 @@ function seedStandardMaterialBuckets() {
 
   Logger.log(JSON.stringify(result, null, 2));
   return result;
+}
+
+function cleanCodePart_(value, fallback) {
+  const text = String(value || fallback || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "")
+    .slice(0, 8);
+
+  return text || String(fallback || "GEN").toUpperCase();
+}
+
+function makeReceivingGrnId_(date, supplier, bucketName, sequence) {
+  const compactDate = normalizeDateOnly_(date).replace(/-/g, "");
+  const supplierCode = cleanCodePart_(supplier, "SUP");
+  const bucketCode = cleanCodePart_(bucketName, "MAT");
+  const seq = String(sequence).padStart(2, "0");
+
+  return `GRN-${compactDate}-${supplierCode}-${bucketCode}-${seq}`;
+}
+
+function listMaterialReceiving(data = {}) {
+  const receipts = getRowsAsObjects("Material_Receiving").filter((r) => !isDeleted_(r));
+  const lines = getRowsAsObjects("Material_Receiving_Lines").filter((r) => !isDeleted_(r));
+
+  const rows = receipts
+    .map((receipt) => ({
+      ...receipt,
+      lines: lines.filter((line) => String(line.receivingId || "") === String(receipt.receivingId || "")),
+    }))
+    .sort((a, b) => String(b.createdAt || b.date || "").localeCompare(String(a.createdAt || a.date || "")));
+
+  return output({ ok: true, rows });
+}
+
+function addMaterialReceiving(data = {}) {
+  const receiptSh = getSheet("Material_Receiving");
+  const lineSh = getSheet("Material_Receiving_Lines");
+
+  ensureHeaders_("Material_Receiving", transformationSchemaHeaders_("Material_Receiving"));
+  ensureHeaders_("Material_Receiving_Lines", transformationSchemaHeaders_("Material_Receiving_Lines"));
+
+  const date = normalizeDateOnly_(data.date || todayYmd());
+  const periodMonth = String(data.periodMonth || getPeriodMonth(date)).slice(0, 7);
+  const supplier = String(data.supplier || "").trim();
+  const vehicleNo = String(data.vehicleNo || "").trim();
+  const materials = parseJsonArray_(data.materials, "materials")
+    .map((row) => ({
+      materialBucket: String(row.materialBucket || row.bucketName || "").trim(),
+      bucketType: String(row.bucketType || "").trim().toUpperCase(),
+      quantityKg: num(row.quantityKg),
+      ratePerKg: num(row.ratePerKg),
+      qualitySampleRequired: String(row.qualitySampleRequired || "").toUpperCase() === "YES" ? "YES" : "NO",
+    }))
+    .filter((row) => row.materialBucket || row.quantityKg > 0);
+
+  if (!supplier) throw new Error("Supplier is required");
+  if (!vehicleNo) throw new Error("Vehicle number is required");
+  if (materials.length === 0) throw new Error("At least one material line is required");
+
+  materials.forEach((row) => {
+    if (!row.materialBucket) throw new Error("Material bucket is required");
+    if (row.quantityKg <= 0) throw new Error("Material quantity must be greater than zero");
+  });
+
+  validateOperationalWrite_({ ...data, date, periodMonth });
+
+  const receivingId = data.receivingId || generateBatchId("MRV");
+  const createdBy = data.createdBy || "System";
+  const totalTruckWeightKg = materials.reduce((s, row) => s + num(row.quantityKg), 0);
+  const qualitySampleRequired =
+    String(data.qualitySampleRequired || "").toUpperCase() === "YES" ||
+    materials.some((row) => row.qualitySampleRequired === "YES")
+      ? "YES"
+      : "NO";
+  const grns = [];
+
+  appendObjectRow(receiptSh, {
+    receivingId,
+    date,
+    periodMonth,
+    supplier,
+    vehicleNo,
+    weighbridgeSlipNo: data.weighbridgeSlipNo || "",
+    totalTruckWeightKg,
+    qualitySampleRequired,
+    remarks: data.remarks || "",
+    status: data.status || "ACTIVE",
+    createdBy,
+    createdAt: new Date(),
+  });
+
+  materials.forEach((row, index) => {
+    const grnId = makeReceivingGrnId_(date, supplier, row.materialBucket, index + 1);
+    const value = round2(row.quantityKg * row.ratePerKg);
+
+    appendObjectRow(lineSh, {
+      lineId: generateBatchId("MRL"),
+      receivingId,
+      grnId,
+      materialBucket: row.materialBucket,
+      bucketType: row.bucketType || "",
+      quantityKg: row.quantityKg,
+      ratePerKg: row.ratePerKg,
+      value,
+      qualitySampleRequired: row.qualitySampleRequired,
+      status: "ACTIVE",
+      createdBy,
+      createdAt: new Date(),
+    });
+
+    addInventoryLedger({
+      date,
+      module: "Material Receiving",
+      movementType: "MATERIAL_RECEIVING_IN",
+      itemType: "MATERIAL_BUCKET",
+      itemName: row.materialBucket,
+      sourceRef: grnId,
+      targetRef: receivingId,
+      qtyIn: row.quantityKg,
+      qtyOut: 0,
+      unit: "Kg",
+      remarks: "Material receiving bucket posting",
+      createdBy,
+    });
+
+    grns.push({
+      grnId,
+      materialBucket: row.materialBucket,
+      quantityKg: row.quantityKg,
+      qualitySampleRequired: row.qualitySampleRequired,
+    });
+  });
+
+  return output({
+    ok: true,
+    receivingId,
+    totalTruckWeightKg,
+    qualitySampleRequired,
+    grns,
+  });
 }
 
 function listTransformationRuns(data = {}) {

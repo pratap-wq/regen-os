@@ -15,6 +15,7 @@ import Production from "./pages/Production";
 import ProductionHistory from "./pages/ProductionHistory";
 import ProductionControlCenter from "./pages/ProductionControlCenter";
 import MaterialTransformation from "./pages/MaterialTransformation";
+import MaterialReceiving from "./pages/MaterialReceiving";
 
 import Dashboard from "./pages/Dashboard";
 import ProcurementDashboard from "./pages/ProcurementDashboard";
@@ -159,12 +160,17 @@ export default function App() {
               <Route path="/production-history" element={<ProductionHistory />} />
               <Route
                 path="/production-control-center"
+                element={<MaterialTransformation />}
+              />
+              <Route
+                path="/factory-pulse"
                 element={<ProductionControlCenter />}
               />
               <Route
                 path="/material-transformation"
                 element={<MaterialTransformation />}
               />
+              <Route path="/material-receiving" element={<MaterialReceiving />} />
 
               <Route path="/dashboard" element={<Dashboard />} />
               <Route

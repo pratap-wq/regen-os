@@ -1492,6 +1492,59 @@ function getPeriodMonth(dateValue) {
   return todayYmd().slice(0, 7);
 }
 
+function getPeriodMonthFromPayload_(data = {}, dateValue) {
+  const explicit = String(data.periodMonth || "").trim();
+
+  if (/^\d{4}-\d{2}/.test(explicit)) {
+    return explicit.slice(0, 7);
+  }
+
+  const year = String(data.year || "").trim();
+  const monthValue = String(data.month || "").trim();
+
+  if (/^\d{4}$/.test(year) && monthValue) {
+    const monthMap = {
+      jan: "01",
+      january: "01",
+      feb: "02",
+      february: "02",
+      mar: "03",
+      march: "03",
+      apr: "04",
+      april: "04",
+      may: "05",
+      jun: "06",
+      june: "06",
+      jul: "07",
+      july: "07",
+      aug: "08",
+      august: "08",
+      sep: "09",
+      sept: "09",
+      september: "09",
+      oct: "10",
+      october: "10",
+      nov: "11",
+      november: "11",
+      dec: "12",
+      december: "12",
+    };
+
+    const monthKey = monthValue.toLowerCase();
+    const monthNumber =
+      monthMap[monthKey] ||
+      (/^\d{1,2}$/.test(monthValue)
+        ? String(Number(monthValue)).padStart(2, "0")
+        : "");
+
+    if (/^\d{2}$/.test(monthNumber)) {
+      return `${year}-${monthNumber}`;
+    }
+  }
+
+  return getPeriodMonth(dateValue);
+}
+
 function generateBatchId(prefix) {
   const now = new Date();
   const y = now.getFullYear();
@@ -2009,12 +2062,15 @@ function addFactoryExpense(data = {}) {
 
   const expenseId = data.expenseId || generateBatchId("EXP");
   const date = normalizeDateOnly_(data.date || todayYmd());
-  validateOperationalWrite_({ ...data, date });
+  const periodMonth = getPeriodMonthFromPayload_(data, date);
+  validateOperationalWrite_({ ...data, date, periodMonth });
 
   appendObjectRow(sh, {
     expenseId,
     date,
-    periodMonth: data.periodMonth || getPeriodMonth(date),
+    periodMonth,
+    month: data.month || periodMonth.slice(5, 7),
+    year: data.year || periodMonth.slice(0, 4),
     category: data.category || "",
     description: data.description || "",
     amount: num(data.amount),
@@ -2092,6 +2148,91 @@ function updateFactoryExpense(data = {}) {
     remarks: data.remarks || "",
     status: data.status || "",
   });
+}
+
+function migrateFactoryExpensePeriods() {
+  const sh = getSheet("Factory_Expenses");
+  const values = sh.getDataRange().getValues();
+
+  if (values.length < 2) {
+    const emptyResult = {
+      rowsChanged: 0,
+      changes: [],
+    };
+
+    Logger.log(JSON.stringify(emptyResult, null, 2));
+    return emptyResult;
+  }
+
+  const headers = values[0].map((h) => String(h).trim());
+  const periodMonthIndex = headers.indexOf("periodMonth");
+
+  if (periodMonthIndex === -1) {
+    throw new Error("Factory_Expenses periodMonth column not found");
+  }
+
+  const amountIndex = headers.indexOf("amount");
+  const descriptionIndex = headers.indexOf("description");
+  const remarksIndex = headers.indexOf("remarks");
+  const searchableIndexes = headers
+    .map((header, index) => ({ header: header.toLowerCase(), index }))
+    .filter(
+      ({ header }) =>
+        header === "remarks" ||
+        header === "invoice" ||
+        header === "description" ||
+        header === "bill" ||
+        header === "billtext" ||
+        header.indexOf("invoice") !== -1 ||
+        header.indexOf("bill") !== -1
+    )
+    .map(({ index }) => index);
+
+  const newPeriodMonth = "2026-06-01";
+  const changes = [];
+
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const searchText = searchableIndexes
+      .map((index) => row[index])
+      .filter((value) => value !== "" && value !== null && value !== undefined)
+      .join(" ")
+      .toLowerCase();
+
+    const shouldMoveToJune =
+      /\bjune[\s_]*2026\b/.test(searchText) ||
+      searchText.indexOf("power bill june") !== -1 ||
+      searchText.indexOf("security bill june") !== -1;
+
+    if (!shouldMoveToJune) continue;
+
+    const oldPeriodMonth = row[periodMonthIndex];
+
+    if (String(oldPeriodMonth || "") === newPeriodMonth) continue;
+
+    sh.getRange(i + 1, periodMonthIndex + 1).setValue(newPeriodMonth);
+
+    changes.push({
+      rowNumber: i + 1,
+      oldPeriodMonth,
+      newPeriodMonth,
+      expenseAmount: amountIndex === -1 ? "" : row[amountIndex],
+      expenseDescription:
+        descriptionIndex !== -1 && row[descriptionIndex]
+          ? row[descriptionIndex]
+          : remarksIndex === -1
+            ? ""
+            : row[remarksIndex],
+    });
+  }
+
+  const result = {
+    rowsChanged: changes.length,
+    changes,
+  };
+
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
 }
 // =====================================================
 // WASH BATCHES

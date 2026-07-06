@@ -6,7 +6,6 @@ export function calculateMonthClose({
   dispatchRows = [],
   storesIssueRows = [],
   factoryExpenseRows = [],
-  factoryCostMasterRows = [],
   storesMasterRows = [],
   periodMonth = "",
 }) {
@@ -34,7 +33,6 @@ export function calculateMonthClose({
   const dispatch = rowsInMonth(dispatchRows);
   const storesIssue = rowsInMonth(storesIssueRows);
   const factoryExpenses = rowsInMonth(factoryExpenseRows);
-  const fixedCosts = rowsInMonth(factoryCostMasterRows);
 
   const rmPurchasedKg = sum(rm, "netWeight");
   const rmValue = rm.reduce(
@@ -87,10 +85,8 @@ export function calculateMonthClose({
     0
   );
 
-  const fixedCostValue = fixedCosts.reduce((s, r) => s + num(r.amount), 0);
-
   const conversionCost =
-    storesIssueValue + factoryExpenseValue + fixedCostValue;
+    storesIssueValue + factoryExpenseValue;
 
   const totalManufacturingCost =
     estimatedRmConsumedValue + conversionCost;
@@ -202,10 +198,8 @@ export function calculateMonthClose({
       estimatedRmConsumedValue,
       storesIssueValue,
       factoryExpenseValue,
-      fixedCostValue,
       conversionCost,
       totalManufacturingCost,
-      fixedCosts,
     },
 
     profitability: {

@@ -87,8 +87,6 @@ export function costAmount(row = {}) {
     row.amount ||
       row.costAmount ||
       row.monthlyAmount ||
-      row.fixedCost ||
-      row.fixedCostAmount ||
       row.value ||
       row.totalAmount
   );
@@ -115,7 +113,6 @@ export function calculateCostEngine({
   dispatchRows = [],
   storesIssueRows = [],
   factoryExpenseRows = [],
-  factoryCostMasterRows = [],
   month,
   year,
   assumedSellingPrice = 0,
@@ -129,10 +126,6 @@ export function calculateCostEngine({
   const dispatch = filterByMonth(dispatchRows, month, year);
   const storesIssue = filterByMonth(storesIssueRows, month, year);
   const factoryExpenses = filterByMonth(factoryExpenseRows, month, year);
-
-  const factoryCostMaster = filterActive(factoryCostMasterRows).filter(
-    (r) => periodMonthOnly(r.periodMonth || r.date || r.createdAt || "") === periodMonth
-  );
 
   const rmPurchasedKg = rm.reduce((s, r) => s + n(r.netWeight), 0);
 
@@ -194,14 +187,11 @@ export function calculateCostEngine({
     0
   );
 
-  const fixedCostValue = factoryCostMaster.reduce((s, r) => s + costAmount(r), 0);
-
   const storesCostPerKg = safeDiv(storesIssueValue, fgProducedKg);
   const factoryCostPerKg = safeDiv(factoryExpenseValue, fgProducedKg);
-  const fixedCostPerKg = safeDiv(fixedCostValue, fgProducedKg);
 
   const manufacturingCostPerKg =
-    effectiveRmCostPerKg + storesCostPerKg + factoryCostPerKg + fixedCostPerKg;
+    effectiveRmCostPerKg + storesCostPerKg + factoryCostPerKg;
 
   const dispatchKg = dispatch.reduce((s, r) => s + n(r.quantityKg), 0);
 
@@ -246,9 +236,6 @@ export function calculateCostEngine({
     factoryExpenseValue,
     factoryCostPerKg,
 
-    fixedCostValue,
-    fixedCostPerKg,
-
     manufacturingCostPerKg,
 
     dispatchKg,
@@ -262,7 +249,6 @@ export function calculateCostEngine({
       { label: "Recovery Loss", value: effectiveRmCostPerKg - avgRmCostPerKg },
       { label: "Stores / Consumables", value: storesCostPerKg },
       { label: "Factory Expenses", value: factoryCostPerKg },
-      { label: "Fixed Costs", value: fixedCostPerKg },
       { label: "Manufacturing Cost", value: manufacturingCostPerKg },
       { label: "Selling Price", value: avgSellingPricePerKg },
       { label: "Gross Margin", value: grossMarginPerKg },

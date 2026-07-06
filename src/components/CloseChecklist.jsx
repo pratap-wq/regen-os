@@ -29,10 +29,6 @@ export default function CloseChecklist({ close }) {
       ok: close.costs.factoryExpenseValue >= 0,
     },
     {
-      title: "Fixed Costs Posted",
-      ok: close.costs.fixedCostValue >= 0,
-    },
-    {
       title: "Profit Calculated",
       ok: close.profitability.salesValue > 0,
     },

@@ -22,11 +22,6 @@ export default function CostAnalysis({ close }) {
       color: "#d97706",
     },
     {
-      title: "Fixed Costs",
-      value: c.fixedCostValue,
-      color: "#9333ea",
-    },
-    {
       title: "Conversion Cost",
       value: c.conversionCost,
       color: "#dc2626",

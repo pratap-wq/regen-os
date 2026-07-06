@@ -14,7 +14,6 @@ export default function Dashboard() {
   const [storesInwardRows, setStoresInwardRows] = useState([]);
   const [storesIssueRows, setStoresIssueRows] = useState([]);
   const [factoryExpenseRows, setFactoryExpenseRows] = useState([]);
-  const [factoryCostMasterRows, setFactoryCostMasterRows] = useState([]);
   const [consumableRows, setConsumableRows] = useState([]);
 
   const [month, setMonth] = useState(
@@ -47,7 +46,6 @@ export default function Dashboard() {
       inward,
       issue,
       factoryExpenses,
-      factoryCostMaster,
       consumables,
     ] = await Promise.all([
       safeLoad("rm.list"),
@@ -58,7 +56,6 @@ export default function Dashboard() {
       safeLoad("storesInward.list"),
       safeLoad("storesIssue.list"),
       safeLoad("factoryExpenses.list"),
-      safeLoad("factoryCostMaster.list"),
       safeLoad("storesMaster.list"),
     ]);
 
@@ -70,17 +67,11 @@ export default function Dashboard() {
     setStoresInwardRows(inward);
     setStoresIssueRows(issue);
     setFactoryExpenseRows(factoryExpenses);
-    setFactoryCostMasterRows(factoryCostMaster);
     setConsumableRows(consumables);
 
-    const latestCostPeriod = latestPeriodFromRows([
-      ...factoryExpenses,
-      ...factoryCostMaster,
-    ]);
+    const latestCostPeriod = latestPeriodFromRows(factoryExpenses);
     const currentPeriod = `${year}-${month}`;
-    const hasCurrentCostRows = [...factoryExpenses, ...factoryCostMaster].some(
-      (row) => rowPeriod(row) === currentPeriod
-    );
+    const hasCurrentCostRows = factoryExpenses.some((row) => rowPeriod(row) === currentPeriod);
 
     if (latestCostPeriod && !hasCurrentCostRows) {
       const [latestYear, latestMonth] = latestCostPeriod.split("-");
@@ -238,7 +229,6 @@ export default function Dashboard() {
       dispatchRows,
       storesIssueRows,
       factoryExpenseRows,
-      factoryCostMasterRows,
       month,
       year,
       assumedSellingPrice: 112,
@@ -261,8 +251,7 @@ export default function Dashboard() {
       revenue -
       estimatedRmConsumedValue -
       storesIssueValue -
-      factoryExpenseValue -
-      costEngine.fixedCostValue;
+      factoryExpenseValue;
 
     const profitPerKg = fgProduced > 0 ? estimatedProfit / fgProduced : 0;
 
@@ -435,7 +424,6 @@ export default function Dashboard() {
     storesInwardRows,
     storesIssueRows,
     factoryExpenseRows,
-    factoryCostMasterRows,
     consumableRows,
     month,
     year,
@@ -500,18 +488,6 @@ export default function Dashboard() {
         <KPI title="Factory Cost/Kg" value={`₹ ${data.factoryCostPerKg.toFixed(2)}`} color="#7c3aed" />
 
         <KPI
-          title="Fixed Cost/Kg"
-          value={`₹ ${data.costEngine.fixedCostPerKg.toFixed(2)}`}
-          color="#9333ea"
-        />
-
-        <KPI
-          title="Fixed Cost Total"
-          value={`₹ ${lakh(data.costEngine.fixedCostValue)} L`}
-          color="#9333ea"
-        />
-
-        <KPI
           title="Estimated Profit"
           value={`₹ ${lakh(data.estimatedProfit)} L`}
           color={data.estimatedProfit >= 0 ? "#16a34a" : "#dc2626"}
@@ -561,11 +537,6 @@ export default function Dashboard() {
           <Metric label="Estimated RM Consumed" value={`₹ ${lakh(data.estimatedRmConsumedValue)} L`} />
           <Metric label="Stores Issue Value" value={`₹ ${lakh(data.storesIssueValue)} L`} color="#dc2626" />
           <Metric label="Factory Expenses" value={`₹ ${lakh(data.factoryExpenseValue)} L`} color="#7c3aed" />
-          <Metric
-            label="Fixed Cost Master"
-            value={`₹ ${lakh(data.costEngine.fixedCostValue)} L`}
-            color="#9333ea"
-          />
           <Divider />
           <Metric
             label="Estimated Profit"
@@ -608,7 +579,6 @@ export default function Dashboard() {
           <Metric label="Average Sale Rate" value={`₹ ${data.avgSaleRate.toFixed(2)}/kg`} />
           <Metric label="Stores Cost / Kg" value={`₹ ${data.storesCostPerKg.toFixed(2)}`} color="#b45309" />
           <Metric label="Factory Cost / Kg" value={`₹ ${data.factoryCostPerKg.toFixed(2)}`} color="#7c3aed" />
-          <Metric label="Fixed Cost / Kg" value={`₹ ${data.costEngine.fixedCostPerKg.toFixed(2)}`} color="#9333ea" />
           <Metric label="Manufacturing Cost / Kg" value={`₹ ${data.costEngine.manufacturingCostPerKg.toFixed(2)}`} color="#7c3aed" />
         </Panel>
       </div>

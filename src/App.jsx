@@ -43,7 +43,6 @@ import StoresCosting from "./pages/StoresCosting";
 
 import AlertSettings from "./pages/AlertSettings";
 import AlertCenter from "./pages/AlertCenter";
-import FactoryCostMaster from "./pages/FactoryCostMaster";
 export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -143,7 +142,6 @@ export default function App() {
               <Route path="/inventory-adjustments" element={<InventoryAdjustments />} />
               <Route path="/fg-rates" element={<FGRates />} />
               <Route path="/factory-expenses" element={<FactoryExpenses />} />
-              <Route path="/factory-cost-master" element={<FactoryCostMaster />} />
               <Route path="/alert-center" element={<AlertCenter />} />
               <Route path="/alert-settings" element={<AlertSettings />} />
 

@@ -28,7 +28,6 @@ export default function MonthlyAudit() {
     storesInward: [],
     storesIssue: [],
     factoryExpenses: [],
-    factoryCostMaster: [],
     storesMaster: [],
   });
 
@@ -126,7 +125,6 @@ export default function MonthlyAudit() {
       storesInward,
       storesIssue,
       factoryExpenses,
-      factoryCostMaster,
       storesMaster,
       adjustmentRows,
     ] = await Promise.all([
@@ -138,7 +136,6 @@ export default function MonthlyAudit() {
       safeLoad("storesInward.list"),
       safeLoad("storesIssue.list"),
       safeLoad("factoryExpenses.list"),
-      safeLoad("factoryCostMaster.list"),
       safeLoad("storesMaster.list"),
       safeLoad("inventoryAdjustments.list", { periodMonth: month }),
     ]);
@@ -152,7 +149,6 @@ export default function MonthlyAudit() {
       storesInward,
       storesIssue,
       factoryExpenses,
-      factoryCostMaster,
       storesMaster,
     });
 
@@ -169,7 +165,6 @@ export default function MonthlyAudit() {
       dispatchRows: rows.dispatch,
       storesIssueRows: rows.storesIssue,
       factoryExpenseRows: rows.factoryExpenses,
-      factoryCostMasterRows: rows.factoryCostMaster,
       storesMasterRows: rows.storesMaster,
       periodMonth: month,
     });

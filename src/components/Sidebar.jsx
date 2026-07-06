@@ -48,7 +48,6 @@ export default function Sidebar() {
     { label: "Factory Expenses", path: "/factory-expenses" },
     { label: "FG Rates", path: "/fg-rates" },
     { label: "Production Materials", path: "/production-materials" },
-    { label: "Factory Cost Master", path: "/factory-cost-master" },
   ],
 },
     {

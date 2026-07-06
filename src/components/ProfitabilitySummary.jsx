@@ -97,7 +97,6 @@ export default function ProfitabilitySummary({ close }) {
           <Row title="Raw Material Consumed" value={-c.estimatedRmConsumedValue} />
           <Row title="Stores & Consumables" value={-c.storesIssueValue} />
           <Row title="Factory Expenses" value={-c.factoryExpenseValue} />
-          <Row title="Fixed Costs" value={-c.fixedCostValue} />
 
           <tr style={profitRow}>
             <td style={td}>

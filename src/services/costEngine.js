@@ -190,7 +190,7 @@ export function calculateCostEngine({
   }, 0);
 
   const factoryExpenseValue = factoryExpenses.reduce(
-    (s, r) => s + n(r.amount || r.expenseAmount || r.totalAmount || r.value),
+    (s, r) => s + costAmount(r),
     0
   );
 

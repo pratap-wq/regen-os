@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
-import { calculateCostEngine, periodMonthOnly } from "../services/costEngine";
+import {
+  calculateCostEngine,
+  costAmount,
+  filterByMonth,
+  periodMonthOnly,
+} from "../services/costEngine";
 import { calculateProfitWaterfall } from "../services/profitWaterfallEngine";
 
 export default function Dashboard() {
@@ -21,6 +26,7 @@ export default function Dashboard() {
     String(now.getMonth() + 1).padStart(2, "0")
   );
   const [year, setYear] = useState(String(now.getFullYear()));
+  const [hasAutoSelectedCostMonth, setHasAutoSelectedCostMonth] = useState(false);
   const [monthlyTargetKg, setMonthlyTargetKg] = useState(500000);
 
   useEffect(() => {
@@ -78,6 +84,23 @@ export default function Dashboard() {
     setFactoryExpenseRows(factoryExpenses);
     setFactoryCostMasterRows(factoryCostMaster);
     setConsumableRows(consumables);
+
+    if (!hasAutoSelectedCostMonth) {
+      const selectedPeriod = `${year}-${month}`;
+      const costPeriods = [
+        ...factoryExpenses.map(rowCostPeriod),
+        ...factoryCostMaster.map(rowCostPeriod),
+      ].filter(Boolean);
+      const selectedHasCostRows = costPeriods.includes(selectedPeriod);
+      const latestCostPeriod = costPeriods.sort().at(-1);
+
+      if (!selectedHasCostRows && latestCostPeriod) {
+        setYear(latestCostPeriod.slice(0, 4));
+        setMonth(latestCostPeriod.slice(5, 7));
+      }
+
+      setHasAutoSelectedCostMonth(true);
+    }
   }
 
   function dateForCompare(value) {
@@ -416,6 +439,27 @@ export default function Dashboard() {
     monthlyTargetKg,
   ]);
 
+  const costDebug = useMemo(() => {
+    const expenseMatchingRows = filterByMonth(factoryExpenseRows, month, year);
+    const fixedCostMatchingRows = filterByMonth(factoryCostMasterRows, month, year);
+
+    return {
+      selectedMonth: `${year}-${month}`,
+      factoryExpenseTotal: expenseMatchingRows.reduce(
+        (s, r) => s + costAmount(r),
+        0
+      ),
+      fixedCostTotal: fixedCostMatchingRows.reduce(
+        (s, r) => s + costAmount(r),
+        0
+      ),
+      factoryExpenseRowsLoaded: factoryExpenseRows.length,
+      factoryExpenseRowsMatching: expenseMatchingRows.length,
+      factoryCostRowsLoaded: factoryCostMasterRows.length,
+      factoryCostRowsMatching: fixedCostMatchingRows.length,
+    };
+  }, [factoryExpenseRows, factoryCostMasterRows, month, year]);
+
 
   return (
     <div style={page}>
@@ -673,8 +717,52 @@ export default function Dashboard() {
           )}
         </Panel>
       </div>
+
+      <CostDebugPanel debug={costDebug} />
     </div>
   );
+}
+
+function rowCostPeriod(row = {}) {
+  const explicitPeriod = periodMonthOnly(
+    row.periodMonth || row.date || row.createdAt || ""
+  );
+
+  if (explicitPeriod) return explicitPeriod;
+
+  const year = String(row.year || "").trim();
+  const month = String(row.month || "").trim().toLowerCase();
+  const monthMap = {
+    jan: "01",
+    january: "01",
+    feb: "02",
+    february: "02",
+    mar: "03",
+    march: "03",
+    apr: "04",
+    april: "04",
+    may: "05",
+    jun: "06",
+    june: "06",
+    jul: "07",
+    july: "07",
+    aug: "08",
+    august: "08",
+    sep: "09",
+    sept: "09",
+    september: "09",
+    oct: "10",
+    october: "10",
+    nov: "11",
+    november: "11",
+    dec: "12",
+    december: "12",
+  };
+  const numericMonth = /^\d{1,2}$/.test(month)
+    ? String(Number(month)).padStart(2, "0")
+    : monthMap[month];
+
+  return /^\d{4}$/.test(year) && numericMonth ? `${year}-${numericMonth}` : "";
 }
 
 function sum(rows, key) {
@@ -717,6 +805,40 @@ function Metric({ label, value, color = "#0f172a" }) {
       <span>{label}</span>
       <b style={{ color }}>{value}</b>
     </div>
+  );
+}
+
+function CostDebugPanel({ debug }) {
+  return (
+    <Panel title="Temporary Cost Debug">
+      <Metric label="Selected Month" value={debug.selectedMonth} />
+      <Metric
+        label="Factory Expense Total"
+        value={`₹ ${lakh(debug.factoryExpenseTotal)} L`}
+        color="#7c3aed"
+      />
+      <Metric
+        label="Fixed Cost Total"
+        value={`₹ ${lakh(debug.fixedCostTotal)} L`}
+        color="#9333ea"
+      />
+      <Metric
+        label="Factory Expense Rows Loaded"
+        value={debug.factoryExpenseRowsLoaded}
+      />
+      <Metric
+        label="Factory Expense Matching Rows"
+        value={debug.factoryExpenseRowsMatching}
+      />
+      <Metric
+        label="Factory Cost Rows Loaded"
+        value={debug.factoryCostRowsLoaded}
+      />
+      <Metric
+        label="Factory Cost Matching Rows"
+        value={debug.factoryCostRowsMatching}
+      />
+    </Panel>
   );
 }
 

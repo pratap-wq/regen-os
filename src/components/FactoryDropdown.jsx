@@ -1,12 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import FactoryMasterModal from "./FactoryMasterModal";
 import "./factoryDesignSystem.css";
 import {
-  getFavoriteMasterItems,
-  getRecentMasterItems,
   listFactoryMaster,
   rememberMasterItem,
-  toggleFavoriteMasterItem,
 } from "../services/FactoryMasterService";
 
 export default function FactoryDropdown({
@@ -19,21 +16,25 @@ export default function FactoryDropdown({
   style,
   filter,
   label,
+  allowAddNew = false,
 }) {
+  const listId = useId();
   const [items, setItems] = useState([]);
-  const [search, setSearch] = useState("");
-  const [modalItem, setModalItem] = useState(null);
+  const [inputValue, setInputValue] = useState(value || "");
   const [modalOpen, setModalOpen] = useState(false);
-  const [favorites, setFavorites] = useState(() => getFavoriteMasterItems(masterType));
-  const [recent, setRecent] = useState(() => getRecentMasterItems(masterType));
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     loadItems();
   }, [masterType]);
 
+  useEffect(() => {
+    setInputValue(value || "");
+  }, [value]);
+
   async function loadItems() {
     setLoading(true);
+
     try {
       const rows = await listFactoryMaster(masterType);
       setItems(rows);
@@ -45,20 +46,21 @@ export default function FactoryDropdown({
   }
 
   const visibleItems = useMemo(() => {
-    const term = search.trim().toLowerCase();
+    const term = inputValue.trim().toLowerCase();
+
     return items
       .filter((item) => (filter ? filter(item) : true))
       .filter((item) => String(item.status || "").toUpperCase() !== "DISABLED")
       .filter((item) => String(item.status || "").toUpperCase() !== "MERGED")
-      .filter((item) => !term || JSON.stringify(item).toLowerCase().includes(term));
-  }, [items, search, filter]);
-
-  const selected = items.find((item) => item.name === value || item.id === value);
+      .filter((item) => !term || itemLabel(item).toLowerCase().includes(term))
+      .slice(0, 250);
+  }, [items, inputValue, filter]);
 
   function emit(item) {
-    const selectedValue = item?.name || "";
+    const selectedValue = itemLabel(item);
+
     rememberMasterItem(masterType, item);
-    setRecent(getRecentMasterItems(masterType));
+    setInputValue(selectedValue);
 
     if (typeof onChange === "function") {
       onChange({
@@ -71,106 +73,110 @@ export default function FactoryDropdown({
     }
   }
 
-  function onSelect(e) {
-    const item = items.find((x) => String(x.id) === String(e.target.value));
-    if (item) emit(item);
+  function emitRaw(nextValue, item = null) {
+    if (typeof onChange === "function") {
+      onChange({
+        target: {
+          name,
+          value: nextValue,
+        },
+        item,
+      });
+    }
+  }
+
+  function onInputChange(e) {
+    const nextValue = e.target.value;
+    setInputValue(nextValue);
+
+    const exact = items.find((item) => itemLabel(item) === nextValue);
+
+    if (exact) {
+      emit(exact);
+      return;
+    }
+
+    emitRaw(nextValue);
+  }
+
+  function onBlur() {
+    const cleanValue = String(inputValue || "").trim().toLowerCase();
+    const exact = items.find((item) => itemLabel(item).toLowerCase() === cleanValue);
+
+    if (exact) emit(exact);
   }
 
   async function onSaved(item) {
     setModalOpen(false);
-    setModalItem(null);
     await loadItems();
+
     if (item && String(item.status || "").toUpperCase() !== "DISABLED") {
       emit(item);
     }
-  }
-
-  function favoriteSelected() {
-    if (!selected) return;
-    setFavorites(toggleFavoriteMasterItem(masterType, selected));
   }
 
   return (
     <div style={wrap}>
       {label && <label style={labelStyle}>{label}</label>}
 
-      <input
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder={`Search ${placeholder.toLowerCase()}...`}
-        style={{ ...baseInput, ...style }}
-      />
-
       <div style={row}>
-        <select
+        <input
+          list={listId}
           name={name}
-          value={selected?.id || ""}
-          onChange={onSelect}
+          value={inputValue}
+          onChange={onInputChange}
+          onBlur={onBlur}
+          placeholder={loading ? "Loading..." : placeholder}
           required={required}
           style={{ ...baseInput, ...style, flex: 1 }}
-        >
-          <option value="">{loading ? "Loading..." : placeholder}</option>
-          {favorites.length > 0 && <option disabled>★ Favorites</option>}
-          {favorites
-            .filter((item) => visibleItems.some((x) => String(x.id) === String(item.id)))
-            .map((item) => (
-              <option key={`fav-${item.id || item.name}`} value={item.id}>
-                ★ {item.name}
-              </option>
-            ))}
-          {recent.length > 0 && <option disabled>Recently Used</option>}
-          {recent
-            .filter((item) => visibleItems.some((x) => String(x.id) === String(item.id)))
-            .map((item) => (
-              <option key={`recent-${item.id || item.name}`} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          <option disabled>All</option>
+        />
+
+        <datalist id={listId}>
           {visibleItems.map((item) => (
-            <option key={item.id || item.name} value={item.id}>
-              {item.name}
-              {String(item.status || "").toUpperCase() === "PENDING_APPROVAL"
-                ? " (Pending Approval)"
-                : ""}
-            </option>
+            <option key={item.id || item.code || item.name} value={itemLabel(item)} />
           ))}
-        </select>
+        </datalist>
 
-        <button type="button" onClick={favoriteSelected} disabled={!selected} style={smallButton}>
-          ★
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setModalItem(selected || null);
-            setModalOpen(true);
-          }}
-          style={smallButton}
-        >
-          {selected ? "Edit" : "+ Add New"}
-        </button>
-      </div>
-
-      <div style={meta}>
-        Search • Favorites • Recently Used • Add New • Edit • Disable • Merge • Audit
+        {allowAddNew && (
+          <button
+            type="button"
+            onClick={() => setModalOpen(true)}
+            style={smallButton}
+            title="Add new"
+            aria-label={`Add new ${placeholder}`}
+          >
+            +
+          </button>
+        )}
       </div>
 
       {modalOpen && (
         <FactoryMasterModal
           masterType={masterType}
-          title={`${selected ? "Edit" : "Add"} ${placeholder}`}
-          item={modalItem}
+          title={`Add ${placeholder}`}
+          item={null}
           items={items}
-          onClose={() => {
-            setModalOpen(false);
-            setModalItem(null);
-          }}
+          onClose={() => setModalOpen(false)}
           onSaved={onSaved}
         />
       )}
     </div>
   );
+}
+
+function itemLabel(item) {
+  return String(
+    item?.name ||
+      item?.materialName ||
+      item?.supplierName ||
+      item?.customerName ||
+      item?.machineName ||
+      item?.recipeName ||
+      item?.itemName ||
+      item?.code ||
+      item?.materialCode ||
+      ""
+  ).trim();
 }
 
 const wrap = { display: "flex", flexDirection: "column", gap: 6 };
@@ -189,10 +195,11 @@ const smallButton = {
   background: "#f8fafc",
   color: "#0f172a",
   borderRadius: 10,
-  padding: "10px 12px",
+  padding: "8px 12px",
   cursor: "pointer",
   fontWeight: 850,
+  minWidth: 40,
+  minHeight: 40,
   whiteSpace: "nowrap",
 };
-const meta = { fontSize: 11, color: "#64748b" };
 const labelStyle = { fontSize: 12, fontWeight: 700, color: "#334155" };

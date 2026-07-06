@@ -58,7 +58,7 @@ export async function listFactoryMaster(masterType, search = "") {
     search,
     includeDisabled: "TRUE",
   });
-  const rows = res.rows || [];
+  const rows = normalizeMasterRows(masterType, res.rows || []);
 
   if (String(masterType || "").toLowerCase() === "material" && rows.length === 0) {
     return listLegacyMaterialFallback(search);
@@ -98,6 +98,30 @@ export async function mergeFactoryMaster(masterType, fromItem, intoItem) {
     masterType,
     fromId: fromItem.id,
     intoId: intoItem.id,
+  });
+}
+
+function normalizeMasterRows(masterType, rows = []) {
+  const type = String(masterType || "").toLowerCase();
+
+  return rows.map((row) => {
+    if (type === "material") {
+      return {
+        ...row,
+        id: row.id || row.materialId || row.materialCode || row.name || row.materialName || "",
+        code: row.code || row.materialCode || "",
+        name: row.name || row.materialName || row.materialCode || "",
+        category: row.category || row.materialType || "",
+        materialType: row.materialType || row.category || "",
+      };
+    }
+
+    return {
+      ...row,
+      id: row.id || row.supplierId || row.customerId || row.machineId || row.recipeId || row.itemId || row.testId || row.categoryId || "",
+      code: row.code || row.supplierCode || row.customerCode || row.machineCode || row.recipeCode || row.itemCode || row.testCode || row.categoryCode || "",
+      name: row.name || row.supplierName || row.customerName || row.machineName || row.recipeName || row.itemName || row.testName || row.categoryName || "",
+    };
   });
 }
 

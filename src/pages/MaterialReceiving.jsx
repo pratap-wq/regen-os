@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
+import DataTable from "../components/DataTable";
+import OperationalWorkspace from "../components/OperationalWorkspace";
 
 const today = new Date().toISOString().slice(0, 10);
+const now = new Date();
 
 const blankForm = {
   date: today,
@@ -26,6 +29,9 @@ export default function MaterialReceiving() {
   const [receipts, setReceipts] = useState([]);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [month, setMonth] = useState(String(now.getMonth() + 1).padStart(2, "0"));
+  const [year, setYear] = useState(String(now.getFullYear()));
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     loadData();
@@ -103,27 +109,58 @@ export default function MaterialReceiving() {
   }
 
   return (
-    <div style={page}>
-      <div style={hero}>
-        <div>
-          <div style={eyebrow}>Operator Workflow</div>
-          <h1 style={title}>Material Receiving</h1>
-          <div style={subtitle}>
-            Select supplier, truck, materials and weight. RegenOS creates GRNs
-            and posts Material Inventory automatically.
-          </div>
-        </div>
-
-        <div style={totalBox}>
-          <span>Total Truck Weight</span>
-          <b>{fmt(totalTruckWeightKg)} Kg</b>
-        </div>
-      </div>
-
+    <OperationalWorkspace
+      eyebrow="Operator Workflow"
+      title="Material Receiving"
+      subtitle="Select supplier, truck, materials and weight. RegenOS creates GRNs and posts Material Inventory automatically."
+      month={month}
+      year={year}
+      search={search}
+      onMonthChange={setMonth}
+      onYearChange={setYear}
+      onSearchChange={setSearch}
+      onRefresh={loadData}
+      snapshots={[
+        { label: "Truck Weight", value: `${fmt(totalTruckWeightKg)} Kg` },
+        { label: "Material Lines", value: lines.length },
+        {
+          label: "Quality Samples",
+          value: lines.filter((line) => line.qualitySampleRequired === "YES").length,
+        },
+        { label: "Recent Receipts", value: receipts.length },
+      ]}
+      entryTitle="Receive Truck"
+      historyTitle="Receiving History"
+      history={
+        <DataTable
+          title="Receiving History"
+          rows={receipts}
+          searchFields={["supplier", "vehicleNo", "receivingId"]}
+          columns={[
+            { key: "date", label: "Date" },
+            { key: "supplier", label: "Supplier" },
+            { key: "vehicleNo", label: "Truck" },
+            { key: "totalTruckWeightKg", label: "Weight Kg" },
+            { key: "qualitySampleRequired", label: "Status" },
+            {
+              key: "material",
+              label: "Material",
+              render: (r) => (r.lines || []).map((line) => line.materialBucket).join(", "),
+              renderExport: (r) => (r.lines || []).map((line) => line.materialBucket).join(", "),
+            },
+            {
+              key: "grn",
+              label: "GRNs",
+              render: (r) => (r.lines || []).map((line) => line.grnId).join(", "),
+              renderExport: (r) => (r.lines || []).map((line) => line.grnId).join(", "),
+            },
+          ]}
+        />
+      }
+    >
       {message && <div style={messageBox}>{message}</div>}
 
       <form onSubmit={saveReceiving} style={card}>
-        <h2 style={cardTitle}>Truck Details</h2>
         <div style={grid}>
           <Field label="Date">
             <input
@@ -228,47 +265,7 @@ export default function MaterialReceiving() {
           {saving ? "Saving..." : "Save Receiving"}
         </button>
       </form>
-
-      <div style={card}>
-        <h2 style={cardTitle}>Recent Receiving</h2>
-        <div style={tableWrap}>
-          <table style={table}>
-            <thead>
-              <tr>
-                {["Date", "Supplier", "Truck", "Weight", "Sample", "GRNs"].map(
-                  (h) => (
-                    <th key={h} style={th}>
-                      {h}
-                    </th>
-                  )
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {receipts.slice(0, 10).map((receipt) => (
-                <tr key={receipt.receivingId}>
-                  <td style={td}>{receipt.date}</td>
-                  <td style={td}>{receipt.supplier}</td>
-                  <td style={td}>{receipt.vehicleNo}</td>
-                  <td style={td}>{fmt(receipt.totalTruckWeightKg)} Kg</td>
-                  <td style={td}>{receipt.qualitySampleRequired}</td>
-                  <td style={td}>
-                    {(receipt.lines || []).map((line) => line.grnId).join(", ")}
-                  </td>
-                </tr>
-              ))}
-              {receipts.length === 0 && (
-                <tr>
-                  <td style={td} colSpan={6}>
-                    No material receiving entries yet.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
+    </OperationalWorkspace>
   );
 }
 
@@ -294,38 +291,10 @@ function fmt(value) {
   return Number(value || 0).toFixed(2);
 }
 
-const page = { display: "grid", gap: 18 };
-const hero = {
-  background: "linear-gradient(135deg,#052e16,#0f766e 60%,#14b8a6)",
-  color: "white",
-  borderRadius: 20,
-  padding: 26,
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 18,
-  flexWrap: "wrap",
-  boxShadow: "0 12px 30px rgba(15,118,110,0.22)",
-};
-const eyebrow = { fontSize: 12, textTransform: "uppercase", fontWeight: 900 };
-const title = { margin: "6px 0", fontSize: 34, fontWeight: 950 };
-const subtitle = { opacity: 0.92, maxWidth: 780 };
-const totalBox = {
-  background: "rgba(255,255,255,0.14)",
-  border: "1px solid rgba(255,255,255,0.24)",
-  borderRadius: 16,
-  padding: 16,
-  minWidth: 210,
-  display: "grid",
-  gap: 6,
-};
 const card = {
-  background: "white",
-  border: "1px solid #e5e7eb",
-  borderRadius: 16,
-  padding: 20,
-  boxShadow: "0 6px 18px rgba(15,23,42,0.06)",
+  display: "grid",
+  gap: 16,
 };
-const cardTitle = { marginTop: 0, color: "#0f172a", fontWeight: 900 };
 const grid = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))",
@@ -407,13 +376,3 @@ const messageBox = {
   padding: 12,
   fontWeight: 800,
 };
-const tableWrap = { overflowX: "auto" };
-const table = { width: "100%", borderCollapse: "collapse", fontSize: 13 };
-const th = {
-  textAlign: "left",
-  padding: 10,
-  background: "#f8fafc",
-  borderBottom: "1px solid #e2e8f0",
-  color: "#475569",
-};
-const td = { padding: 10, borderBottom: "1px solid #f1f5f9" };

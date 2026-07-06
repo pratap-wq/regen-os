@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import DateQuickFilters from "./DateQuickFilters";
+import MonthYearFilter from "./MonthYearFilter";
 import { button, card, input, regenTheme } from "../theme/regenTheme";
 
 export default function DataTable({
@@ -10,7 +11,12 @@ export default function DataTable({
   onEdit,
   onDelete,
 }) {
+  const now = new Date();
   const [search, setSearch] = useState("");
+  const [month, setMonth] = useState(String(now.getMonth() + 1).padStart(2, "0"));
+  const [year, setYear] = useState(String(now.getFullYear()));
+  const [material, setMaterial] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [sortConfig, setSortConfig] = useState({
@@ -49,6 +55,31 @@ export default function DataTable({
 
   const filteredRows = useMemo(() => {
     let filtered = [...rows];
+
+    if (month || year) {
+      filtered = filtered.filter((r) => {
+        const raw = r.date || r.periodMonth || r.productionDate || r.createdAt || "";
+        if (!raw) return true;
+        const d = new Date(raw);
+        if (isNaN(d.getTime())) return true;
+        const rowMonth = String(d.getMonth() + 1).padStart(2, "0");
+        const rowYear = String(d.getFullYear());
+        return (!month || rowMonth === month) && (!year || rowYear === year);
+      });
+    }
+
+    if (material) {
+      filtered = filtered.filter((r) => {
+        const value = materialValue(r);
+        return String(value || "").toLowerCase().includes(material.toLowerCase());
+      });
+    }
+
+    if (statusFilter) {
+      filtered = filtered.filter((r) =>
+        String(statusValue(r) || "").toLowerCase().includes(statusFilter.toLowerCase())
+      );
+    }
 
     if (search) {
       const q = search.toLowerCase();
@@ -107,7 +138,17 @@ export default function DataTable({
     }
 
     return filtered;
-  }, [rows, search, searchFields, fromDate, toDate, columnFilters, sortConfig, columns]);
+  }, [rows, search, searchFields, month, year, material, statusFilter, fromDate, toDate, columnFilters, sortConfig, columns]);
+
+  const materialOptions = useMemo(
+    () => uniqueOptions(rows.map(materialValue)).slice(0, 80),
+    [rows]
+  );
+
+  const statusOptions = useMemo(
+    () => uniqueOptions(rows.map(statusValue)).slice(0, 40),
+    [rows]
+  );
 
   function exportCSV() {
     const headers = columns.map((c) => c.label);
@@ -194,6 +235,10 @@ export default function DataTable({
 
   function clearFilters() {
     setSearch("");
+    setMonth(String(now.getMonth() + 1).padStart(2, "0"));
+    setYear(String(now.getFullYear()));
+    setMaterial("");
+    setStatusFilter("");
     setFromDate("");
     setToDate("");
     setColumnFilters({});
@@ -221,6 +266,41 @@ export default function DataTable({
             placeholder="Search or scan..."
             style={searchStyle}
           />
+
+          <MonthYearFilter
+            month={month}
+            year={year}
+            onMonthChange={setMonth}
+            onYearChange={setYear}
+          />
+
+          <select
+            value={material}
+            onChange={(e) => setMaterial(e.target.value)}
+            style={selectStyle}
+            title="Material filter"
+          >
+            <option value="">All Materials</option>
+            {materialOptions.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            style={selectStyle}
+            title="Status filter"
+          >
+            <option value="">All Status</option>
+            {statusOptions.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
 
           <DateQuickFilters
             fromDate={fromDate}
@@ -313,7 +393,7 @@ export default function DataTable({
 
                       {onDelete && (
                         <button onClick={() => onDelete(r)} style={deleteButtonStyle}>
-                          Delete
+                          Soft Delete
                         </button>
                       )}
                     </div>
@@ -342,6 +422,28 @@ function safeFileName(name) {
   return String(name || "export")
     .replace(/[^a-z0-9]/gi, "_")
     .toLowerCase();
+}
+
+function materialValue(row = {}) {
+  return (
+    row.material ||
+    row.materialBucket ||
+    row.itemName ||
+    row.grade ||
+    row.productionGrade ||
+    row.inputMaterial ||
+    ""
+  );
+}
+
+function statusValue(row = {}) {
+  return row.status || row.dispatchStatus || row.inwardStatus || row.issueStatus || "";
+}
+
+function uniqueOptions(values = []) {
+  return Array.from(
+    new Set(values.map((value) => String(value || "").trim()).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b));
 }
 
 const cardStyle = {
@@ -377,6 +479,12 @@ const searchStyle = {
   ...input,
   width: 220,
   maxWidth: "100%",
+  height: 38,
+};
+
+const selectStyle = {
+  ...input,
+  width: 150,
   height: 38,
 };
 

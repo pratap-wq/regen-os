@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 import DataTable from "../components/DataTable";
+import OperationalWorkspace from "../components/OperationalWorkspace";
+
+const now = new Date();
 
 export default function LiveInventory() {
   const [rmRows, setRmRows] = useState([]);
@@ -9,6 +12,9 @@ export default function LiveInventory() {
   const [sortingRows, setSortingRows] = useState([]);
   const [extrusionRows, setExtrusionRows] = useState([]);
   const [dispatchRows, setDispatchRows] = useState([]);
+  const [month, setMonth] = useState(String(now.getMonth() + 1).padStart(2, "0"));
+  const [year, setYear] = useState(String(now.getFullYear()));
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     loadData();
@@ -213,34 +219,53 @@ export default function LiveInventory() {
   }, [rmRows, washRows, sortingRows, extrusionRows, dispatchRows]);
 
   return (
-    <div style={page}>
-      <div style={hero}>
-        <div>
-          <div style={eyebrow}>Inventory Intelligence</div>
-          <h1 style={title}>Live Inventory Dashboard</h1>
-          <div style={subtitle}>
-            RM, wash, sorting, FG and dispatch movement ledger.
-          </div>
-        </div>
-      </div>
-
-      <div style={grid}>
-        <Card title="RM Stock" value={`${metrics.rmStock.toFixed(0)} Kg`} />
-        <Card title="Wash Stock" value={`${metrics.washStock.toFixed(0)} Kg`} />
-        <Card title="Sorting Stock" value={`${metrics.sortingStock.toFixed(0)} Kg`} />
-        <Card title="FG Stock" value={`${metrics.fgStock.toFixed(0)} Kg`} />
-      </div>
-
-      <div style={grid}>
-        <Card title="Wash Recovery" value={`${metrics.washRecovery}%`} />
-        <Card title="Sorting Recovery" value={`${metrics.sortingRecovery}%`} />
-        <Card title="Extrusion Recovery" value={`${metrics.extrusionRecovery}%`} />
-        <Card title="Overall Recovery" value={`${metrics.overallRecovery}%`} />
-      </div>
-
+    <OperationalWorkspace
+      eyebrow="Inventory Intelligence"
+      title="Material Inventory"
+      subtitle="Material movement snapshot from receiving, production and dispatch."
+      month={month}
+      year={year}
+      search={search}
+      onMonthChange={setMonth}
+      onYearChange={setYear}
+      onSearchChange={setSearch}
+      onRefresh={loadData}
+      snapshots={[
+        { label: "RM Stock", value: `${metrics.rmStock.toFixed(0)} Kg` },
+        { label: "WIP Stock", value: `${(metrics.washStock + metrics.sortingStock).toFixed(0)} Kg` },
+        { label: "FG Stock", value: `${metrics.fgStock.toFixed(0)} Kg` },
+        { label: "Overall Recovery", value: `${metrics.overallRecovery}%` },
+      ]}
+      entryTitle="Inventory Snapshot"
+      historyTitle="Movement History"
+      history={
+        <DataTable
+          title="Inventory Movement Ledger"
+          rows={movements}
+          searchFields={["stage", "material", "reference", "source", "status"]}
+          columns={[
+            {
+              key: "date",
+              label: "Date",
+              render: (r) => formatDate(r.date),
+              renderExport: (r) => formatDate(r.date),
+            },
+            { key: "stage", label: "Stage" },
+            { key: "source", label: "Source" },
+            { key: "material", label: "Material" },
+            {
+              key: "qty",
+              label: "Qty Kg",
+              render: (r) => Number(r.qty || 0).toFixed(2),
+              renderExport: (r) => Number(r.qty || 0).toFixed(2),
+            },
+            { key: "reference", label: "Reference" },
+            { key: "status", label: "Status" },
+          ]}
+        />
+      }
+    >
       <div style={flowCard}>
-        <h3 style={{ marginTop: 0 }}>Material Flow</h3>
-
         <div style={flowGrid}>
           <FlowBox title="RM Inward" value={metrics.rmInward} />
           <FlowBox title="Wash Output" value={metrics.washOutput} />
@@ -250,45 +275,10 @@ export default function LiveInventory() {
         </div>
       </div>
 
-      <DataTable
-        title="Inventory Movement Ledger"
-        rows={movements}
-        searchFields={["stage", "material", "reference", "source", "status"]}
-        columns={[
-          {
-            key: "date",
-            label: "Date",
-            render: (r) => formatDate(r.date),
-            renderExport: (r) => formatDate(r.date),
-          },
-          { key: "stage", label: "Stage" },
-          { key: "source", label: "Source" },
-          { key: "material", label: "Material" },
-          {
-            key: "qty",
-            label: "Qty Kg",
-            render: (r) => Number(r.qty || 0).toFixed(2),
-            renderExport: (r) => Number(r.qty || 0).toFixed(2),
-          },
-          { key: "reference", label: "Reference" },
-          { key: "status", label: "Status" },
-        ]}
-      />
-
       <div style={note}>
-        Inventory ledger is calculated from source transactions. Edit should be done in RM Inward,
-        Production History, Dispatch, or Stores screens so audit trail remains clean.
+        Inventory is calculated from source transactions. Edit source entries so audit trail remains clean.
       </div>
-    </div>
-  );
-}
-
-function Card({ title, value }) {
-  return (
-    <div style={card}>
-      <div style={cardTitle}>{title}</div>
-      <div style={cardValue}>{value}</div>
-    </div>
+    </OperationalWorkspace>
   );
 }
 
@@ -303,72 +293,10 @@ function FlowBox({ title, value }) {
   );
 }
 
-const page = {
-  width: "100%",
-  paddingBottom: 30,
-};
-
-const hero = {
-  background: "linear-gradient(135deg,#064e3b,#0f766e)",
-  color: "white",
-  borderRadius: 18,
-  padding: 24,
-  marginBottom: 20,
-};
-
-const eyebrow = {
-  fontSize: 13,
-  textTransform: "uppercase",
-  letterSpacing: 1.2,
-  opacity: 0.85,
-  fontWeight: 800,
-};
-
-const title = {
-  margin: "6px 0",
-  fontSize: 32,
-  fontWeight: 950,
-};
-
-const subtitle = {
-  opacity: 0.9,
-};
-
-const grid = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))",
-  gap: 16,
-  marginBottom: 20,
-};
-
-const card = {
-  background: "white",
-  padding: 20,
-  borderRadius: 14,
-  border: "1px solid #e5e7eb",
-  boxShadow: "0 6px 18px rgba(15,23,42,0.06)",
-};
-
-const cardTitle = {
-  color: "#64748b",
-  marginBottom: 8,
-  fontSize: 13,
-  fontWeight: 700,
-};
-
-const cardValue = {
-  fontSize: 28,
-  fontWeight: 900,
-  color: "#0f766e",
-};
 
 const flowCard = {
-  background: "white",
-  padding: 20,
-  borderRadius: 14,
-  marginBottom: 20,
-  border: "1px solid #e5e7eb",
-  boxShadow: "0 6px 18px rgba(15,23,42,0.06)",
+  display: "grid",
+  gap: 12,
 };
 
 const flowGrid = {

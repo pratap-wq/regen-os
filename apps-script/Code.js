@@ -384,6 +384,7 @@ function updateFactoryCostMaster(data = {}) {
     if (p.fn === "inventoryLedger.list") return listMaster("Inventory_Ledger");
     if (p.fn === "inventoryLedger.add") return addInventoryLedger(p);
     if (p.fn === "inventoryLedger.balance") return getInventoryLedgerBalance();
+    if (p.fn === "inventoryLedger.audit") return auditInventoryLedger(p);
     if (p.fn === "trace.batch") return traceBatch(p);
     if (p.fn === "inventory.summary") {
       return output({
@@ -4925,6 +4926,228 @@ function getInventoryLedgerBalance(){
         rows:Object.values(balance)
     });
 
+}
+
+function auditInventoryLedger(data = {}) {
+  const periodMonth = auditPeriodMonth_(data.periodMonth || data.month || "");
+  const ledgerRows = getRowsAsObjects("Inventory_Ledger")
+    .filter((row) => !isDeleted_(row));
+  const scopedLedgerRows = periodMonth
+    ? ledgerRows.filter((row) => auditRowPeriod_(row) === periodMonth)
+    : ledgerRows;
+
+  const duplicateGroups = auditGroupRows_(
+    scopedLedgerRows,
+    ["movementType", "sourceRef", "legacySourceSheet", "legacySourceId", "itemType", "itemName"]
+  ).filter((group) => group.count > 1);
+
+  const duplicateLegacyMovements = auditGroupRows_(
+    scopedLedgerRows.filter((row) => row.legacySourceSheet || row.legacySourceId),
+    ["legacySourceSheet", "legacySourceId", "movementType", "itemType", "itemName"]
+  ).filter((group) => group.count > 1);
+
+  const physicalMovementDuplicates = auditFindPhysicalMovementDuplicates_(scopedLedgerRows);
+  const materialBalances = auditGroupRows_(scopedLedgerRows, ["itemType", "itemName"]);
+  const ledgerFgBalances = materialBalances.filter((row) => String(row.itemType || "").toUpperCase() === "FG");
+  const ledgerFgMovementBreakdown = auditGroupRows_(
+    scopedLedgerRows.filter((row) => String(row.itemType || "").toUpperCase() === "FG"),
+    ["module", "movementType", "legacySourceSheet", "itemName"]
+  );
+
+  const extrusionRows = auditRowsForPeriod_("Extrusion_Batches", periodMonth);
+  const dispatchRows = auditRowsForPeriod_("Dispatches", periodMonth);
+  const legacyExtrusionFgOutput = auditLegacyExtrusionFg_(extrusionRows);
+  const legacyDispatchQty = auditLegacyDispatchFg_(dispatchRows);
+
+  return output({
+    ok: true,
+    route: "inventoryLedger.audit",
+    periodMonth: periodMonth || "ALL",
+    rowsAudited: scopedLedgerRows.length,
+    ledgerRowsTotal: ledgerRows.length,
+    groupingFields: [
+      "movementType",
+      "sourceRef",
+      "legacySourceSheet",
+      "legacySourceId",
+      "itemType",
+      "itemName",
+    ],
+    duplicateGroupCount: duplicateGroups.length,
+    duplicateLegacyMovementCount: duplicateLegacyMovements.length,
+    duplicatePhysicalMovementCount: physicalMovementDuplicates.length,
+    duplicateGroups: duplicateGroups.slice(0, 100),
+    duplicateLegacyMovements: duplicateLegacyMovements.slice(0, 100),
+    duplicatePhysicalMovements: physicalMovementDuplicates.slice(0, 100),
+    materialBalances,
+    fgComparison: {
+      ledgerFgBalances,
+      ledgerFgMovementBreakdown,
+      legacyExtrusionRows: extrusionRows.length,
+      legacyExtrusionFgOutput,
+      legacyDispatchRows: dispatchRows.length,
+      legacyDispatchQty,
+    },
+    idempotencyAssessment: {
+      migrationLedgerKey: "legacySourceSheet|legacySourceId|movementType|itemName",
+      exactMigrationDuplicatesFound: duplicateLegacyMovements.length,
+      note:
+        "Migration ledger append is idempotent for the exact legacy source, movement type, and material. This audit also flags duplicate physical movements across old operational ledger rows and migration ledger rows.",
+    },
+    likelyRootCause:
+      "Dispatch availability reads Inventory_Ledger balance. After cut-over, the ledger can contain both old operational EXTRUSION/DISPATCH rows and new Manufacturing Cutover migration rows for the same physical production/dispatch, inflating balances even when migration reruns are exact-idempotent.",
+  });
+}
+
+function auditPeriodMonth_(value) {
+  const text = String(value || "").trim();
+  if (/^\d{4}-\d{2}/.test(text)) return text.slice(0, 7);
+  return "";
+}
+
+function auditRowPeriod_(row) {
+  const explicit = auditPeriodMonth_(row.periodMonth);
+  if (explicit) return explicit;
+  return getPeriodMonth(row.date || row.createdAt || todayYmd());
+}
+
+function auditRowsForPeriod_(sheetName, periodMonth) {
+  return getRowsAsObjects(sheetName)
+    .filter((row) => !isDeleted_(row))
+    .filter((row) => !periodMonth || auditRowPeriod_(row) === periodMonth);
+}
+
+function auditGroupRows_(rows, fields) {
+  const map = {};
+
+  rows.forEach((row) => {
+    const key = fields.map((field) => String(row[field] || "")).join("|");
+    if (!map[key]) {
+      const group = {
+        key,
+        count: 0,
+        qtyIn: 0,
+        qtyOut: 0,
+        balance: 0,
+        examples: [],
+      };
+      fields.forEach((field) => {
+        group[field] = row[field] || "";
+      });
+      map[key] = group;
+    }
+
+    map[key].count += 1;
+    map[key].qtyIn += num(row.qtyIn);
+    map[key].qtyOut += num(row.qtyOut);
+    map[key].balance += num(row.qtyIn) - num(row.qtyOut);
+
+    if (map[key].examples.length < 3) {
+      map[key].examples.push({
+        date: row.date || "",
+        module: row.module || "",
+        movementType: row.movementType || "",
+        sourceRef: row.sourceRef || "",
+        targetRef: row.targetRef || "",
+        legacySourceSheet: row.legacySourceSheet || "",
+        legacySourceId: row.legacySourceId || "",
+        itemType: row.itemType || "",
+        itemName: row.itemName || "",
+        qtyIn: num(row.qtyIn),
+        qtyOut: num(row.qtyOut),
+        remarks: row.remarks || "",
+      });
+    }
+  });
+
+  return Object.keys(map)
+    .map((key) => ({
+      ...map[key],
+      qtyIn: round2(map[key].qtyIn),
+      qtyOut: round2(map[key].qtyOut),
+      balance: round2(map[key].balance),
+    }))
+    .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
+}
+
+function auditFindPhysicalMovementDuplicates_(rows) {
+  const relevantRows = rows.filter((row) => {
+    const itemType = String(row.itemType || "").toUpperCase();
+    const moduleName = String(row.module || "").toUpperCase();
+    const movementType = String(row.movementType || "").toUpperCase();
+    return (
+      itemType === "FG" &&
+      (
+        moduleName === "EXTRUSION" ||
+        moduleName === "DISPATCH" ||
+        moduleName === "MANUFACTURING CUTOVER" ||
+        movementType.indexOf("TRANSFORMATION_OUTPUT") === 0 ||
+        movementType === "FG_DISPATCH_OUT"
+      )
+    );
+  });
+
+  return auditGroupRows_(relevantRows, ["itemType", "itemName", "sourceRef"]).filter((group) => {
+    const modules = {};
+    group.examples.forEach((row) => {
+      if (row.module) modules[row.module] = true;
+    });
+    return group.count > 1 && Object.keys(modules).length > 1;
+  });
+}
+
+function auditFgMaterial_(value) {
+  const raw = String(value || "").trim().toUpperCase();
+  const match = raw.match(/\bE[1-5]\b/);
+  return match ? match[0] : raw || "UNKNOWN";
+}
+
+function auditLegacyExtrusionFg_(rows) {
+  const map = {};
+  rows.forEach((row) => {
+    const grade = auditFgMaterial_(row.productionGrade || row.grade);
+    if (!map[grade]) map[grade] = { itemName: grade, rows: 0, fgOutputKg: 0 };
+    map[grade].rows += 1;
+    map[grade].fgOutputKg += num(row.fgOutputKg);
+  });
+  return Object.keys(map)
+    .map((key) => ({
+      itemName: key,
+      rows: map[key].rows,
+      fgOutputKg: round2(map[key].fgOutputKg),
+    }))
+    .sort((a, b) => b.fgOutputKg - a.fgOutputKg);
+}
+
+function auditLegacyDispatchFg_(rows) {
+  const map = {};
+
+  rows.forEach((row) => {
+    const lines = parseDispatchLines_(row.dispatchLines);
+    if (lines.length > 0) {
+      lines.forEach((line) => {
+        const grade = auditFgMaterial_(line.grade || row.grade);
+        const quantityKg = num(line.dispatchQtyKg || line.quantityKg);
+        if (!map[grade]) map[grade] = { itemName: grade, rows: 0, quantityKg: 0 };
+        map[grade].rows += 1;
+        map[grade].quantityKg += quantityKg;
+      });
+      return;
+    }
+
+    const grade = auditFgMaterial_(row.grade || row.productionGrade);
+    if (!map[grade]) map[grade] = { itemName: grade, rows: 0, quantityKg: 0 };
+    map[grade].rows += 1;
+    map[grade].quantityKg += num(row.quantityKg);
+  });
+
+  return Object.keys(map)
+    .map((key) => ({
+      itemName: key,
+      rows: map[key].rows,
+      quantityKg: round2(map[key].quantityKg),
+    }))
+    .sort((a, b) => b.quantityKg - a.quantityKg);
 }
 // QUALITY
 

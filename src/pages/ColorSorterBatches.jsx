@@ -519,7 +519,7 @@ export default function ColorSorterBatches() {
           title="Source Information"
         >
 
-          <Field label="Washed Material">
+          <Field label="Wash Batch">
 
             <select
               name="sourceWashBatchId"
@@ -1092,8 +1092,8 @@ export default function ColorSorterBatches() {
           >
 
             {editingId
-              ? "Update Material"
-              : "Save Material"}
+              ? "Update Batch"
+              : "Save Batch"}
 
           </button>
 
@@ -1136,12 +1136,12 @@ export default function ColorSorterBatches() {
           {
             key:
               "sortingBatchId",
-            label: "Material Ref",
+            label: "Batch",
           },
           {
             key:
               "sourceWashBatchId",
-            label: "Washed Material",
+            label: "Wash Batch",
           },
           {
             key:

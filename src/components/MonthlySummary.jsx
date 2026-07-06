@@ -11,13 +11,13 @@ export default function MonthlySummary({ close }) {
 
       <div style={grid}>
         <SummaryBox
-          title="Material Received"
+          title="RM Purchased"
           value={`${ton(close.rm.purchasedKg)} T`}
           color="#2563eb"
         />
 
         <SummaryBox
-          title="Material Produced"
+          title="FG Produced"
           value={`${ton(close.production.fgProducedKg)} T`}
           color="#16a34a"
         />

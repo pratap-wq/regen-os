@@ -500,15 +500,15 @@ export default function ExtrusionBatches() {
   return (
     <div style={{ padding: 16 }}>
       <div style={{ marginBottom: 16 }}>
-        <h2 style={{ margin: 0 }}>Extrusion Material</h2>
+        <h2 style={{ margin: 0 }}>Extrusion Batch</h2>
 
         <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
-          Single source of truth for extruder feed composition, recovery material and dispatch material output.
+          Single source of truth for extruder feed composition, recovery material and FG output.
         </div>
       </div>
 
       <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <FormSection title="Material Header">
+        <FormSection title="Batch Header">
           <Field label="Date">
             <input type="date" name="date" value={form.date} onChange={onChange} style={inputStyle} />
           </Field>
@@ -545,10 +545,10 @@ export default function ExtrusionBatches() {
           </Field>
         </FormSection>
 
-        <FormSection title="Quick Add Source Material">
-          <Field label="Add Sorted Material">
+        <FormSection title="Quick Add Source Batch">
+          <Field label="Add Sorting Batch">
             <select onChange={(e) => e.target.value && loadSortingBatchToFeed(e.target.value)} style={inputStyle} value="">
-              <option value="">Select Sorted Material</option>
+              <option value="">Select Sorting Batch</option>
               {sortingBatches.map((s, i) => (
                 <option key={i} value={s.sortingBatchId}>
                   {s.sortingBatchId} | {s.acceptedQtyKg} Kg
@@ -557,9 +557,9 @@ export default function ExtrusionBatches() {
             </select>
           </Field>
 
-          <Field label="Add Direct Washed Material">
+          <Field label="Add Direct Wash Batch">
             <select onChange={(e) => e.target.value && loadWashBatchToFeed(e.target.value)} style={inputStyle} value="">
-              <option value="">Select Washed Material</option>
+              <option value="">Select Wash Batch</option>
               {directWashBatches.map((w, i) => (
                 <option key={i} value={w.washBatchId}>
                   {w.washBatchId} | {w.washedOutputKg} Kg
@@ -572,7 +572,7 @@ export default function ExtrusionBatches() {
             <input readOnly value={form.status} style={readonlyStyle} />
           </Field>
 
-          <Field label="Material Ref">
+          <Field label="Lot No">
             <input readOnly value={form.lotNo} style={readonlyStyle} />
           </Field>
         </FormSection>
@@ -583,7 +583,7 @@ export default function ExtrusionBatches() {
               <thead>
                 <tr style={feedHeader}>
                   <th style={feedTh}>Source Type</th>
-                  <th style={feedTh}>Source Material</th>
+                  <th style={feedTh}>Source / Batch</th>
                   <th style={feedTh}>Material</th>
                   <th style={feedTh}>Qty Kg</th>
                   <th style={feedTh}>Remarks</th>
@@ -614,7 +614,7 @@ export default function ExtrusionBatches() {
                       <input
                         value={r.sourceBatchId || ""}
                         onChange={(e) => updateFeedRow(i, "sourceBatchId", e.target.value)}
-                        placeholder="Material / Manual Ref"
+                        placeholder="Batch / Lot / Manual Ref"
                         style={inputStyle}
                       />
                     </td>
@@ -692,7 +692,7 @@ export default function ExtrusionBatches() {
         </FormSection>
 
         <FormSection title="Output Matrix">
-          <Field label="Dispatch Material Kg">
+          <Field label="FG Output Kg">
             <input type="number" name="fgOutputKg" value={form.fgOutputKg} onChange={onChange} style={inputStyle} />
           </Field>
 
@@ -753,7 +753,7 @@ export default function ExtrusionBatches() {
             />
           </Field>
 
-          <Field label="Material Recovery %">
+          <Field label="FG Recovery %">
             <input readOnly value={form.recoveryPercent} style={readonlyStyle} />
           </Field>
         </FormSection>
@@ -766,7 +766,7 @@ export default function ExtrusionBatches() {
 
         <div style={stickyBar}>
           <button type="submit" style={saveButton(editingId)}>
-            {editingId ? "Update Material" : "Save Material"}
+            {editingId ? "Update Batch" : "Save Batch"}
           </button>
         </div>
       </form>
@@ -774,7 +774,7 @@ export default function ExtrusionBatches() {
       <div style={statusText}>{status}</div>
 
       <DataTable
-        title="Extrusion Materials"
+        title="Extrusion Batches"
         rows={rows.filter((r) => r.status !== "DELETED")}
         searchFields={[
           "extrusionBatchId",
@@ -784,7 +784,7 @@ export default function ExtrusionBatches() {
           "lotNo",
         ]}
         columns={[
-          { key: "extrusionBatchId", label: "Material Ref" },
+          { key: "extrusionBatchId", label: "Batch" },
           {
             key: "date",
             label: "Date",
@@ -792,9 +792,9 @@ export default function ExtrusionBatches() {
           },
           { key: "productionGrade", label: "Grade" },
           { key: "totalInputKg", label: "Input" },
-          { key: "fgOutputKg", label: "Material" },
+          { key: "fgOutputKg", label: "FG" },
           { key: "varianceKg", label: "Variance" },
-          { key: "recoveryPercent", label: "Material Recovery %" },
+          { key: "recoveryPercent", label: "FG Recovery %" },
           { key: "recoveryMaterialPercent", label: "Recovery Feed %" },
           {
             key: "recoverySeverity",

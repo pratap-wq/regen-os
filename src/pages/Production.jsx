@@ -460,7 +460,7 @@ export default function Production() {
           form.extrusionBatchId || buildExtrusionBatchId(form);
 
         if (!finalExtrusionBatchId) {
-          setMessage("Production material reference could not be generated.");
+          setMessage("Production Batch ID could not be generated.");
           setSaving(false);
           return;
         }
@@ -534,7 +534,7 @@ export default function Production() {
 
       <div style={infoBox}>
        One shift entry screen for Washline, Colour Sorter and Extrusion.
-Material receiving and dispatch material quality testing is performed separately in the Quality Workbench.
+Raw Material and Finished Goods quality testing is performed separately in the Quality Workbench.
       </div>
 
       {message && <div style={messageBox}>{message}</div>}
@@ -547,7 +547,7 @@ Material receiving and dispatch material quality testing is performed separately
           }
         }}
       >
-        <FormSection title="Material Information">
+        <FormSection title="Batch Information">
           <Field
             label="Date"
             name="date"
@@ -659,7 +659,7 @@ Material receiving and dispatch material quality testing is performed separately
           />
 
           <Field
-            label="Production Material Ref"
+            label="Production Batch ID"
             value={form.extrusionBatchId}
             readOnly
           />
@@ -677,7 +677,7 @@ Material receiving and dispatch material quality testing is performed separately
           <Field label="Additive %" value={additiveRatioPercent} readOnly />
           <TextAreaField label="Feed Summary" value={feedSummary()} readOnly />
 
-          <Field label="Dispatch Material Kg" name="fgOutputKg" value={form.fgOutputKg} onChange={onChange} />
+          <Field label="FG Output Kg" name="fgOutputKg" value={form.fgOutputKg} onChange={onChange} />
           <Field label="Lumps Kg" name="lumpsKg" value={form.lumpsKg} onChange={onChange} />
           <Field label="Purging Kg" name="purgingKg" value={form.purgingKg} onChange={onChange} />
           <Field label="Rework Granules Kg" name="reworkGranulesKg" value={form.reworkGranulesKg} onChange={onChange} />
@@ -685,7 +685,7 @@ Material receiving and dispatch material quality testing is performed separately
           <Field label="Vacuum Reject Kg" name="vacuumRejectKg" value={form.vacuumRejectKg} onChange={onChange} />
           <Field label="Mesh Reject Kg" name="meshRejectKg" value={form.meshRejectKg} onChange={onChange} />
           <Field label="Floor Spillage Kg" name="floorSpillageKg" value={form.floorSpillageKg} onChange={onChange} />
-          <Field label="Material Recovery %" value={extrusionRecovery} readOnly />
+          <Field label="FG Recovery %" value={extrusionRecovery} readOnly />
           <Field label="Extrusion Variance Kg" value={extrusionVariance.toFixed(2)} readOnly />
         </FormSection>
 

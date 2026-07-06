@@ -1,23 +1,32 @@
 import { useEffect, useState } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+
 import { onAuthStateChanged } from "firebase/auth";
 
 import { auth, logout } from "./firebase";
+
 import Sidebar from "./components/Sidebar";
 
 import Login from "./pages/Login";
 import Traceability from "./pages/Traceability";
-import MaterialTransformation from "./pages/MaterialTransformation";
-import MaterialReceiving from "./pages/MaterialReceiving";
 import Production from "./pages/Production";
 import ProductionHistory from "./pages/ProductionHistory";
+import ProductionControlCenter from "./pages/ProductionControlCenter";
 
 import Dashboard from "./pages/Dashboard";
+import ProcurementDashboard from "./pages/ProcurementDashboard";
+import InventoryDashboard from "./pages/InventoryDashboard";
 
+import RMInward from "./pages/RMInward";
+import RMList from "./pages/RMList";
 import Suppliers from "./pages/Suppliers";
 import SupplierEntry from "./pages/SupplierEntry";
 
+import WashBatches from "./pages/WashBatches";
+import ExtrusionBatches from "./pages/ExtrusionBatches";
 import Dispatch from "./pages/Dispatch";
+import ColorSorterBatches from "./pages/ColorSorterBatches";
 import ProductionMaterials from "./pages/ProductionMaterials";
 import LiveInventory from "./pages/LiveInventory";
 import MonthlyAudit from "./pages/MonthlyAudit";
@@ -25,11 +34,6 @@ import InventoryAdjustments from "./pages/InventoryAdjustments";
 import Quality from "./pages/Quality";
 import FGRates from "./pages/FGRates";
 import FactoryExpenses from "./pages/FactoryExpenses";
-import RMInward from "./pages/RMInward";
-import RMList from "./pages/RMList";
-import WashBatches from "./pages/WashBatches";
-import ColorSorterBatches from "./pages/ColorSorterBatches";
-import ExtrusionBatches from "./pages/ExtrusionBatches";
 
 import Consumables from "./pages/Consumables";
 import StoresInward from "./pages/StoresInward";
@@ -40,7 +44,6 @@ import StoresCosting from "./pages/StoresCosting";
 import AlertSettings from "./pages/AlertSettings";
 import AlertCenter from "./pages/AlertCenter";
 import FactoryCostMaster from "./pages/FactoryCostMaster";
-
 export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -78,6 +81,7 @@ export default function App() {
           <div style={topBar}>
             <div>
               <div style={brandTitle}>Regen OS</div>
+
               <div style={brandSub}>
                 Logged in: <b>{user.email}</b>
               </div>
@@ -90,30 +94,40 @@ export default function App() {
 
           <div style={pageWrap}>
             <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/" element={<Production />} />
+              <Route path="/production" element={<Production />} />
               <Route
-                path="/command-center"
-                element={<Navigate to="/dashboard" replace />}
+                path="/production-history"
+                element={<ProductionHistory />}
               />
-
-              <Route path="/material-receiving" element={<MaterialReceiving />} />
               <Route
                 path="/production-control-center"
-                element={<MaterialTransformation />}
-              />
-              <Route
-                path="/material-transformation"
-                element={<Navigate to="/production-control-center" replace />}
-              />
-              <Route path="/material-inventory" element={<LiveInventory />} />
-              <Route
-                path="/live-inventory"
-                element={<Navigate to="/material-inventory" replace />}
+                element={<ProductionControlCenter />}
               />
 
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route
+                path="/procurement-dashboard"
+                element={<ProcurementDashboard />}
+              />
+              <Route
+                path="/inventory-dashboard"
+                element={<InventoryDashboard />}
+              />
+
+              <Route path="/live-inventory" element={<LiveInventory />} />
+              <Route path="/rm-inward" element={<RMInward />} />
+              <Route path="/rm-list" element={<RMList />} />
               <Route path="/suppliers" element={<Suppliers />} />
               <Route path="/supplier-entry" element={<SupplierEntry />} />
+
+              <Route path="/wash-batches" element={<WashBatches />} />
+              <Route path="/extrusion-batches" element={<ExtrusionBatches />} />
+              <Route
+                path="/color-sorter-batches"
+                element={<ColorSorterBatches />}
+              />
+
               <Route path="/dispatch" element={<Dispatch />} />
               <Route path="/production-materials" element={<ProductionMaterials />} />
               <Route path="/consumables" element={<Consumables />} />
@@ -132,26 +146,6 @@ export default function App() {
               <Route path="/factory-cost-master" element={<FactoryCostMaster />} />
               <Route path="/alert-center" element={<AlertCenter />} />
               <Route path="/alert-settings" element={<AlertSettings />} />
-
-              <Route path="/production" element={<Production />} />
-              <Route path="/production-history" element={<ProductionHistory />} />
-              <Route
-                path="/factory-pulse"
-                element={<Navigate to="/dashboard" replace />}
-              />
-              <Route
-                path="/procurement-dashboard"
-                element={<Navigate to="/material-receiving" replace />}
-              />
-              <Route
-                path="/inventory-dashboard"
-                element={<Navigate to="/material-inventory" replace />}
-              />
-              <Route path="/rm-inward" element={<RMInward />} />
-              <Route path="/rm-list" element={<RMList />} />
-              <Route path="/wash-batches" element={<WashBatches />} />
-              <Route path="/extrusion-batches" element={<ExtrusionBatches />} />
-              <Route path="/color-sorter-batches" element={<ColorSorterBatches />} />
 
               <Route path="*" element={<Navigate to="/dashboard" />} />
             </Routes>

@@ -17,8 +17,8 @@ const ADJUSTMENT_TYPES = [
   "Physical Count",
   "Production Correction",
   "Dispatch Correction",
-  "Material Correction",
-  "Waste Correction",
+  "RM Correction",
+  "Waste Adjustment",
   "Reclassification",
   "Opening Balance Correction",
   "Closing Balance Correction",
@@ -62,28 +62,6 @@ function num(value) {
 
 function fmt(value) {
   return num(value).toLocaleString("en-IN", { maximumFractionDigits: 2 });
-}
-
-function areaLabel(value) {
-  const labels = { RM: "Material", FG: "Dispatch Material" };
-  return labels[value] || value;
-}
-
-function materialTypeLabel(value) {
-  const labels = {
-    RM: "Material",
-    WASHED: "Washed Material",
-    SORTED: "Sorted Material",
-    FG: "Dispatch Material",
-    STORE: "Stores Item",
-    WASTE: "Waste Material",
-    REWORK: "Rework Material",
-  };
-  return labels[value] || value;
-}
-
-function materialLabel(value) {
-  return value === "RM" ? "Material" : value;
 }
 
 export default function InventoryAdjustments() {
@@ -168,7 +146,7 @@ export default function InventoryAdjustments() {
     ]);
 
     if (!listRes?.ok) {
-      setMessage(listRes?.error || "Failed to load variance resolutions");
+      setMessage(listRes?.error || "Failed to load adjustments");
       return;
     }
 
@@ -213,7 +191,7 @@ export default function InventoryAdjustments() {
   }
 
   async function saveAdjustment(nextStatus) {
-    if (!form.itemCode) return setMessage("Select material");
+    if (!form.itemCode) return setMessage("Select Item Code / Material / Grade");
     if (num(form.quantityKg) === 0) return setMessage("Quantity cannot be zero");
 
     setSaving(true);
@@ -224,26 +202,26 @@ export default function InventoryAdjustments() {
     setSaving(false);
 
     if (!res?.ok) {
-      setMessage(res?.error || "Failed to save variance resolution");
+      setMessage(res?.error || "Failed to save adjustment");
       return;
     }
 
     resetForm();
-    setMessage("Variance resolution saved");
+    setMessage("Adjustment saved");
     loadData();
   }
 
   async function handleApprove(id) {
     const res = await approveInventoryAdjustment(id, "System");
     if (!res?.ok) return setMessage(res?.error || "Approval failed");
-    setMessage("Variance resolution approved");
+    setMessage("Adjustment approved");
     loadData();
   }
 
   async function handleReject(id) {
-    const res = await rejectInventoryAdjustment(id, "System", "Rejected from Resolve Variance");
+    const res = await rejectInventoryAdjustment(id, "System", "Rejected from Inventory Adjustments");
     if (!res?.ok) return setMessage(res?.error || "Reject failed");
-    setMessage("Variance resolution rejected");
+    setMessage("Adjustment rejected");
     loadData();
   }
 
@@ -251,9 +229,9 @@ export default function InventoryAdjustments() {
     <div style={page}>
       <div style={header}>
         <div>
-          <h1 style={title}>Resolve Variance</h1>
+          <h1 style={title}>Inventory Adjustments</h1>
           <p style={subtitle}>
-            Controlled corrections for differences found during month-end review.
+            Controlled reconciliation entries for month-end variance correction.
           </p>
         </div>
       </div>
@@ -270,7 +248,7 @@ export default function InventoryAdjustments() {
           <Field label="Module">
             <select style={input} value={moduleFilter} onChange={(e) => setModuleFilter(e.target.value)}>
               <option value="">All Modules</option>
-              {MODULES.map((x) => <option key={x} value={x}>{areaLabel(x)}</option>)}
+              {MODULES.map((x) => <option key={x} value={x}>{x}</option>)}
             </select>
           </Field>
 
@@ -291,14 +269,14 @@ export default function InventoryAdjustments() {
       </div>
 
       <div style={grid4}>
-        <Metric label="Total Resolutions" value={rows.length} />
+        <Metric label="Total Adjustments" value={rows.length} />
         <Metric label="Net Qty" value={`${fmt(totals.qty)} Kg`} />
         <Metric label="Approved Qty" value={`${fmt(totals.approvedQty)} Kg`} />
         <Metric label="Approved Value" value={`₹${fmt(totals.approvedValue)}`} />
       </div>
 
       <div style={card}>
-        <h2 style={sectionTitle}>Add Variance Resolution</h2>
+        <h2 style={sectionTitle}>Add Adjustment</h2>
 
         <div style={grid4}>
           <Field label="Period Month">
@@ -311,23 +289,23 @@ export default function InventoryAdjustments() {
 
           <Field label="Module">
             <select style={input} value={form.module} onChange={(e) => updateForm("module", e.target.value)}>
-              {MODULES.map((x) => <option key={x} value={x}>{areaLabel(x)}</option>)}
+              {MODULES.map((x) => <option key={x} value={x}>{x}</option>)}
             </select>
           </Field>
 
-          <Field label="Material Type">
+          <Field label="Item Type">
             <select style={input} value={form.itemType} onChange={(e) => updateForm("itemType", e.target.value)}>
-              {ITEM_TYPES.map((x) => <option key={x} value={x}>{materialTypeLabel(x)}</option>)}
+              {ITEM_TYPES.map((x) => <option key={x} value={x}>{x}</option>)}
             </select>
           </Field>
 
-          <Field label="Material">
+          <Field label="Item Code / Material / Grade">
             <select style={input} value={form.itemCode} onChange={(e) => updateForm("itemCode", e.target.value)}>
-              {itemOptions.map((x) => <option key={x} value={x}>{materialLabel(x)}</option>)}
+              {itemOptions.map((x) => <option key={x} value={x}>{x}</option>)}
             </select>
           </Field>
 
-          <Field label="Resolution Type">
+          <Field label="Adjustment Type">
             <select style={input} value={form.adjustmentType} onChange={(e) => updateForm("adjustmentType", e.target.value)}>
               {ADJUSTMENT_TYPES.map((x) => <option key={x} value={x}>{x}</option>)}
             </select>
@@ -347,7 +325,7 @@ export default function InventoryAdjustments() {
             </select>
           </Field>
 
-          <Field label="Source Reference">
+          <Field label="Source Ref">
             <input style={input} value={form.sourceRef} onChange={(e) => updateForm("sourceRef", e.target.value)} />
           </Field>
 
@@ -366,21 +344,21 @@ export default function InventoryAdjustments() {
       </div>
 
       <div style={card}>
-        <h2 style={sectionTitle}>Resolution Register</h2>
+        <h2 style={sectionTitle}>Adjustment Register</h2>
         {message && <div style={statusBox}>{message}</div>}
 
         <div style={tableWrap}>
           <table style={table}>
             <thead>
               <tr>
-                {["ID", "Date", "Month", "Area", "Material", "Type", "Qty Kg", "Value", "Reason", "Status", "Approved By", "Actions"].map((h) => (
+                {["ID", "Date", "Month", "Module", "Item", "Type", "Qty Kg", "Value", "Reason", "Status", "Approved By", "Actions"].map((h) => (
                   <th key={h} style={th}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr><td style={td} colSpan="12">No variance resolutions found.</td></tr>
+                <tr><td style={td} colSpan="12">No adjustments found.</td></tr>
               ) : rows.map((r) => {
                 const s = String(r.status || "").toUpperCase();
                 const canAct = ["DRAFT", "SUBMITTED", "PENDING"].includes(s);
@@ -390,8 +368,8 @@ export default function InventoryAdjustments() {
                     <td style={td}>{r.adjustmentId}</td>
                     <td style={td}>{r.date}</td>
                     <td style={td}>{r.periodMonth}</td>
-                    <td style={td}>{areaLabel(r.module)}</td>
-                    <td style={td}>{materialTypeLabel(r.itemType)} / {materialLabel(r.itemCode)}</td>
+                    <td style={td}>{r.module}</td>
+                    <td style={td}>{r.itemType} / {r.itemCode}</td>
                     <td style={td}>{r.adjustmentType}</td>
                     <td style={td}>{fmt(r.quantityKg)}</td>
                     <td style={td}>₹{fmt(r.value)}</td>

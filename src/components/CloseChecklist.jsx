@@ -3,7 +3,7 @@ export default function CloseChecklist({ close }) {
 
   const checks = [
     {
-      title: "Material Reconciliation",
+      title: "RM Reconciliation",
       ok: close.rm.purchasedKg >= close.rm.consumedKg,
     },
     {
@@ -109,7 +109,7 @@ export default function CloseChecklist({ close }) {
             cursor: ready ? "pointer" : "not-allowed",
           }}
         >
-          🔒 Close Control Room
+          🔒 Close Month
         </button>
       </div>
     </div>

@@ -115,7 +115,7 @@ export default function RMList() {
   }
 
   async function handleDelete(row) {
-    const ok = window.confirm("Mark material entry deleted?");
+    const ok = window.confirm("Mark RM entry deleted?");
     if (!ok) return;
 
     try {
@@ -161,7 +161,7 @@ export default function RMList() {
     <div style={pageStyle}>
       <div style={headerCard}>
         <div>
-          <h1 style={{ margin: 0 }}>Material Receiving List</h1>
+          <h1 style={{ margin: 0 }}>RM Inward List</h1>
           <div style={subText}>
             Raw material inward management & procurement tracking
           </div>
@@ -173,13 +173,13 @@ export default function RMList() {
       </div>
 
       <div style={kpiGrid}>
-        <KPI title="Material Qty" value={`${stats.totalQty} Kg`} />
+        <KPI title="RM Qty" value={`${stats.totalQty} Kg`} />
         <KPI
-          title="Material Value"
+          title="RM Value"
           value={`₹ ${Number(stats.totalValue).toLocaleString()}`}
         />
         <KPI title="Suppliers" value={stats.supplierCount} />
-        <KPI title="Avg Material Rate" value={`₹ ${stats.avgRate}`} />
+        <KPI title="Avg RM Rate" value={`₹ ${stats.avgRate}`} />
       </div>
 
       <div style={analyticsCard}>
@@ -204,7 +204,7 @@ export default function RMList() {
       </div>
 
       <DataTable
-        title="Material Receiving List"
+        title="RM Inward List"
         rows={rows}
         searchFields={[
           "supplier",
@@ -215,7 +215,7 @@ export default function RMList() {
         ]}
         columns={[
           { key: "date", label: "Date" },
-          { key: "inwardId", label: "Material Ref" },
+          { key: "inwardId", label: "Batch" },
           { key: "supplier", label: "Supplier" },
           { key: "vehicleNo", label: "Vehicle" },
           { key: "material", label: "Material" },
@@ -230,7 +230,7 @@ export default function RMList() {
 
       {editing && (
         <EditModal
-          title="Edit Material Entry"
+          title="Edit RM Entry"
           values={editing}
           onChange={onChange}
           onSave={saveEdit}

@@ -223,7 +223,7 @@ export default function Quality() {
   async function saveRmQuality(e) {
     e.preventDefault();
 
-    if (!rmForm.rmInwardId) return alert("Select received material");
+    if (!rmForm.rmInwardId) return alert("Select RM inward batch");
     if (!rmForm.sampleQtyGm) return alert("Enter sample quantity");
 
     try {
@@ -233,11 +233,11 @@ export default function Quality() {
       });
 
       if (res.ok === false) {
-        alert(res.error || "Receiving quality save failed");
+        alert(res.error || "RM quality save failed");
         return;
       }
 
-      setStatus("Receiving quality saved successfully");
+      setStatus("RM quality saved successfully");
       setRmForm(blankRm);
       setActiveTab("WORKBENCH");
       loadData();
@@ -249,7 +249,7 @@ export default function Quality() {
   async function saveFgQuality(e) {
     e.preventDefault();
 
-    if (!fgForm.extrusionBatchId) return alert("Select dispatch material");
+    if (!fgForm.extrusionBatchId) return alert("Select FG / extrusion batch");
 
     try {
       const res = await apiCall({
@@ -258,11 +258,11 @@ export default function Quality() {
       });
 
       if (res.ok === false) {
-        alert(res.error || "Dispatch material quality save failed");
+        alert(res.error || "FG quality save failed");
         return;
       }
 
-      setStatus("Dispatch material quality saved successfully");
+      setStatus("FG quality saved successfully");
       setFgForm(blankFg);
       setActiveTab("WORKBENCH");
       loadData();
@@ -351,7 +351,7 @@ export default function Quality() {
   }
 
   async function syncOldData() {
-    const ok = window.confirm("Sync old receiving/dispatch material data into Quality records?");
+    const ok = window.confirm("Sync old RM/FG data into Quality records?");
     if (!ok) return;
 
     try {
@@ -363,7 +363,7 @@ export default function Quality() {
       }
 
       setStatus(
-        `Sync completed. receiving created: ${res.rmCreated || 0}, dispatch material created: ${
+        `Sync completed. RM created: ${res.rmCreated || 0}, FG created: ${
           res.fgCreated || 0
         }`
       );
@@ -379,7 +379,7 @@ export default function Quality() {
           <div style={eyebrow}>Quality Control</div>
           <h1 style={title}>QC Workbench</h1>
           <div style={subtitle}>
-            Pending QC, receiving quality, dispatch material quality and historical test records.
+            Pending QC, RM quality, FG quality and historical test records.
           </div>
         </div>
 
@@ -397,7 +397,7 @@ export default function Quality() {
             onClick={() => setActiveTab("RM")}
             style={activeTab === "RM" ? tabActive : tab}
           >
-            Receiving Quality
+            RM Quality
           </button>
 
           <button
@@ -405,7 +405,7 @@ export default function Quality() {
             onClick={() => setActiveTab("FG")}
             style={activeTab === "FG" ? tabActive : tab}
           >
-            Dispatch Quality
+            FG Quality
           </button>
         </div>
       </div>
@@ -415,17 +415,17 @@ export default function Quality() {
       {activeTab === "WORKBENCH" && (
         <>
           <div style={kpiGrid}>
-            <KPI title="Pending Receiving QC" value={pendingRmRows.length} />
-            <KPI title="Pending Dispatch QC" value={pendingFgRows.length} />
-            <KPI title="Receiving QC Done" value={rmQualityRows.length} />
-            <KPI title="Dispatch QC Done" value={fgQualityRows.length} />
+            <KPI title="Pending RM QC" value={pendingRmRows.length} />
+            <KPI title="Pending FG QC" value={pendingFgRows.length} />
+            <KPI title="RM QC Done" value={rmQualityRows.length} />
+            <KPI title="FG QC Done" value={fgQualityRows.length} />
           </div>
 
           <div style={syncBox}>
             <div>
               <b>Old Data Sync</b>
               <div style={muted}>
-                Creates pending quality records for old received and dispatch materials.
+                Creates pending quality records for old RM inward and FG batches.
               </div>
             </div>
 
@@ -436,10 +436,10 @@ export default function Quality() {
 
           <div style={twoCol}>
             <div style={card}>
-              <h2 style={sectionTitle}>Pending Receiving Quality</h2>
+              <h2 style={sectionTitle}>Pending RM Quality</h2>
 
               {pendingRmRows.length === 0 ? (
-                <div style={empty}>No pending receiving quality.</div>
+                <div style={empty}>No pending RM quality.</div>
               ) : (
                 pendingRmRows.slice(0, 20).map((r) => (
                   <div key={r.inwardId || r.batchId} style={pendingRow}>
@@ -465,10 +465,10 @@ export default function Quality() {
             </div>
 
             <div style={card}>
-              <h2 style={sectionTitle}>Pending Dispatch Quality</h2>
+              <h2 style={sectionTitle}>Pending FG Quality</h2>
 
               {pendingFgRows.length === 0 ? (
-                <div style={empty}>No pending dispatch quality.</div>
+                <div style={empty}>No pending FG quality.</div>
               ) : (
                 pendingFgRows.slice(0, 20).map((r) => (
                   <div key={r.extrusionBatchId || r.batchId} style={pendingRow}>
@@ -495,7 +495,7 @@ export default function Quality() {
 
           <div style={twoCol}>
             <DataTable
-              title="Recent Receiving Quality"
+              title="Recent RM Quality"
               rows={rmQualityRows.slice(0, 10)}
               searchFields={[
                 "qualityId",
@@ -506,7 +506,7 @@ export default function Quality() {
               ]}
               columns={[
                 { key: "date", label: "Date", render: (r) => formatDate(r.date) },
-                { key: "rmInwardId", label: "Receiving Ref" },
+                { key: "rmInwardId", label: "RM Batch" },
                 { key: "dryDustPercent", label: "Dust %" },
                 { key: "ppPercent", label: "PP %" },
                 { key: "sinkMaterialPercent", label: "Sink %" },
@@ -518,7 +518,7 @@ export default function Quality() {
             />
 
             <DataTable
-              title="Recent Dispatch Quality"
+              title="Recent FG Quality"
               rows={fgQualityRows.slice(0, 10)}
               searchFields={[
                 "qualityId",
@@ -530,7 +530,7 @@ export default function Quality() {
               ]}
               columns={[
                 { key: "date", label: "Date", render: (r) => formatDate(r.date) },
-                { key: "extrusionBatchId", label: "Material Ref" },
+                { key: "extrusionBatchId", label: "FG Batch" },
                 { key: "moisturePercent", label: "Moisture %" },
                 { key: "mfi", label: "MFI" },
                 { key: "colour", label: "Colour" },
@@ -547,7 +547,7 @@ export default function Quality() {
       {activeTab === "RM" && (
         <>
           <div style={card}>
-            <h2 style={sectionTitle}>Receiving Quality</h2>
+            <h2 style={sectionTitle}>Raw Material Quality</h2>
 
             <form onSubmit={saveRmQuality} style={grid}>
               <Field label="Date">
@@ -560,7 +560,7 @@ export default function Quality() {
                 />
               </Field>
 
-              <Field label="Received Material">
+              <Field label="RM Inward Batch">
                 <select
                   name="rmInwardId"
                   value={rmForm.rmInwardId}
@@ -568,7 +568,7 @@ export default function Quality() {
                   style={input}
                   required
                 >
-                  <option value="">Select Material</option>
+                  <option value="">Select RM Batch</option>
                   {rmRows.map((r) => (
                     <option key={r.inwardId || r.batchId} value={r.inwardId || r.batchId}>
                       {r.inwardId || r.batchId} - {r.supplier || ""} -{" "}
@@ -653,18 +653,18 @@ export default function Quality() {
               </Field>
 
               <div style={actionRow}>
-                <button type="submit" style={saveButton}>Save Receiving Quality</button>
+                <button type="submit" style={saveButton}>Save RM Quality</button>
               </div>
             </form>
           </div>
 
           <DataTable
-            title="Receiving Quality History"
+            title="RM Quality History"
             rows={rmQualityRows}
             searchFields={["qualityId", "rmInwardId", "formOfMaterial", "conditionOfMaterial", "remarks"]}
             columns={[
               { key: "date", label: "Date", render: (r) => formatDate(r.date) },
-              { key: "rmInwardId", label: "Receiving Ref" },
+              { key: "rmInwardId", label: "RM Batch" },
               { key: "formOfMaterial", label: "Form" },
               { key: "conditionOfMaterial", label: "Condition" },
               { key: "sampleQtyGm", label: "Sample gm" },
@@ -684,16 +684,16 @@ export default function Quality() {
       {activeTab === "FG" && (
         <>
           <div style={card}>
-            <h2 style={sectionTitle}>Dispatch Quality</h2>
+            <h2 style={sectionTitle}>FG Quality</h2>
 
             <form onSubmit={saveFgQuality} style={grid}>
               <Field label="Date">
                 <input type="date" name="date" value={fgForm.date} onChange={onFgChange} style={input} />
               </Field>
 
-              <Field label="Dispatch Material">
+              <Field label="FG / Extrusion Batch">
                 <select name="extrusionBatchId" value={fgForm.extrusionBatchId} onChange={onFgChange} style={input} required>
-                  <option value="">Select Material</option>
+                  <option value="">Select FG Batch</option>
                   {extrusionRows.map((r) => (
                     <option key={r.extrusionBatchId || r.batchId} value={r.extrusionBatchId || r.batchId}>
                       {r.extrusionBatchId || r.batchId} - {r.productionGrade || ""} - {Number(r.fgOutputKg || 0).toFixed(0)} kg
@@ -749,18 +749,18 @@ export default function Quality() {
               </Field>
 
               <div style={actionRow}>
-                <button type="submit" style={saveButton}>Save Dispatch Quality</button>
+                <button type="submit" style={saveButton}>Save FG Quality</button>
               </div>
             </form>
           </div>
 
           <DataTable
-            title="Dispatch Quality History"
+            title="FG Quality History"
             rows={fgQualityRows}
             searchFields={["qualityId", "extrusionBatchId", "fgBatchCode", "colour", "appearance", "remarks"]}
             columns={[
               { key: "date", label: "Date", render: (r) => formatDate(r.date) },
-              { key: "extrusionBatchId", label: "Material Ref" },
+              { key: "extrusionBatchId", label: "FG Batch" },
               { key: "moisturePercent", label: "Moisture %" },
               { key: "mfi", label: "MFI" },
               { key: "colour", label: "Colour" },

@@ -1,7 +1,4 @@
 import { useMemo, useState } from "react";
-import DateQuickFilters from "./DateQuickFilters";
-import MonthYearFilter from "./MonthYearFilter";
-import { button, card, input, regenTheme } from "../theme/regenTheme";
 
 export default function DataTable({
   title = "",
@@ -11,12 +8,7 @@ export default function DataTable({
   onEdit,
   onDelete,
 }) {
-  const now = new Date();
   const [search, setSearch] = useState("");
-  const [month, setMonth] = useState(String(now.getMonth() + 1).padStart(2, "0"));
-  const [year, setYear] = useState(String(now.getFullYear()));
-  const [material, setMaterial] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [sortConfig, setSortConfig] = useState({
@@ -55,31 +47,6 @@ export default function DataTable({
 
   const filteredRows = useMemo(() => {
     let filtered = [...rows];
-
-    if (month || year) {
-      filtered = filtered.filter((r) => {
-        const raw = r.date || r.periodMonth || r.productionDate || r.createdAt || "";
-        if (!raw) return true;
-        const d = new Date(raw);
-        if (isNaN(d.getTime())) return true;
-        const rowMonth = String(d.getMonth() + 1).padStart(2, "0");
-        const rowYear = String(d.getFullYear());
-        return (!month || rowMonth === month) && (!year || rowYear === year);
-      });
-    }
-
-    if (material) {
-      filtered = filtered.filter((r) => {
-        const value = materialValue(r);
-        return String(value || "").toLowerCase().includes(material.toLowerCase());
-      });
-    }
-
-    if (statusFilter) {
-      filtered = filtered.filter((r) =>
-        String(statusValue(r) || "").toLowerCase().includes(statusFilter.toLowerCase())
-      );
-    }
 
     if (search) {
       const q = search.toLowerCase();
@@ -138,17 +105,7 @@ export default function DataTable({
     }
 
     return filtered;
-  }, [rows, search, searchFields, month, year, material, statusFilter, fromDate, toDate, columnFilters, sortConfig, columns]);
-
-  const materialOptions = useMemo(
-    () => uniqueOptions(rows.map(materialValue)).slice(0, 80),
-    [rows]
-  );
-
-  const statusOptions = useMemo(
-    () => uniqueOptions(rows.map(statusValue)).slice(0, 40),
-    [rows]
-  );
+  }, [rows, search, searchFields, fromDate, toDate, columnFilters, sortConfig, columns]);
 
   function exportCSV() {
     const headers = columns.map((c) => c.label);
@@ -235,10 +192,6 @@ export default function DataTable({
 
   function clearFilters() {
     setSearch("");
-    setMonth(String(now.getMonth() + 1).padStart(2, "0"));
-    setYear(String(now.getFullYear()));
-    setMaterial("");
-    setStatusFilter("");
     setFromDate("");
     setToDate("");
     setColumnFilters({});
@@ -263,52 +216,22 @@ export default function DataTable({
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search or scan..."
+            placeholder="Search all..."
             style={searchStyle}
           />
 
-          <MonthYearFilter
-            month={month}
-            year={year}
-            onMonthChange={setMonth}
-            onYearChange={setYear}
+          <input
+            type="date"
+            value={fromDate}
+            onChange={(e) => setFromDate(e.target.value)}
+            style={dateStyle}
           />
 
-          <select
-            value={material}
-            onChange={(e) => setMaterial(e.target.value)}
-            style={selectStyle}
-            title="Material filter"
-          >
-            <option value="">All Materials</option>
-            {materialOptions.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            style={selectStyle}
-            title="Status filter"
-          >
-            <option value="">All Status</option>
-            {statusOptions.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-
-          <DateQuickFilters
-            fromDate={fromDate}
-            toDate={toDate}
-            onChange={({ fromDate: nextFrom, toDate: nextTo }) => {
-              setFromDate(nextFrom);
-              setToDate(nextTo);
-            }}
+          <input
+            type="date"
+            value={toDate}
+            onChange={(e) => setToDate(e.target.value)}
+            style={dateStyle}
           />
 
           <button onClick={clearFilters} style={secondaryButton}>
@@ -387,13 +310,13 @@ export default function DataTable({
                     <div style={actionWrap}>
                       {onEdit && (
                         <button onClick={() => onEdit(r)} style={editButtonStyle}>
-                          Edit
+                          ✏ Edit
                         </button>
                       )}
 
                       {onDelete && (
                         <button onClick={() => onDelete(r)} style={deleteButtonStyle}>
-                          Soft Delete
+                          Delete
                         </button>
                       )}
                     </div>
@@ -424,33 +347,14 @@ function safeFileName(name) {
     .toLowerCase();
 }
 
-function materialValue(row = {}) {
-  return (
-    row.material ||
-    row.materialBucket ||
-    row.itemName ||
-    row.grade ||
-    row.productionGrade ||
-    row.inputMaterial ||
-    ""
-  );
-}
-
-function statusValue(row = {}) {
-  return row.status || row.dispatchStatus || row.inwardStatus || row.issueStatus || "";
-}
-
-function uniqueOptions(values = []) {
-  return Array.from(
-    new Set(values.map((value) => String(value || "").trim()).filter(Boolean))
-  ).sort((a, b) => a.localeCompare(b));
-}
-
 const cardStyle = {
-  ...card,
+  background: "white",
   padding: 0,
+  borderRadius: 14,
+  boxShadow: "0 6px 18px rgba(15,23,42,0.06)",
   width: "100%",
   boxSizing: "border-box",
+  border: "1px solid #e5e7eb",
   overflow: "hidden",
 };
 
@@ -458,14 +362,14 @@ const topBarStyle = {
   position: "sticky",
   top: 0,
   zIndex: 20,
-  background: "linear-gradient(180deg,#ffffff,#fbfef8)",
+  background: "white",
   display: "flex",
   justifyContent: "space-between",
   alignItems: "flex-start",
   padding: 16,
   gap: 16,
   flexWrap: "wrap",
-  borderBottom: `1px solid ${regenTheme.colors.line}`,
+  borderBottom: "1px solid #e5e7eb",
 };
 
 const toolbarStyle = {
@@ -476,38 +380,47 @@ const toolbarStyle = {
 };
 
 const searchStyle = {
-  ...input,
+  padding: 10,
+  borderRadius: 8,
+  border: "1px solid #cbd5e1",
   width: 220,
   maxWidth: "100%",
-  height: 38,
 };
 
-const selectStyle = {
-  ...input,
-  width: 150,
-  height: 38,
+const dateStyle = {
+  padding: 10,
+  borderRadius: 8,
+  border: "1px solid #cbd5e1",
 };
 
 const secondaryButton = {
-  ...button.secondary,
-  background: "#f1f5f9",
-  borderColor: "#cbd5e1",
-  color: regenTheme.colors.ink,
-  minHeight: 38,
+  background: "#64748b",
+  color: "white",
+  border: "none",
+  padding: "10px 14px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
 };
 
 const exportStyle = {
-  ...button.secondary,
-  background: "#eef6ff",
-  borderColor: "#bfdbfe",
-  color: "#1d4ed8",
-  minHeight: 38,
+  background: "#2563eb",
+  color: "white",
+  border: "none",
+  padding: "10px 14px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
 };
 
 const printStyle = {
-  ...button.primary,
-  minHeight: 38,
-  padding: "8px 14px",
+  background: "#0f766e",
+  color: "white",
+  border: "none",
+  padding: "10px 14px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
 };
 
 const tableWrapStyle = {
@@ -525,12 +438,12 @@ const tableStyle = {
 };
 
 const headerRowStyle = {
-  background: regenTheme.colors.deepGreen,
+  background: "#0f766e",
   color: "white",
 };
 
 const filterRowStyle = {
-  background: regenTheme.colors.muted,
+  background: "#f8fafc",
 };
 
 const th = {
@@ -538,7 +451,7 @@ const th = {
   textAlign: "left",
   position: "sticky",
   top: 0,
-  background: regenTheme.colors.deepGreen,
+  background: "#0f766e",
   zIndex: 10,
   whiteSpace: "nowrap",
 };
@@ -558,9 +471,9 @@ const filterCell = {
   padding: 6,
   position: "sticky",
   top: 40,
-  background: regenTheme.colors.muted,
+  background: "#f8fafc",
   zIndex: 9,
-  borderBottom: `1px solid ${regenTheme.colors.line}`,
+  borderBottom: "1px solid #e5e7eb",
 };
 
 const columnFilterInput = {
@@ -568,13 +481,13 @@ const columnFilterInput = {
   minWidth: 90,
   padding: 7,
   borderRadius: 6,
-  border: `1px solid ${regenTheme.colors.line}`,
+  border: "1px solid #cbd5e1",
   boxSizing: "border-box",
   fontSize: 12,
 };
 
 const rowStyle = {
-  borderBottom: `1px solid ${regenTheme.colors.line}`,
+  borderBottom: "1px solid #e5e7eb",
 };
 
 const td = {
@@ -591,15 +504,23 @@ const actionWrap = {
 };
 
 const editButtonStyle = {
-  ...button.secondary,
+  background: "#2563eb",
+  color: "white",
+  border: "none",
   padding: "6px 10px",
-  minHeight: 32,
+  borderRadius: 6,
+  cursor: "pointer",
+  fontWeight: 700,
 };
 
 const deleteButtonStyle = {
-  ...button.danger,
+  background: "#dc2626",
+  color: "white",
+  border: "none",
   padding: "6px 10px",
-  minHeight: 32,
+  borderRadius: 6,
+  cursor: "pointer",
+  fontWeight: 700,
 };
 
 const emptyStyle = {
@@ -618,7 +539,7 @@ const bottomBarStyle = {
   position: "sticky",
   bottom: 0,
   background: "white",
-  borderTop: `1px solid ${regenTheme.colors.line}`,
+  borderTop: "1px solid #e5e7eb",
   padding: "10px 16px",
   display: "flex",
   justifyContent: "space-between",

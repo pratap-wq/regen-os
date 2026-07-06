@@ -22,7 +22,7 @@ export default function FGInventory() {
       setDispatchRows(dispatch.rows || []);
     } catch (err) {
       console.log(err);
-      setStatus("Failed loading material inventory");
+      setStatus("Failed loading FG inventory");
     }
   }
 
@@ -148,7 +148,7 @@ export default function FGInventory() {
     <div style={{ padding: 16 }}>
       <div style={header}>
         <div>
-          <h1 style={{ marginBottom: 6 }}>Dispatch Material Inventory</h1>
+          <h1 style={{ marginBottom: 6 }}>FG Inventory</h1>
 
           <div style={subText}>
             Auto generated from extrusion and multi-lot dispatch lines.
@@ -157,23 +157,23 @@ export default function FGInventory() {
       </div>
 
       <div style={gridStyle}>
-        <Card title="Material Produced" value={`${totalFGProduced.toFixed(0)} Kg`} />
-        <Card title="Material Dispatched" value={`${totalDispatch.toFixed(0)} Kg`} />
-        <Card title="Live Material Stock" value={`${liveFGStock.toFixed(0)} Kg`} />
-        <Card title="Live Materials" value={liveInventory.length} />
+        <Card title="FG Produced" value={`${totalFGProduced.toFixed(0)} Kg`} />
+        <Card title="FG Dispatched" value={`${totalDispatch.toFixed(0)} Kg`} />
+        <Card title="Live FG Stock" value={`${liveFGStock.toFixed(0)} Kg`} />
+        <Card title="Live Lots" value={liveInventory.length} />
       </div>
 
       {status && <div style={errorStyle}>{status}</div>}
 
       <div style={{ marginTop: 24 }}>
         <div style={tableBox}>
-          <h3>Live Dispatch Material Inventory</h3>
+          <h3>Live Lot-wise FG Inventory</h3>
 
           <table style={tableStyle}>
             <thead>
               <tr style={headRow}>
-                <th style={th}>Material Ref</th>
-                <th style={th}>Production Ref</th>
+                <th style={th}>Lot No</th>
+                <th style={th}>Extrusion Batch</th>
                 <th style={th}>Date</th>
                 <th style={th}>Grade</th>
                 <th style={th}>Machine</th>
@@ -216,7 +216,7 @@ export default function FGInventory() {
               {liveInventory.length === 0 && (
                 <tr>
                   <td colSpan="10" style={emptyStyle}>
-                    No live dispatch material available.
+                    No live FG stock available.
                   </td>
                 </tr>
               )}
@@ -236,7 +236,7 @@ export default function FGInventory() {
                 <th style={th}>Produced</th>
                 <th style={th}>Dispatched</th>
                 <th style={th}>Balance</th>
-                <th style={th}>Live Materials</th>
+                <th style={th}>Live Lots</th>
               </tr>
             </thead>
 
@@ -263,13 +263,13 @@ export default function FGInventory() {
 
       <div style={{ marginTop: 24 }}>
         <div style={tableBox}>
-          <h3>All Material History</h3>
+          <h3>All Lots History</h3>
 
           <table style={tableStyle}>
             <thead>
               <tr style={headRow}>
-                <th style={th}>Material Ref</th>
-                <th style={th}>Production Ref</th>
+                <th style={th}>Lot No</th>
+                <th style={th}>Batch</th>
                 <th style={th}>Grade</th>
                 <th style={th}>Produced</th>
                 <th style={th}>Dispatched</th>

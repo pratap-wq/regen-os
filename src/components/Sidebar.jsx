@@ -7,7 +7,8 @@ export default function Sidebar() {
       items: [
         { label: "CEO Dashboard", path: "/dashboard" },
         { label: "Factory Dashboard", path: "/production-control-center" },
-        { label: "Material Inventory", path: "/material-inventory" },
+        { label: "Procurement Dashboard", path: "/procurement-dashboard" },
+        { label: "Inventory Dashboard", path: "/inventory-dashboard" },
         { label: "Stores Dashboard", path: "/stores-dashboard" },
         { label: "Live Stores", path: "/live-stores" },
       ],
@@ -15,11 +16,12 @@ export default function Sidebar() {
     {
       section: "Operations",
       items: [
-        { label: "Material Receiving", path: "/material-receiving" },
-        { label: "Production Control", path: "/production-control-center" },
-        { label: "Dispatch", path: "/dispatch" },
+        { label: "Production Entry", path: "/production" },
+        { label: "Production History", path: "/production-history" },
         { label: "Traceability", path: "/traceability" },
         { label: "Quality", path: "/quality" },
+        { label: "RM Inward", path: "/rm-inward" },
+        { label: "Dispatch", path: "/dispatch" },
       ],
     },
     {
@@ -34,31 +36,21 @@ export default function Sidebar() {
       section: "RM / Procurement",
       items: [
         { label: "Suppliers", path: "/suppliers" },
-        { label: "Old Material Receiving", path: "/rm-inward" },
-        { label: "Old Material List", path: "/rm-list" },
+        { label: "RM List", path: "/rm-list" },
+        { label: "Live Inventory", path: "/live-inventory" },
       ],
     },
-    {
-      section: "Management",
-      items: [
-        { label: "Month Close Control Room", path: "/monthly-close" },
-        { label: "Resolve Variance", path: "/inventory-adjustments" },
-        { label: "Factory Expenses", path: "/factory-expenses" },
-        { label: "Material Rates", path: "/fg-rates" },
-        { label: "Material Master", path: "/production-materials" },
-        { label: "Factory Cost Master", path: "/factory-cost-master" },
-      ],
-    },
-    {
-      section: "Advanced",
-      items: [
-        { label: "Legacy Production Flow", path: "/production" },
-        { label: "Legacy Production History", path: "/production-history" },
-        { label: "Legacy Wash", path: "/wash-batches" },
-        { label: "Legacy Color Sorter", path: "/color-sorter-batches" },
-        { label: "Legacy Extrusion", path: "/extrusion-batches" },
-      ],
-    },
+   {
+  section: "Management",
+  items: [
+    { label: "Monthly Close", path: "/monthly-close" },
+    { label: "Inventory Adjustments", path: "/inventory-adjustments" },
+    { label: "Factory Expenses", path: "/factory-expenses" },
+    { label: "FG Rates", path: "/fg-rates" },
+    { label: "Production Materials", path: "/production-materials" },
+    { label: "Factory Cost Master", path: "/factory-cost-master" },
+  ],
+},
     {
       section: "Administration",
       items: [
@@ -100,7 +92,7 @@ export default function Sidebar() {
       ))}
 
       <div style={footer}>
-        RegenOS v1.0 RC1
+        RegenOS v3.5
         <br />
         Recycling Operations Platform
       </div>

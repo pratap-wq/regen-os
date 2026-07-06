@@ -52,9 +52,9 @@ export default function Traceability() {
       <div style={hero}>
         <div>
           <div style={eyebrow}>Traceability</div>
-          <h1 style={title}>Material Journey</h1>
+          <h1 style={title}>Batch Journey</h1>
           <div style={subtitle}>
-            Search any receiving, wash, sorting, extrusion, quality or dispatch reference.
+            Search any RM, Wash, Sorting, Extrusion, FG Quality or Dispatch reference.
           </div>
         </div>
       </div>
@@ -81,12 +81,12 @@ export default function Traceability() {
           </div>
 
           <div style={flow}>
-            <TraceSection title="1. Material Receiving" rows={data.rm} type="rm" />
-            <TraceSection title="2. Receiving Quality" rows={data.rmQuality} type="rmq" />
+            <TraceSection title="1. RM Inward" rows={data.rm} type="rm" />
+            <TraceSection title="2. RM Quality" rows={data.rmQuality} type="rmq" />
             <TraceSection title="3. Wash" rows={data.wash} type="wash" />
             <TraceSection title="4. Sorting" rows={data.sorting} type="sorting" />
-            <TraceSection title="5. Extrusion Material" rows={data.extrusion} type="extrusion" />
-            <TraceSection title="6. Dispatch Quality" rows={data.fgQuality} type="fgq" />
+            <TraceSection title="5. Extrusion / FG Batch" rows={data.extrusion} type="extrusion" />
+            <TraceSection title="6. FG Quality" rows={data.fgQuality} type="fgq" />
             <TraceSection title="7. Dispatch" rows={data.dispatch} type="dispatch" />
           </div>
         </>
@@ -130,7 +130,7 @@ function TraceCard({ row, type }) {
 function getFields(r, type) {
   if (type === "rm") {
     return [
-      ["Receiving Ref", r.inwardId || r.batchId],
+      ["RM Batch", r.inwardId || r.batchId],
       ["Date", formatDate(r.date)],
       ["Supplier", r.supplier],
       ["Material", r.material],
@@ -143,7 +143,7 @@ function getFields(r, type) {
   if (type === "rmq") {
     return [
       ["Quality ID", r.qualityId],
-      ["Receiving Ref", r.rmInwardId],
+      ["RM Batch", r.rmInwardId],
       ["Date", formatDate(r.date)],
       ["Form", r.formOfMaterial],
       ["Condition", r.conditionOfMaterial],
@@ -156,8 +156,8 @@ function getFields(r, type) {
 
   if (type === "wash") {
     return [
-      ["Washed Material", r.washBatchId || r.batchId],
-      ["Source Material", r.sourceRMId || r.sourceRmInwardId],
+      ["Wash Batch", r.washBatchId || r.batchId],
+      ["Source RM", r.sourceRMId || r.sourceRmInwardId],
       ["Date", formatDate(r.date)],
       ["Material", r.inputMaterial],
       ["Input Kg", Number(r.inputWeightKg || 0).toFixed(0)],
@@ -168,8 +168,8 @@ function getFields(r, type) {
 
   if (type === "sorting") {
     return [
-      ["Sorted Material", r.sortingBatchId || r.batchId],
-      ["Source Washed Material", r.sourceWashBatchId],
+      ["Sorting Batch", r.sortingBatchId || r.batchId],
+      ["Source Wash", r.sourceWashBatchId],
       ["Date", formatDate(r.date)],
       ["Input Kg", Number(r.inputWeightKg || 0).toFixed(0)],
       ["Accepted Kg", Number(r.acceptedQtyKg || 0).toFixed(0)],
@@ -179,14 +179,14 @@ function getFields(r, type) {
 
   if (type === "extrusion") {
     return [
-      ["Extrusion Material", r.extrusionBatchId || r.batchId],
-      ["Source Material", r.sourceBatchId],
-      ["Source Sorted Material", r.sourceSortingBatchId],
-      ["Source Washed Material", r.sourceWashBatchId],
+      ["Extrusion Batch", r.extrusionBatchId || r.batchId],
+      ["Source Batch", r.sourceBatchId],
+      ["Source Sorting", r.sourceSortingBatchId],
+      ["Source Wash", r.sourceWashBatchId],
       ["Date", formatDate(r.date)],
       ["Grade", r.productionGrade],
       ["Input Kg", Number(r.totalInputKg || r.inputWeightKg || 0).toFixed(0)],
-      ["Dispatch Material Kg", Number(r.fgOutputKg || 0).toFixed(0)],
+      ["FG Kg", Number(r.fgOutputKg || 0).toFixed(0)],
       ["Lumps Kg", Number(r.lumpsKg || 0).toFixed(0)],
       ["Status", r.status],
     ];
@@ -195,7 +195,7 @@ function getFields(r, type) {
   if (type === "fgq") {
     return [
       ["Quality ID", r.qualityId],
-      ["Material Ref", r.extrusionBatchId || r.fgBatchCode],
+      ["FG Batch", r.extrusionBatchId || r.fgBatchCode],
       ["Date", formatDate(r.date)],
       ["Moisture %", r.moisturePercent],
       ["MFI", r.mfi],
@@ -207,7 +207,7 @@ function getFields(r, type) {
 
   return [
     ["Dispatch ID", r.dispatchId],
-    ["Material Ref", r.sourceExtrusionBatchId || r.linkedFgBatchId],
+    ["FG Batch", r.sourceExtrusionBatchId || r.linkedFgBatchId],
     ["Date", formatDate(r.date)],
     ["Customer", r.customerName],
     ["Unit", r.customerUnit],

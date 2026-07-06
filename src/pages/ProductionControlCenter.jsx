@@ -144,14 +144,14 @@ export default function ProductionControlCenter() {
   }, [washRows, sortingRows, extrusionRows, dispatchRows, monthlyTargetKg]);
 
   if (loading) {
-    return <div style={{ padding: 20 }}>Loading Factory Command Center...</div>;
+    return <div style={{ padding: 20 }}>Loading Factory Dashboard...</div>;
   }
 
   return (
     <div style={page}>
       <div style={hero}>
         <div>
-          <h1 style={heroTitle}>Factory Command Center</h1>
+          <h1 style={heroTitle}>Factory Dashboard</h1>
           <div style={heroSub}>
             Monthly target vs achieved, daily production discipline and recovery control.
           </div>
@@ -180,7 +180,7 @@ export default function ProductionControlCenter() {
         <KPI title="Balance To Target" value={`${kgToT(dashboard.balanceKg)} T`} />
         <KPI title="Required Daily Run Rate" value={`${kgToT(dashboard.requiredRunRate)} T/day`} />
         <KPI title="Actual Daily Avg" value={`${kgToT(dashboard.actualDailyAvg)} T/day`} />
-        <KPI title="Today Material" value={`${kgToT(dashboard.todayFg)} T`} />
+        <KPI title="Today FG" value={`${kgToT(dashboard.todayFg)} T`} />
       </div>
 
       <div style={twoCol}>
@@ -205,7 +205,7 @@ export default function ProductionControlCenter() {
             <thead>
               <tr style={thead}>
                 <th style={th}>Day</th>
-                <th style={th}>Daily Material</th>
+                <th style={th}>Daily FG</th>
                 <th style={th}>Cumulative Target</th>
                 <th style={th}>Cumulative Actual</th>
                 <th style={th}>Gap</th>

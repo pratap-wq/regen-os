@@ -152,7 +152,7 @@ export default function RMInward() {
 
   function clearMainForm() {
     setForm(blankForm);
-    setStatus("Ready for new material receiving entry");
+    setStatus("Ready for new RM inward entry");
   }
 
   function editRow(row) {
@@ -168,7 +168,7 @@ export default function RMInward() {
   }
 
   async function deleteRow(row) {
-    const confirmed = window.confirm("Delete material receiving entry?");
+    const confirmed = window.confirm("Delete RM inward?");
     if (!confirmed) return;
 
     try {
@@ -179,7 +179,7 @@ export default function RMInward() {
         status: "DELETED",
       });
 
-      setStatus("Material receiving entry deleted");
+      setStatus("RM inward deleted");
       loadData();
     } catch (err) {
       alert(err.message);
@@ -202,11 +202,11 @@ export default function RMInward() {
       });
 
       if (res.ok) {
-        setStatus("Material receiving saved");
+        setStatus("RM inward saved");
         setForm(blankForm);
         loadData();
       } else {
-        setStatus(res.error || "Error saving material receiving");
+        setStatus(res.error || "Error saving RM inward");
       }
     } catch (err) {
       setStatus(err.message);
@@ -236,7 +236,7 @@ export default function RMInward() {
         return;
       }
 
-      setStatus("Material receiving updated");
+      setStatus("RM inward updated");
       setEditingRow(null);
       loadData();
     } catch (err) {
@@ -310,9 +310,9 @@ export default function RMInward() {
     <div style={page}>
       <div style={header}>
         <div>
-          <h1 style={title}>Material Receiving</h1>
+          <h1 style={title}>RM Inward</h1>
           <div style={subtitle}>
-            Main form is for new receiving entry only. Use table Edit for corrections.
+            Main form is for new GRN only. Use table Edit for corrections.
           </div>
         </div>
 
@@ -341,9 +341,9 @@ export default function RMInward() {
       </div>
 
       <div style={gridStyle}>
-        <Card title="Material Qty" value={`${totalRM.toFixed(0)} Kg`} />
-        <Card title="Material Value" value={`₹ ${totalRMValue.toFixed(0)}`} />
-        <Card title="Avg Material Price" value={`₹ ${avgRMPrice}`} />
+        <Card title="RM Qty" value={`${totalRM.toFixed(0)} Kg`} />
+        <Card title="RM Value" value={`₹ ${totalRMValue.toFixed(0)}`} />
+        <Card title="Avg RM Price" value={`₹ ${avgRMPrice}`} />
         <Card title="Shortage" value={`${shortageKg.toFixed(0)} Kg`} />
         <Card title="Excess" value={`${excessKg.toFixed(0)} Kg`} />
         <Card title="Pending Deductions" value={pendingDeductions} />
@@ -366,7 +366,7 @@ export default function RMInward() {
                 <div style={materialName}>{m.material}</div>
                 <div style={materialQty}>{m.qtyKg.toFixed(0)} Kg</div>
                 <div style={materialMeta}>
-                  {(m.qtyKg / 1000).toFixed(1)} T | {m.sharePercent.toFixed(1)}% of material
+                  {(m.qtyKg / 1000).toFixed(1)} T | {m.sharePercent.toFixed(1)}% of RM
                 </div>
                 <div style={materialMeta}>
                   ₹ {m.value.toFixed(0)} | Avg ₹ {m.avgRate.toFixed(2)}/kg | {m.entries} entries
@@ -547,7 +547,7 @@ export default function RMInward() {
         </Field>
 
         <div style={buttonWrap}>
-          <button type="submit" style={saveButton}>Save Material Entry</button>
+          <button type="submit" style={saveButton}>Save RM Entry</button>
           <button type="button" onClick={clearMainForm} style={clearButton}>Clear / New Entry</button>
         </div>
       </form>
@@ -555,7 +555,7 @@ export default function RMInward() {
       {status && <div style={statusStyle}>{status}</div>}
 
       <DataTable
-        title={`Material Receiving Register - ${month}/${year}`}
+        title={`RM Inward Register - ${month}/${year}`}
         rows={filteredRows}
         searchFields={[
           "inwardId",
@@ -600,7 +600,7 @@ export default function RMInward() {
       {editingRow && (
         <div style={modalOverlay}>
           <div style={modal}>
-            <h2 style={{ marginTop: 0 }}>Edit Material Receiving</h2>
+            <h2 style={{ marginTop: 0 }}>Edit RM Inward</h2>
 
             <div style={formStyle}>
               <SectionTitle text="Basic Details" />

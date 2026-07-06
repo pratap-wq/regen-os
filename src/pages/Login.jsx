@@ -1,16 +1,25 @@
 import { loginWithGoogle } from "../firebase";
 
 export default function Login() {
+
   async function handleLogin() {
+
     try {
+
       await loginWithGoogle();
+
       window.location.reload();
+
     } catch (err) {
+
       console.log(err);
+
     }
+
   }
 
   return (
+
     <div
       style={{
         height: "100vh",
@@ -20,6 +29,7 @@ export default function Login() {
         background: "#f3f4f6",
       }}
     >
+
       <div
         style={{
           background: "white",
@@ -30,6 +40,7 @@ export default function Login() {
           boxShadow: "0 2px 20px rgba(0,0,0,0.08)",
         }}
       >
+
         <h1
           style={{
             marginBottom: 10,
@@ -63,7 +74,11 @@ export default function Login() {
         >
           Login with Google
         </button>
+
       </div>
+
     </div>
+
   );
+
 }

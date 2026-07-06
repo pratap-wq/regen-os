@@ -169,8 +169,8 @@ export default function ProcurementDashboard() {
       </div>
 
       <div style={kpiGrid}>
-        <KPI title="Material Received" value={`${ton(data.totalQty)} T`} />
-        <KPI title="Material Value" value={`₹ ${cr(data.totalValue)} Cr`} />
+        <KPI title="RM Purchased" value={`${ton(data.totalQty)} T`} />
+        <KPI title="RM Value" value={`₹ ${cr(data.totalValue)} Cr`} />
         <KPI title="Avg Buy Rate" value={`₹ ${data.avgRate.toFixed(2)}/kg`} />
         <KPI title="Avg Recovery" value={`${data.avgRecovery.toFixed(1)}%`} />
         <KPI title="Effective Cost/kg" value={`₹ ${data.weightedEffectiveCost.toFixed(2)}`} color="#b45309" />
@@ -241,7 +241,7 @@ export default function ProcurementDashboard() {
 
               {data.suppliers.length === 0 && (
                 <tr>
-                  <td colSpan="8" style={empty}>No material receiving data for selected month.</td>
+                  <td colSpan="8" style={empty}>No RM inward data for selected month.</td>
                 </tr>
               )}
             </tbody>

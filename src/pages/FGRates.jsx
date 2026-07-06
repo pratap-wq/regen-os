@@ -117,7 +117,7 @@ export default function FGRates() {
       if (res.ok) {
 
         setStatus(
-          "Material rate saved successfully"
+          "FG Rate saved successfully"
         );
 
         setForm(
@@ -238,7 +238,7 @@ export default function FGRates() {
 
         <div style={sectionTitle}>
 
-          Material Rate Management
+          FG Rate Management
 
         </div>
 
@@ -434,7 +434,7 @@ export default function FGRates() {
               }
             >
 
-              Save Material Rate
+              Save FG Rate
 
             </button>
 
@@ -467,7 +467,7 @@ export default function FGRates() {
 
         <div style={sectionTitle}>
 
-          Material Rate Register
+          FG Rate Register
 
         </div>
 

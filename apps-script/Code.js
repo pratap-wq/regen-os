@@ -2338,6 +2338,19 @@ function addTransformationRun(data = {}) {
 
 const MANUFACTURING_CUTOVER_MONTH = "2026-06";
 const MANUFACTURING_MIGRATION_ID = "MOM-CUTOVER-2026-06";
+let MANUFACTURING_MIGRATION_CACHE = null;
+
+function resetMigrationCaches_() {
+  MANUFACTURING_MIGRATION_CACHE = {
+    sheetKeys: {},
+    ledgerKeys: null,
+  };
+}
+
+function migrationCache_() {
+  if (!MANUFACTURING_MIGRATION_CACHE) resetMigrationCaches_();
+  return MANUFACTURING_MIGRATION_CACHE;
+}
 
 function migrationMonth_(data = {}) {
   return String(data.periodMonth || data.month || MANUFACTURING_CUTOVER_MONTH).slice(0, 7);
@@ -2372,21 +2385,89 @@ function materialCategory_(materialName) {
   return "RM";
 }
 
+function normalizeDispatchGrade_(value) {
+  const raw = String(value || "").toUpperCase();
+  const match = raw.match(/\bE[1-5]\b/);
+  if (match) return match[0];
+  return materialName_(value, "E1").toUpperCase();
+}
+
+function repairMigratedDispatchLedgerGrades_() {
+  const sh = getSheet("Inventory_Ledger");
+  const values = sh.getDataRange().getValues();
+  if (values.length < 2) return 0;
+
+  const headers = values[0].map((h) => String(h).trim());
+  const itemNameIndex = headers.indexOf("itemName");
+  const sourceSheetIndex = headers.indexOf("legacySourceSheet");
+  const migrationIndex = headers.indexOf("migrationId");
+  const movementIndex = headers.indexOf("movementType");
+
+  if (itemNameIndex === -1 || sourceSheetIndex === -1 || migrationIndex === -1 || movementIndex === -1) {
+    return 0;
+  }
+
+  let repaired = 0;
+
+  for (let r = 1; r < values.length; r++) {
+    const sourceSheet = String(values[r][sourceSheetIndex] || "");
+    const migrationId = String(values[r][migrationIndex] || "");
+    const movementType = String(values[r][movementIndex] || "");
+    const itemName = String(values[r][itemNameIndex] || "");
+    const normalized = normalizeDispatchGrade_(itemName);
+
+    if (
+      sourceSheet === "Dispatches" &&
+      migrationId === MANUFACTURING_MIGRATION_ID &&
+      movementType === "FG_DISPATCH_OUT" &&
+      itemName &&
+      normalized !== itemName
+    ) {
+      sh.getRange(r + 1, itemNameIndex + 1).setValue(normalized);
+      repaired += 1;
+    }
+  }
+
+  return repaired;
+}
+
 function migrationExists_(sheetName, legacySourceSheet, legacySourceId) {
   if (!legacySourceId) return false;
-  return getRowsAsObjects(sheetName).some((row) =>
-    String(row.legacySourceSheet || "") === legacySourceSheet &&
-    String(row.legacySourceId || "") === String(legacySourceId)
-  );
+  const cache = migrationCache_();
+
+  if (!cache.sheetKeys[sheetName]) {
+    const keys = {};
+    getRowsAsObjects(sheetName).forEach((row) => {
+      const sourceSheet = String(row.legacySourceSheet || "");
+      const sourceId = String(row.legacySourceId || "");
+      if (sourceSheet && sourceId) keys[sourceSheet + "|" + sourceId] = true;
+    });
+    cache.sheetKeys[sheetName] = keys;
+  }
+
+  return Boolean(cache.sheetKeys[sheetName][legacySourceSheet + "|" + String(legacySourceId)]);
 }
 
 function ledgerMigrationExists_(legacySourceSheet, legacySourceId, movementType, itemName) {
-  return getRowsAsObjects("Inventory_Ledger").some((row) =>
-    String(row.legacySourceSheet || "") === legacySourceSheet &&
-    String(row.legacySourceId || "") === String(legacySourceId) &&
-    String(row.movementType || "") === String(movementType || "") &&
-    String(row.itemName || "") === String(itemName || "")
-  );
+  const cache = migrationCache_();
+
+  if (!cache.ledgerKeys) {
+    const keys = {};
+    getRowsAsObjects("Inventory_Ledger").forEach((row) => {
+      const sourceSheet = String(row.legacySourceSheet || "");
+      const sourceId = String(row.legacySourceId || "");
+      const type = String(row.movementType || "");
+      const name = String(row.itemName || "");
+      if (sourceSheet && sourceId && type && name) {
+        keys[sourceSheet + "|" + sourceId + "|" + type + "|" + name] = true;
+      }
+    });
+    cache.ledgerKeys = keys;
+  }
+
+  return Boolean(cache.ledgerKeys[
+    legacySourceSheet + "|" + String(legacySourceId) + "|" + String(movementType || "") + "|" + String(itemName || "")
+  ]);
 }
 
 function appendMigrationLedger_(payload, legacySourceSheet, legacySourceId) {
@@ -2405,6 +2486,10 @@ function appendMigrationLedger_(payload, legacySourceSheet, legacySourceId) {
     migratedAt: migrationNow_(),
   });
 
+  migrationCache_().ledgerKeys[
+    legacySourceSheet + "|" + String(legacySourceId) + "|" + String(movementType || "") + "|" + String(itemName || "")
+  ] = true;
+
   return true;
 }
 
@@ -2418,6 +2503,12 @@ function appendMigrationRow_(sheetName, payload, legacySourceSheet, legacySource
     migrationId: MANUFACTURING_MIGRATION_ID,
     migratedAt: migrationNow_(),
   });
+
+  if (legacySourceSheet && legacySourceId) {
+    const cache = migrationCache_();
+    if (!cache.sheetKeys[sheetName]) cache.sheetKeys[sheetName] = {};
+    cache.sheetKeys[sheetName][legacySourceSheet + "|" + String(legacySourceId)] = true;
+  }
 }
 
 function migrationSummary_(functionName, periodMonth) {
@@ -2593,6 +2684,7 @@ function addTransformationMigration_(options) {
 }
 
 function migrateLegacyReceiving(data = {}) {
+  resetMigrationCaches_();
   const periodMonth = migrationMonth_(data);
   const summary = migrationSummary_("migrateLegacyReceiving", periodMonth);
   const rows = getRowsAsObjects("RM_Inward").filter((row) => !isDeleted_(row) && isMigrationPeriod_(row, periodMonth));
@@ -2672,6 +2764,7 @@ function migrateLegacyReceiving(data = {}) {
 }
 
 function migrateLegacyWash(data = {}) {
+  resetMigrationCaches_();
   const periodMonth = migrationMonth_(data);
   const summary = migrationSummary_("migrateLegacyWash", periodMonth);
   const rows = getRowsAsObjects("Wash_Batches").filter((row) => !isDeleted_(row) && isMigrationPeriod_(row, periodMonth));
@@ -2725,6 +2818,7 @@ function migrateLegacyWash(data = {}) {
 }
 
 function migrateLegacySorting(data = {}) {
+  resetMigrationCaches_();
   const periodMonth = migrationMonth_(data);
   const summary = migrationSummary_("migrateLegacySorting", periodMonth);
   const rows = getRowsAsObjects("Sorting_Batches").filter((row) => !isDeleted_(row) && isMigrationPeriod_(row, periodMonth));
@@ -2773,6 +2867,7 @@ function migrateLegacySorting(data = {}) {
 }
 
 function migrateLegacyExtrusion(data = {}) {
+  resetMigrationCaches_();
   const periodMonth = migrationMonth_(data);
   const summary = migrationSummary_("migrateLegacyExtrusion", periodMonth);
   const rows = getRowsAsObjects("Extrusion_Batches").filter((row) => !isDeleted_(row) && isMigrationPeriod_(row, periodMonth));
@@ -2832,14 +2927,22 @@ function migrateLegacyExtrusion(data = {}) {
 }
 
 function migrateLegacyInventory(data = {}) {
+  resetMigrationCaches_();
   const periodMonth = migrationMonth_(data);
   const summary = migrationSummary_("migrateLegacyInventory", periodMonth);
+  const repairedDispatchGrades = repairMigratedDispatchLedgerGrades_();
   const dispatches = getRowsAsObjects("Dispatches").filter((row) => !isDeleted_(row) && isMigrationPeriod_(row, periodMonth));
   summary.legacyRowsRead = dispatches.length;
+  if (repairedDispatchGrades) {
+    summary.warnings.push({
+      reason: "Repaired migrated dispatch ledger grade names to E1-E5",
+      rowsRepaired: repairedDispatchGrades,
+    });
+  }
 
   dispatches.forEach((row, index) => {
     const legacyId = String(row.dispatchId || `DISP-${index + 1}`);
-    const grade = materialName_(row.grade || row.productionGrade, "E1").toUpperCase();
+    const grade = normalizeDispatchGrade_(row.grade || row.productionGrade);
     const quantityKg = num(row.quantityKg);
 
     if (!quantityKg) {
@@ -2875,7 +2978,11 @@ function migrateLegacyInventory(data = {}) {
 
 function validateManufacturingCutover(data = {}) {
   const periodMonth = migrationMonth_(data);
-  const ledgerRows = getRowsAsObjects("Inventory_Ledger").filter((row) => !isDeleted_(row) && isMigrationPeriod_(row, periodMonth));
+  const ledgerRows = getRowsAsObjects("Inventory_Ledger").filter((row) =>
+    !isDeleted_(row) &&
+    isMigrationPeriod_(row, periodMonth) &&
+    String(row.migrationId || "") === MANUFACTURING_MIGRATION_ID
+  );
   const byMaterial = {};
   const totals = {
     receivingKg: 0,

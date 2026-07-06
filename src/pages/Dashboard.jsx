@@ -16,10 +16,6 @@ export default function Dashboard() {
   const [factoryExpenseRows, setFactoryExpenseRows] = useState([]);
   const [factoryCostMasterRows, setFactoryCostMasterRows] = useState([]);
   const [consumableRows, setConsumableRows] = useState([]);
-  const [costApiDebug, setCostApiDebug] = useState({
-    factoryExpenses: null,
-    factoryCostMaster: null,
-  });
 
   const [month, setMonth] = useState(
     String(now.getMonth() + 1).padStart(2, "0")
@@ -40,40 +36,9 @@ export default function Dashboard() {
           ? res.data
           : [];
 
-      if (fn === "factoryExpenses.list" || fn === "factoryCostMaster.list") {
-        setCostApiDebug((prev) => ({
-          ...prev,
-          [fn === "factoryExpenses.list" ? "factoryExpenses" : "factoryCostMaster"]: {
-            fn,
-            ok: res.ok,
-            topLevelKeys: Object.keys(res || {}),
-            rowsKeyCount: Array.isArray(res.rows) ? res.rows.length : null,
-            dataKeyCount: Array.isArray(res.data) ? res.data.length : null,
-            normalizedRowsCount: rows.length,
-            first3Rows: rows.slice(0, 3),
-            error: res.error || "",
-          },
-        }));
-      }
-
       return rows;
     } catch (err) {
       console.log(fn, err);
-      if (fn === "factoryExpenses.list" || fn === "factoryCostMaster.list") {
-        setCostApiDebug((prev) => ({
-          ...prev,
-          [fn === "factoryExpenses.list" ? "factoryExpenses" : "factoryCostMaster"]: {
-            fn,
-            ok: false,
-            topLevelKeys: [],
-            rowsKeyCount: null,
-            dataKeyCount: null,
-            normalizedRowsCount: 0,
-            first3Rows: [],
-            error: err.message || String(err),
-          },
-        }));
-      }
       return [];
     }
   }
@@ -196,41 +161,6 @@ export default function Dashboard() {
           Number(row.commodityKg || 0) +
           Number(row.whiteGreyKg || 0)
     );
-  }
-
-  function rowAmount(row = {}) {
-    return Number(
-      row.amount ||
-        row.expenseAmount ||
-        row.costAmount ||
-        row.monthlyAmount ||
-        row.fixedCost ||
-        row.fixedCostAmount ||
-        row.totalAmount ||
-        row.value ||
-        0
-    );
-  }
-
-  function factoryCostInSelectedMonth(row) {
-    const pm = periodMonthOnly(row.periodMonth || row.date || row.createdAt || "");
-    return pm === `${year}-${month}`;
-  }
-
-  function debugRow(row = {}) {
-    return {
-      periodMonth: row.periodMonth || "",
-      date: row.date || "",
-      createdAt: row.createdAt || "",
-      normalizedPeriod: periodMonthOnly(
-        row.periodMonth || row.date || row.createdAt || ""
-      ),
-      amount: rowAmount(row),
-      category: row.category || row.costHead || "",
-      description: row.description || row.remarks || "",
-      status: row.status || "",
-      raw: row,
-    };
   }
 
   const data = useMemo(() => {
@@ -486,48 +416,6 @@ export default function Dashboard() {
     monthlyTargetKg,
   ]);
 
-  const debugData = useMemo(() => {
-    const selectedMonth = `${year}-${month}`;
-    const matchingFactoryExpenses = factoryExpenseRows.filter(inSelectedMonth);
-    const matchingFactoryCostMaster =
-      factoryCostMasterRows.filter(factoryCostInSelectedMonth);
-
-    return {
-      selectedMonth,
-      factoryExpensesRowCount: factoryExpenseRows.length,
-      factoryExpensesRowsMatchingSelectedMonth: matchingFactoryExpenses.length,
-      factoryExpensesTotal: matchingFactoryExpenses.reduce(
-        (s, r) => s + rowAmount(r),
-        0
-      ),
-      factoryCostMasterRowCount: factoryCostMasterRows.length,
-      factoryCostMasterRowsMatchingSelectedMonth: matchingFactoryCostMaster.length,
-      fixedCostTotal: matchingFactoryCostMaster.reduce(
-        (s, r) => s + rowAmount(r),
-        0
-      ),
-      costEngineInputRows: {
-        factoryExpenseRows: factoryExpenseRows.length,
-        factoryCostMasterRows: factoryCostMasterRows.length,
-      },
-      costEngineOutputTotals: {
-        factoryExpenseValue: data.costEngine.factoryExpenseValue,
-        fixedCostValue: data.costEngine.fixedCostValue,
-      },
-      renderedKpiValues: {
-        factoryExpenses: data.factoryExpenseValue,
-        fixedCostTotal: data.costEngine.fixedCostValue,
-      },
-      browserApiResponses: costApiDebug,
-      rawFirst3FactoryExpensesRows: factoryExpenseRows.slice(0, 3),
-      rawFirst3FactoryCostMasterRows: factoryCostMasterRows.slice(0, 3),
-      normalizedFirst3FactoryExpensesRows: factoryExpenseRows.slice(0, 3).map(debugRow),
-      normalizedFirst3FactoryCostMasterRows:
-        factoryCostMasterRows.slice(0, 3).map(debugRow),
-      matchedFactoryExpenseRows: matchingFactoryExpenses.map(debugRow),
-      matchedFactoryCostMasterRows: matchingFactoryCostMaster.map(debugRow),
-    };
-  }, [factoryExpenseRows, factoryCostMasterRows, month, year, data, costApiDebug]);
 
   return (
     <div style={page}>
@@ -764,120 +652,6 @@ export default function Dashboard() {
         </Panel>
       </div>
 
-      <Panel title="Temporary Dashboard Cost Debug">
-        <div style={debugGrid}>
-          <DebugMetric label="selectedMonth" value={debugData.selectedMonth} />
-          <DebugMetric label="month state" value={month} />
-          <DebugMetric label="year state" value={year} />
-          <DebugMetric
-            label="factoryExpenses row count"
-            value={debugData.factoryExpensesRowCount}
-          />
-          <DebugMetric
-            label="factoryExpenses rows matching selected month"
-            value={debugData.factoryExpensesRowsMatchingSelectedMonth}
-          />
-          <DebugMetric
-            label="factoryExpenses total"
-            value={`₹ ${debugData.factoryExpensesTotal.toFixed(2)}`}
-          />
-          <DebugMetric
-            label="factoryCostMaster row count"
-            value={debugData.factoryCostMasterRowCount}
-          />
-          <DebugMetric
-            label="factoryCostMaster rows matching selected month"
-            value={debugData.factoryCostMasterRowsMatchingSelectedMonth}
-          />
-          <DebugMetric
-            label="fixedCost total"
-            value={`₹ ${debugData.fixedCostTotal.toFixed(2)}`}
-          />
-          <DebugMetric
-            label="costEngine factoryExpenseValue"
-            value={debugData.costEngineOutputTotals.factoryExpenseValue.toFixed(2)}
-          />
-          <DebugMetric
-            label="costEngine fixedCostValue"
-            value={debugData.costEngineOutputTotals.fixedCostValue.toFixed(2)}
-          />
-          <DebugMetric
-            label="rendered Factory Expenses KPI"
-            value={debugData.renderedKpiValues.factoryExpenses.toFixed(2)}
-          />
-          <DebugMetric
-            label="rendered Fixed Cost KPI"
-            value={debugData.renderedKpiValues.fixedCostTotal.toFixed(2)}
-          />
-        </div>
-
-        <div style={debugTwoCol}>
-          <div>
-            <div style={debugLabel}>raw first 3 Factory_Expenses rows</div>
-            <pre style={debugPre}>
-              {JSON.stringify(debugData.rawFirst3FactoryExpensesRows, null, 2)}
-            </pre>
-          </div>
-
-          <div>
-            <div style={debugLabel}>raw first 3 Factory_Cost_Master rows</div>
-            <pre style={debugPre}>
-              {JSON.stringify(debugData.rawFirst3FactoryCostMasterRows, null, 2)}
-            </pre>
-          </div>
-        </div>
-
-        <div style={debugLabel}>browser API responses</div>
-        <pre style={debugPre}>
-          {JSON.stringify(debugData.browserApiResponses, null, 2)}
-        </pre>
-
-        <div style={debugLabel}>calculateCostEngine input rows and output totals</div>
-        <pre style={debugPre}>
-          {JSON.stringify(
-            {
-              costEngineInputRows: debugData.costEngineInputRows,
-              costEngineOutputTotals: debugData.costEngineOutputTotals,
-              renderedKpiValues: debugData.renderedKpiValues,
-            },
-            null,
-            2
-          )}
-        </pre>
-
-        <div style={debugTwoCol}>
-          <div>
-            <div style={debugLabel}>normalized first 3 Factory_Expenses rows</div>
-            <pre style={debugPre}>
-              {JSON.stringify(debugData.normalizedFirst3FactoryExpensesRows, null, 2)}
-            </pre>
-          </div>
-
-          <div>
-            <div style={debugLabel}>normalized first 3 Factory_Cost_Master rows</div>
-            <pre style={debugPre}>
-              {JSON.stringify(debugData.normalizedFirst3FactoryCostMasterRows, null, 2)}
-            </pre>
-          </div>
-        </div>
-
-        <div style={debugTwoCol}>
-          <div>
-            <div style={debugLabel}>matched Factory_Expenses rows</div>
-            <pre style={debugPre}>
-              {JSON.stringify(debugData.matchedFactoryExpenseRows, null, 2)}
-            </pre>
-          </div>
-
-          <div>
-            <div style={debugLabel}>matched Factory_Cost_Master rows</div>
-            <pre style={debugPre}>
-              {JSON.stringify(debugData.matchedFactoryCostMasterRows, null, 2)}
-            </pre>
-          </div>
-        </div>
-      </Panel>
-
       <div style={twoCol}>
         <Panel title="Top Procurement Sources">
           {data.suppliers.length === 0 ? (
@@ -942,15 +716,6 @@ function Metric({ label, value, color = "#0f172a" }) {
     <div style={metric}>
       <span>{label}</span>
       <b style={{ color }}>{value}</b>
-    </div>
-  );
-}
-
-function DebugMetric({ label, value }) {
-  return (
-    <div style={debugMetric}>
-      <span>{label}</span>
-      <b>{value}</b>
     </div>
   );
 }
@@ -1098,51 +863,6 @@ const metric = {
   gap: 14,
   padding: "10px 0",
   borderBottom: "1px solid #f1f5f9",
-};
-
-const debugGrid = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))",
-  gap: 10,
-  marginBottom: 16,
-};
-
-const debugMetric = {
-  background: "#f8fafc",
-  border: "1px solid #e2e8f0",
-  borderRadius: 12,
-  padding: 12,
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 12,
-  fontSize: 13,
-};
-
-const debugTwoCol = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))",
-  gap: 14,
-};
-
-const debugLabel = {
-  fontSize: 12,
-  fontWeight: 900,
-  color: "#475569",
-  textTransform: "uppercase",
-  letterSpacing: 0.5,
-  marginBottom: 8,
-};
-
-const debugPre = {
-  background: "#020617",
-  color: "#d1fae5",
-  borderRadius: 12,
-  padding: 14,
-  fontSize: 12,
-  lineHeight: 1.45,
-  overflowX: "auto",
-  whiteSpace: "pre-wrap",
-  maxHeight: 360,
 };
 
 const flowRow = {

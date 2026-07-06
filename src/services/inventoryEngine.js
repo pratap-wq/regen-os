@@ -119,7 +119,7 @@ export function calculateInventoryEngine({
       purchasedKg: rmPurchasedKg,
       consumedKg: rmConsumedKg,
       stockKg: rmStockKg,
-      avgRate,
+      avgRate: avgRmRate,
       value: rmStockKg * avgRmRate,
     },
     wash: {

@@ -63,6 +63,7 @@ function doGet(e) {
     if (p.fn === "supplier.add") return addSupplier(p);
     if (p.fn === "supplier.update") return updateSupplier(p);
     if (p.fn === "suppliers.list") return listMaster("Suppliers");
+    if (p.fn === "customers.list") return listMaster("Customers");
 
     // Wash
     if (p.fn === "wash.add") return addWashBatch(p);

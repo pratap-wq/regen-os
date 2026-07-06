@@ -47,6 +47,7 @@ export default function Dispatch() {
 
   const [rows, setRows] = useState([]);
   const [extrusionRows, setExtrusionRows] = useState([]);
+  const [ledgerBalanceRows, setLedgerBalanceRows] = useState([]);
   const [status, setStatus] = useState("");
   const [editingRow, setEditingRow] = useState(null);
   const [form, setForm] = useState(blankForm);
@@ -58,13 +59,15 @@ export default function Dispatch() {
 
   async function loadData() {
     try {
-      const [dispatch, extrusion] = await Promise.all([
+      const [dispatch, extrusion, ledgerBalance] = await Promise.all([
         apiCall({ fn: "dispatch.list" }),
         apiCall({ fn: "extrusion.list" }),
+        apiCall({ fn: "inventoryLedger.balance" }),
       ]);
 
       setRows(dispatch.rows || []);
       setExtrusionRows(extrusion.rows || []);
+      setLedgerBalanceRows(ledgerBalance.rows || []);
     } catch (err) {
       console.log(err);
       setStatus(err.message);
@@ -186,10 +189,27 @@ export default function Dispatch() {
   }, [extrusionRows, rows, editingRow]);
 
   const materialInventory = useMemo(() => {
+    const ledgerFg = ledgerBalanceRows
+      .filter((row) => String(row.itemType || "").toUpperCase() === "FG")
+      .map((row) => ({
+        material: normalizeMaterial(row.itemName),
+        availableKg: Number(row.qty || 0),
+        source: "Inventory Ledger",
+      }))
+      .filter((row) => row.material && row.availableKg > 0);
+
+    if (ledgerFg.length > 0) {
+      return ledgerFg.sort((a, b) =>
+        String(a.material).localeCompare(String(b.material), undefined, {
+          numeric: true,
+        })
+      );
+    }
+
     const map = {};
 
     allLiveLots.forEach((lot) => {
-      const material = String(lot.productionGrade || lot.grade || "").trim();
+      const material = normalizeMaterial(lot.productionGrade || lot.grade);
       if (!material) return;
 
       if (!map[material]) {
@@ -197,6 +217,7 @@ export default function Dispatch() {
           material,
           availableKg: 0,
           lots: 0,
+          source: "Legacy extrusion lots",
         };
       }
 
@@ -209,10 +230,10 @@ export default function Dispatch() {
         numeric: true,
       })
     );
-  }, [allLiveLots]);
+  }, [ledgerBalanceRows, allLiveLots]);
 
   const selectedInventory = materialInventory.find(
-    (x) => String(x.material) === String(form.material || form.grade || "")
+    (x) => normalizeMaterial(x.material) === normalizeMaterial(form.material || form.grade || "")
   );
 
   function getLineTotal(lines = dispatchLines) {
@@ -296,8 +317,8 @@ export default function Dispatch() {
     const matchingLots = allLiveLots
       .filter(
         (lot) =>
-          String(lot.productionGrade || lot.grade || "").trim() ===
-          String(material || "").trim()
+          normalizeMaterial(lot.productionGrade || lot.grade) ===
+          normalizeMaterial(material)
       )
       .sort((a, b) =>
         String(a.productionDate || "").localeCompare(String(b.productionDate || ""))
@@ -323,6 +344,20 @@ export default function Dispatch() {
         remarks: "Auto allocated from material inventory",
       });
     });
+
+    if (remaining > 0.01 && Number(selectedInventory?.availableKg || 0) >= Number(quantityKg || 0)) {
+      allocated.push({
+        sourceExtrusionBatchId: "",
+        lotNo: "Material Inventory",
+        grade: material,
+        productionDate: "",
+        productionShift: "",
+        availableKg: remaining,
+        dispatchQtyKg: remaining,
+        remarks: "Auto allocated from inventory ledger balance",
+      });
+      remaining = 0;
+    }
 
     if (remaining > 0.01) {
       throw new Error(
@@ -534,8 +569,8 @@ export default function Dispatch() {
         <h1 style={{ margin: 0 }}>Dispatch Workflow</h1>
 
         <div style={subText}>
-          Multi-lot truck dispatch from FG stock. FG lots show by default and
-          are allocated internally after the operator selects material and quantity.
+          Dispatch consumes material inventory. Operators select material and quantity;
+          traceability is allocated internally.
         </div>
       </div>
 
@@ -548,6 +583,11 @@ export default function Dispatch() {
           title="Selected Available"
           value={`${Number(selectedInventory?.availableKg || 0).toFixed(0)} Kg`}
         />
+      </div>
+
+      <div style={stockNote}>
+        Available stock as of today
+        {selectedInventory?.source ? ` | Source: ${selectedInventory.source}` : ""}
       </div>
 
       {status && <div style={statusStyle}>{status}</div>}
@@ -599,6 +639,7 @@ export default function Dispatch() {
               value={`${Number(selectedInventory?.availableKg || 0).toFixed(2)} Kg`}
               style={readonlyStyle}
             />
+            <div style={hintText}>Available stock as of today</div>
           </Field>
 
           <Field label="Dispatch Quantity">
@@ -739,7 +780,7 @@ export default function Dispatch() {
               readOnly
               value={
                 form.material
-                  ? "System will allocate oldest available inventory lots automatically on save."
+                  ? "System will allocate known lots first, then material inventory ledger balance if needed."
                   : "Select material to allocate inventory."
               }
               style={textareaStyle}
@@ -846,6 +887,10 @@ function KPI({ title, value }) {
   );
 }
 
+function normalizeMaterial(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
 const pageStyle = { padding: 20 };
 
 const headerCard = {
@@ -859,6 +904,17 @@ const headerCard = {
 const subText = {
   color: "#64748b",
   marginTop: 4,
+  fontSize: 13,
+};
+
+const stockNote = {
+  background: "#ecfdf5",
+  border: "1px solid #bbf7d0",
+  color: "#166534",
+  borderRadius: 10,
+  padding: "10px 12px",
+  marginBottom: 16,
+  fontWeight: 700,
   fontSize: 13,
 };
 
@@ -881,6 +937,12 @@ const fieldLabel = {
   fontWeight: 600,
   marginBottom: 4,
   color: "#334155",
+};
+
+const hintText = {
+  marginTop: 4,
+  color: "#64748b",
+  fontSize: 12,
 };
 
 const kpiGrid = {

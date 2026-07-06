@@ -46,8 +46,59 @@ export function dateOnly(value) {
   return text.slice(0, 10);
 }
 
+export function periodMonthOnly(value) {
+  if (!value) return "";
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    const d = new Date(excelEpoch.getTime() + value * 24 * 60 * 60 * 1000);
+
+    if (!Number.isNaN(d.getTime())) {
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+    }
+  }
+
+  const text = String(value).trim();
+
+  if (/^\d{4}-\d{2}/.test(text)) {
+    return text.slice(0, 7);
+  }
+
+  if (/^\d{2}\/\d{2}\/\d{4}/.test(text)) {
+    const [, mm, yyyy] = text.slice(0, 10).split("/");
+    return `${yyyy}-${mm}`;
+  }
+
+  if (/^\d{2}-\d{2}-\d{4}/.test(text)) {
+    const [, mm, yyyy] = text.slice(0, 10).split("-");
+    return `${yyyy}-${mm}`;
+  }
+
+  const d = new Date(text);
+  if (!Number.isNaN(d.getTime())) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }
+
+  return "";
+}
+
+export function costAmount(row = {}) {
+  return n(
+    row.amount ||
+      row.costAmount ||
+      row.monthlyAmount ||
+      row.fixedCost ||
+      row.fixedCostAmount ||
+      row.value ||
+      row.totalAmount
+  );
+}
+
 export function filterByMonth(rows = [], month, year) {
   return filterActive(rows).filter((r) => {
+    const pm = periodMonthOnly(r.periodMonth || "");
+    if (pm) return pm === `${year}-${month}`;
+
     const d = dateOnly(r.date || r.createdAt || "");
     if (!d) return false;
 
@@ -80,7 +131,7 @@ export function calculateCostEngine({
   const factoryExpenses = filterByMonth(factoryExpenseRows, month, year);
 
   const factoryCostMaster = filterActive(factoryCostMasterRows).filter(
-    (r) => String(r.periodMonth || "") === periodMonth
+    (r) => periodMonthOnly(r.periodMonth || r.date || r.createdAt || "") === periodMonth
   );
 
   const rmPurchasedKg = rm.reduce((s, r) => s + n(r.netWeight), 0);
@@ -143,10 +194,7 @@ export function calculateCostEngine({
     0
   );
 
-  const fixedCostValue = factoryCostMaster.reduce(
-    (s, r) => s + n(r.amount),
-    0
-  );
+  const fixedCostValue = factoryCostMaster.reduce((s, r) => s + costAmount(r), 0);
 
   const storesCostPerKg = safeDiv(storesIssueValue, fgProducedKg);
   const factoryCostPerKg = safeDiv(factoryExpenseValue, fgProducedKg);

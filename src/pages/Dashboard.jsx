@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
-import { calculateCostEngine } from "../services/costEngine";
+import { calculateCostEngine, periodMonthOnly } from "../services/costEngine";
 import { calculateProfitWaterfall } from "../services/profitWaterfallEngine";
 
 export default function Dashboard() {
@@ -106,6 +106,9 @@ export default function Dashboard() {
 }
 
   function inSelectedMonth(row) {
+    const pm = periodMonthOnly(row.periodMonth || "");
+    if (pm) return pm === `${year}-${month}`;
+
     const d = dateForCompare(row.date || row.createdAt || "");
     if (!d) return false;
 
@@ -154,6 +157,25 @@ export default function Dashboard() {
     );
   }
 
+  function rowAmount(row = {}) {
+    return Number(
+      row.amount ||
+        row.expenseAmount ||
+        row.costAmount ||
+        row.monthlyAmount ||
+        row.fixedCost ||
+        row.fixedCostAmount ||
+        row.totalAmount ||
+        row.value ||
+        0
+    );
+  }
+
+  function factoryCostInSelectedMonth(row) {
+    const pm = periodMonthOnly(row.periodMonth || row.date || row.createdAt || "");
+    return pm === `${year}-${month}`;
+  }
+
   const data = useMemo(() => {
     const m = Number(month);
     const y = Number(year);
@@ -167,18 +189,8 @@ export default function Dashboard() {
     const sorting = sortingRows.filter(inSelectedMonth);
     const extrusion = extrusionRows.filter(inSelectedMonth);
     const dispatch = dispatchRows.filter(inSelectedMonth);
-console.log({
-  month,
-  year,
-  rm: rm.length,
-  wash: wash.length,
-  sorting: sorting.length,
-  extrusion: extrusion.length,
-  dispatch: dispatch.length,
-});
     const storesInward = storesInwardRows.filter(inSelectedMonth);
     const storesIssue = storesIssueRows.filter(inSelectedMonth);
-    const factoryExpenses = factoryExpenseRows.filter(inSelectedMonth);
 
     const rmPurchased = sum(rm, "netWeight");
     const rmValue = rm.reduce(
@@ -211,24 +223,6 @@ console.log({
       0
     );
 
-    const storesIssueQty = sum(storesIssue, "qty");
-
-    const storesIssueValue = storesIssue.reduce((s, r) => {
-      const rate =
-        Number(r.issueRate || 0) ||
-        Number(r.rate || 0) ||
-        getItemRate(r.itemName);
-
-      return s + Number(r.issueValue || Number(r.qty || 0) * rate);
-    }, 0);
-
-    const factoryExpenseValue = factoryExpenses.reduce(
-      (s, r) =>
-        s +
-        Number(r.amount || r.expenseAmount || r.totalAmount || r.value || 0),
-      0
-    );
-
     const costEngine = calculateCostEngine({
       rmRows,
       washRows,
@@ -244,6 +238,9 @@ console.log({
     });
 
     const profitWaterfall = calculateProfitWaterfall(costEngine);
+    const storesIssueQty = sum(storesIssue, "qty");
+    const storesIssueValue = costEngine.storesIssueValue;
+    const factoryExpenseValue = costEngine.factoryExpenseValue;
 
     const avgRmRate = rmPurchased > 0 ? rmValue / rmPurchased : 0;
     const avgSaleRate = dispatched > 0 ? revenue / dispatched : 0;
@@ -251,20 +248,10 @@ console.log({
     const estimatedRmConsumedValue = washInput * avgRmRate;
     const grossContribution = revenue - estimatedRmConsumedValue;
 
-    const storesCostPerKg =
-      fgProduced > 0 ? storesIssueValue / fgProduced : 0;
-
-    const factoryCostPerKg =
-      fgProduced > 0 ? factoryExpenseValue / fgProduced : 0;
-
-    const estimatedProfit =
-      revenue -
-      estimatedRmConsumedValue -
-      storesIssueValue -
-      factoryExpenseValue -
-      costEngine.fixedCostValue;
-
-    const profitPerKg = fgProduced > 0 ? estimatedProfit / fgProduced : 0;
+    const storesCostPerKg = costEngine.storesCostPerKg;
+    const factoryCostPerKg = costEngine.factoryCostPerKg;
+    const estimatedProfit = costEngine.estimatedProfit;
+    const profitPerKg = costEngine.grossMarginPerKg;
 
     const overallRecovery =
       washInput > 0 ? (fgProduced / washInput) * 100 : 0;
@@ -441,6 +428,31 @@ console.log({
     year,
     monthlyTargetKg,
   ]);
+
+  const debugData = useMemo(() => {
+    const selectedMonth = `${year}-${month}`;
+    const matchingFactoryExpenses = factoryExpenseRows.filter(inSelectedMonth);
+    const matchingFactoryCostMaster =
+      factoryCostMasterRows.filter(factoryCostInSelectedMonth);
+
+    return {
+      selectedMonth,
+      factoryExpensesRowCount: factoryExpenseRows.length,
+      factoryExpensesRowsMatchingSelectedMonth: matchingFactoryExpenses.length,
+      factoryExpensesTotal: matchingFactoryExpenses.reduce(
+        (s, r) => s + rowAmount(r),
+        0
+      ),
+      factoryCostMasterRowCount: factoryCostMasterRows.length,
+      factoryCostMasterRowsMatchingSelectedMonth: matchingFactoryCostMaster.length,
+      fixedCostTotal: matchingFactoryCostMaster.reduce(
+        (s, r) => s + rowAmount(r),
+        0
+      ),
+      rawFirst3FactoryExpensesRows: factoryExpenseRows.slice(0, 3),
+      rawFirst3FactoryCostMasterRows: factoryCostMasterRows.slice(0, 3),
+    };
+  }, [factoryExpenseRows, factoryCostMasterRows, month, year]);
 
   return (
     <div style={page}>
@@ -677,6 +689,52 @@ console.log({
         </Panel>
       </div>
 
+      <Panel title="Temporary Dashboard Cost Debug">
+        <div style={debugGrid}>
+          <DebugMetric label="selectedMonth" value={debugData.selectedMonth} />
+          <DebugMetric
+            label="factoryExpenses row count"
+            value={debugData.factoryExpensesRowCount}
+          />
+          <DebugMetric
+            label="factoryExpenses rows matching selected month"
+            value={debugData.factoryExpensesRowsMatchingSelectedMonth}
+          />
+          <DebugMetric
+            label="factoryExpenses total"
+            value={`₹ ${debugData.factoryExpensesTotal.toFixed(2)}`}
+          />
+          <DebugMetric
+            label="factoryCostMaster row count"
+            value={debugData.factoryCostMasterRowCount}
+          />
+          <DebugMetric
+            label="factoryCostMaster rows matching selected month"
+            value={debugData.factoryCostMasterRowsMatchingSelectedMonth}
+          />
+          <DebugMetric
+            label="fixedCost total"
+            value={`₹ ${debugData.fixedCostTotal.toFixed(2)}`}
+          />
+        </div>
+
+        <div style={debugTwoCol}>
+          <div>
+            <div style={debugLabel}>raw first 3 Factory_Expenses rows</div>
+            <pre style={debugPre}>
+              {JSON.stringify(debugData.rawFirst3FactoryExpensesRows, null, 2)}
+            </pre>
+          </div>
+
+          <div>
+            <div style={debugLabel}>raw first 3 Factory_Cost_Master rows</div>
+            <pre style={debugPre}>
+              {JSON.stringify(debugData.rawFirst3FactoryCostMasterRows, null, 2)}
+            </pre>
+          </div>
+        </div>
+      </Panel>
+
       <div style={twoCol}>
         <Panel title="Top Procurement Sources">
           {data.suppliers.length === 0 ? (
@@ -741,6 +799,15 @@ function Metric({ label, value, color = "#0f172a" }) {
     <div style={metric}>
       <span>{label}</span>
       <b style={{ color }}>{value}</b>
+    </div>
+  );
+}
+
+function DebugMetric({ label, value }) {
+  return (
+    <div style={debugMetric}>
+      <span>{label}</span>
+      <b>{value}</b>
     </div>
   );
 }
@@ -888,6 +955,51 @@ const metric = {
   gap: 14,
   padding: "10px 0",
   borderBottom: "1px solid #f1f5f9",
+};
+
+const debugGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))",
+  gap: 10,
+  marginBottom: 16,
+};
+
+const debugMetric = {
+  background: "#f8fafc",
+  border: "1px solid #e2e8f0",
+  borderRadius: 12,
+  padding: 12,
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  fontSize: 13,
+};
+
+const debugTwoCol = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))",
+  gap: 14,
+};
+
+const debugLabel = {
+  fontSize: 12,
+  fontWeight: 900,
+  color: "#475569",
+  textTransform: "uppercase",
+  letterSpacing: 0.5,
+  marginBottom: 8,
+};
+
+const debugPre = {
+  background: "#020617",
+  color: "#d1fae5",
+  borderRadius: 12,
+  padding: 14,
+  fontSize: 12,
+  lineHeight: 1.45,
+  overflowX: "auto",
+  whiteSpace: "pre-wrap",
+  maxHeight: 360,
 };
 
 const flowRow = {

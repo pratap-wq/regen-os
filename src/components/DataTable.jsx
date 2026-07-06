@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import "./factoryDesignSystem.css";
 
 export default function DataTable({
   title = "",
@@ -350,11 +351,11 @@ function safeFileName(name) {
 const cardStyle = {
   background: "white",
   padding: 0,
-  borderRadius: 14,
-  boxShadow: "0 6px 18px rgba(15,23,42,0.06)",
+  borderRadius: 16,
+  boxShadow: "0 5px 18px rgba(15,23,42,0.055)",
   width: "100%",
   boxSizing: "border-box",
-  border: "1px solid #e5e7eb",
+  border: "1px solid #e2e8f0",
   overflow: "hidden",
 };
 
@@ -369,7 +370,7 @@ const topBarStyle = {
   padding: 16,
   gap: 16,
   flexWrap: "wrap",
-  borderBottom: "1px solid #e5e7eb",
+  borderBottom: "1px solid #e2e8f0",
 };
 
 const toolbarStyle = {
@@ -381,7 +382,7 @@ const toolbarStyle = {
 
 const searchStyle = {
   padding: 10,
-  borderRadius: 8,
+  borderRadius: 10,
   border: "1px solid #cbd5e1",
   width: 220,
   maxWidth: "100%",
@@ -389,38 +390,38 @@ const searchStyle = {
 
 const dateStyle = {
   padding: 10,
-  borderRadius: 8,
+  borderRadius: 10,
   border: "1px solid #cbd5e1",
 };
 
 const secondaryButton = {
-  background: "#64748b",
-  color: "white",
-  border: "none",
+  background: "#f8fafc",
+  color: "#0f172a",
+  border: "1px solid #cbd5e1",
   padding: "10px 14px",
-  borderRadius: 8,
+  borderRadius: 10,
   cursor: "pointer",
-  fontWeight: 700,
+  fontWeight: 850,
 };
 
 const exportStyle = {
-  background: "#2563eb",
+  background: "#005d34",
   color: "white",
   border: "none",
   padding: "10px 14px",
-  borderRadius: 8,
+  borderRadius: 10,
   cursor: "pointer",
-  fontWeight: 700,
+  fontWeight: 850,
 };
 
 const printStyle = {
-  background: "#0f766e",
+  background: "#00b26b",
   color: "white",
   border: "none",
   padding: "10px 14px",
-  borderRadius: 8,
+  borderRadius: 10,
   cursor: "pointer",
-  fontWeight: 700,
+  fontWeight: 850,
 };
 
 const tableWrapStyle = {
@@ -438,8 +439,8 @@ const tableStyle = {
 };
 
 const headerRowStyle = {
-  background: "#0f766e",
-  color: "white",
+  background: "#f8fafc",
+  color: "#334155",
 };
 
 const filterRowStyle = {
@@ -451,20 +452,21 @@ const th = {
   textAlign: "left",
   position: "sticky",
   top: 0,
-  background: "#0f766e",
+  background: "#f8fafc",
   zIndex: 10,
   whiteSpace: "nowrap",
+  borderBottom: "1px solid #e2e8f0",
 };
 
 const sortButton = {
   width: "100%",
   background: "transparent",
-  color: "white",
+  color: "#334155",
   border: "none",
   padding: "11px 12px",
   textAlign: "left",
   cursor: "pointer",
-  fontWeight: 800,
+  fontWeight: 850,
 };
 
 const filterCell = {
@@ -487,7 +489,7 @@ const columnFilterInput = {
 };
 
 const rowStyle = {
-  borderBottom: "1px solid #e5e7eb",
+  borderBottom: "1px solid #edf2f7",
 };
 
 const td = {
@@ -504,23 +506,23 @@ const actionWrap = {
 };
 
 const editButtonStyle = {
-  background: "#2563eb",
-  color: "white",
-  border: "none",
+  background: "#f8fafc",
+  color: "#0f172a",
+  border: "1px solid #cbd5e1",
   padding: "6px 10px",
-  borderRadius: 6,
+  borderRadius: 8,
   cursor: "pointer",
-  fontWeight: 700,
+  fontWeight: 850,
 };
 
 const deleteButtonStyle = {
-  background: "#dc2626",
-  color: "white",
-  border: "none",
+  background: "#fee2e2",
+  color: "#991b1b",
+  border: "1px solid #fecaca",
   padding: "6px 10px",
-  borderRadius: 6,
+  borderRadius: 8,
   cursor: "pointer",
-  fontWeight: 700,
+  fontWeight: 850,
 };
 
 const emptyStyle = {

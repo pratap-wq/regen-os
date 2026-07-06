@@ -3,6 +3,7 @@ import { apiCall } from "../api/api";
 import FormSection from "../components/FormSection";
 import InventoryFeedTable from "../components/InventoryFeedTable";
 import FactoryDropdown from "../components/FactoryDropdown";
+import { KpiCard, PageLayout, SummaryPanel } from "../components/factoryDesignSystem";
 import { generateExtrusionBatchId } from "../utils/idGenerator";
 import { buildInventoryLots } from "../utils/inventoryLots";
 
@@ -531,12 +532,15 @@ export default function Production() {
   }
 
   return (
-    <div style={{ padding: 20 }}>
-      <h1 style={{ color: "#0f766e", marginBottom: 8 }}>Production Entry</h1>
-
-      <div style={infoBox}>
-       One shift entry screen for Washline, Colour Sorter and Extrusion.
-Raw Material and Finished Goods quality testing is performed separately in the Quality Workbench.
+    <PageLayout
+      title="Production Entry"
+      subtitle="One shift entry screen for Washline, Colour Sorter and Extrusion. Raw Material and Finished Goods quality testing is performed separately in the Quality Workbench."
+    >
+      <div className="factory-kpi-grid">
+        <KpiCard title="Wash Recovery" value={washRecovery ? `${washRecovery}%` : "—"} tone={washRecovery ? "positive" : "neutral"} />
+        <KpiCard title="Sorting Recovery" value={sorterRecovery ? `${sorterRecovery}%` : "—"} tone={sorterRecovery ? "positive" : "neutral"} />
+        <KpiCard title="Extrusion Recovery" value={extrusionRecovery ? `${extrusionRecovery}%` : "—"} tone={extrusionRecovery ? "positive" : "neutral"} />
+        <KpiCard title="Total Feed" value={`${totalFeedKg.toFixed(0)} Kg`} tone="neutral" />
       </div>
 
       {message && <div style={messageBox}>{message}</div>}
@@ -769,7 +773,7 @@ Raw Material and Finished Goods quality testing is performed separately in the Q
           </button>
         </div>
       </form>
-    </div>
+    </PageLayout>
   );
 }
 

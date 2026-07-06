@@ -5,6 +5,7 @@ import { formatDate } from "../utils/date";
 import DataTable from "../components/DataTable";
 import FormSection from "../components/FormSection";
 import FactoryDropdown from "../components/FactoryDropdown";
+import { KpiCard, PageLayout } from "../components/factoryDesignSystem";
 import {
   materialInventoryFromLedgerBalances,
   normalizeInventoryMaterial,
@@ -564,24 +565,20 @@ export default function Dispatch() {
   }, [activeRows]);
 
   return (
-    <div style={pageStyle}>
-      <div style={headerCard}>
-        <h1 style={{ margin: 0 }}>Dispatch Workflow</h1>
+    <PageLayout
+      title="Dispatch Workflow"
+      subtitle="Dispatch consumes material inventory. Operators select material and quantity; traceability is allocated internally."
+    >
 
-        <div style={subText}>
-          Dispatch consumes material inventory. Operators select material and quantity;
-          traceability is allocated internally.
-        </div>
-      </div>
-
-      <div style={kpiGrid}>
-        <KPI title="Dispatch Qty" value={`${totalDispatch.toFixed(0)} Kg`} />
+      <div className="factory-kpi-grid">
+        <KpiCard title="Dispatch Qty" value={`${totalDispatch.toFixed(0)} Kg`} />
         <KPI title="Sales" value={`₹ ${totalSales.toFixed(0)}`} />
         <KPI title="Avg Realization" value={`₹ ${avgRealization}`} />
-        <KPI title="Materials Available" value={materialInventory.length} />
-        <KPI
+        <KpiCard title="Materials Available" value={materialInventory.length} tone="neutral" />
+        <KpiCard
           title="Selected Available"
           value={`${Number(selectedInventory?.availableKg || 0).toFixed(0)} Kg`}
+          tone={selectedInventory ? "positive" : "neutral"}
         />
       </div>
 
@@ -894,7 +891,7 @@ export default function Dispatch() {
         onEdit={editRow}
         onDelete={deleteRow}
       />
-    </div>
+    </PageLayout>
   );
 }
 

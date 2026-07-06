@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import FactoryMasterModal from "./FactoryMasterModal";
+import "./factoryDesignSystem.css";
 import {
   getFavoriteMasterItems,
   getRecentMasterItems,
@@ -176,19 +177,21 @@ const wrap = { display: "flex", flexDirection: "column", gap: 6 };
 const row = { display: "flex", gap: 8, alignItems: "center" };
 const baseInput = {
   width: "100%",
-  padding: 10,
-  border: "1px solid #d1d5db",
-  borderRadius: 8,
+  padding: "10px 11px",
+  border: "1px solid #cbd5e1",
+  borderRadius: 10,
   boxSizing: "border-box",
+  minHeight: 40,
+  outline: "none",
 };
 const smallButton = {
   border: "1px solid #cbd5e1",
   background: "#f8fafc",
   color: "#0f172a",
-  borderRadius: 8,
+  borderRadius: 10,
   padding: "10px 12px",
   cursor: "pointer",
-  fontWeight: 800,
+  fontWeight: 850,
   whiteSpace: "nowrap",
 };
 const meta = { fontSize: 11, color: "#64748b" };

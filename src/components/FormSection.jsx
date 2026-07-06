@@ -1,4 +1,5 @@
 import { useState } from "react";
+import "./factoryDesignSystem.css";
 
 export default function FormSection({
   title,
@@ -46,14 +47,15 @@ export default function FormSection({
 
 const cardStyle = {
   background: "white",
-  borderRadius: 12,
-  border: "1px solid #e5e7eb",
-  marginBottom: 16,
+  borderRadius: 16,
+  border: "1px solid #e2e8f0",
+  marginBottom: 18,
   overflow: "hidden",
+  boxShadow: "0 5px 18px rgba(15, 23, 42, 0.055)",
 };
 
 const headerStyle = {
-  background: "#ecfdf5",
+  background: "#fbfefc",
   padding: "14px 16px",
   cursor: "pointer",
   display: "flex",
@@ -63,9 +65,9 @@ const headerStyle = {
 };
 
 const titleStyle = {
-  fontWeight: 700,
-  color: "#065f46",
-  fontSize: 15,
+  fontWeight: 850,
+  color: "#005d34",
+  fontSize: 16,
 };
 
 const iconStyle = {

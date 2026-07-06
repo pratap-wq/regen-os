@@ -3,6 +3,7 @@ import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 import DataTable from "../components/DataTable";
 import FactoryDropdown from "../components/FactoryDropdown";
+import { KpiCard, PageLayout, SectionCard } from "../components/factoryDesignSystem";
 
 export default function RMInward() {
   const currentDate = new Date().toISOString().split("T")[0];
@@ -308,15 +309,10 @@ export default function RMInward() {
       .sort((a, b) => b.qtyKg - a.qtyKg);
   }, [filteredRows, totalRM]);
   return (
-    <div style={page}>
-      <div style={header}>
-        <div>
-          <h1 style={title}>RM Inward</h1>
-          <div style={subtitle}>
-            Main form is for new GRN only. Use table Edit for corrections.
-          </div>
-        </div>
-
+    <PageLayout
+      title="RM Inward"
+      subtitle="Main form is for new GRN only. Use table Edit for corrections."
+      actions={
         <div style={filters}>
           <select value={month} onChange={(e) => setMonth(e.target.value)} style={filter}>
             <option value="01">Jan</option>
@@ -339,15 +335,16 @@ export default function RMInward() {
             <option>2027</option>
           </select>
         </div>
-      </div>
+      }
+    >
 
-      <div style={gridStyle}>
-        <Card title="RM Qty" value={`${totalRM.toFixed(0)} Kg`} />
+      <div className="factory-kpi-grid">
+        <KpiCard title="RM Qty" value={`${totalRM.toFixed(0)} Kg`} />
         <Card title="RM Value" value={`₹ ${totalRMValue.toFixed(0)}`} />
         <Card title="Avg RM Price" value={`₹ ${avgRMPrice}`} />
-        <Card title="Shortage" value={`${shortageKg.toFixed(0)} Kg`} />
-        <Card title="Excess" value={`${excessKg.toFixed(0)} Kg`} />
-        <Card title="Pending Deductions" value={pendingDeductions} />
+        <KpiCard title="Shortage" value={`${shortageKg.toFixed(0)} Kg`} tone={shortageKg > 0 ? "warning" : "neutral"} />
+        <KpiCard title="Excess" value={`${excessKg.toFixed(0)} Kg`} tone="neutral" />
+        <KpiCard title="Pending Deductions" value={pendingDeductions} tone={pendingDeductions > 0 ? "warning" : "neutral"} />
       </div>
 
       <div style={materialBox}>
@@ -801,7 +798,7 @@ export default function RMInward() {
           </div>
         </div>
       )}
-    </div>
+    </PageLayout>
   );
 }
 function Card({ title, value }) {

@@ -22,7 +22,7 @@ const blankLine = {
 export default function MaterialReceiving() {
   const [form, setForm] = useState(blankForm);
   const [lines, setLines] = useState([{ ...blankLine }]);
-  const [buckets, setBuckets] = useState([]);
+  const [materials, setMaterials] = useState([]);
   const [receipts, setReceipts] = useState([]);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -32,12 +32,12 @@ export default function MaterialReceiving() {
   }, []);
 
   async function loadData() {
-    const [bucketRes, receiptRes] = await Promise.all([
+    const [materialRes, receiptRes] = await Promise.all([
       apiCall({ fn: "materialBuckets.list" }),
       apiCall({ fn: "materialReceiving.list" }),
     ]);
 
-    setBuckets(bucketRes.rows || []);
+    setMaterials(materialRes.rows || []);
     setReceipts(receiptRes.rows || []);
   }
 
@@ -53,8 +53,8 @@ export default function MaterialReceiving() {
         const next = { ...row, [field]: value };
 
         if (field === "materialBucket") {
-          const bucket = buckets.find((b) => b.bucketName === value);
-          next.bucketType = bucket?.bucketType || "";
+          const material = materials.find((b) => b.bucketName === value);
+          next.bucketType = material?.bucketType || "";
         }
 
         return next;
@@ -110,7 +110,7 @@ export default function MaterialReceiving() {
           <h1 style={title}>Material Receiving</h1>
           <div style={subtitle}>
             Receive one truck with multiple materials, create meaningful GRNs,
-            and post each line into Material Bucket inventory.
+            and post each line into Material Inventory.
           </div>
         </div>
 
@@ -191,8 +191,8 @@ export default function MaterialReceiving() {
               onChange={(e) => updateLine(index, "materialBucket", e.target.value)}
               style={input}
             >
-              <option value="">Select Material Bucket</option>
-              {buckets.map((bucket) => (
+              <option value="">Select Material</option>
+              {materials.map((bucket) => (
                 <option
                   key={bucket.bucketId || bucket.bucketName}
                   value={bucket.bucketName}
@@ -206,7 +206,7 @@ export default function MaterialReceiving() {
               value={line.bucketType}
               readOnly
               style={readOnlyInput}
-              placeholder="Bucket Type"
+              placeholder="Material Category"
             />
 
             <input

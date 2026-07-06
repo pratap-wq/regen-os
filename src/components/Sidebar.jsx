@@ -11,7 +11,6 @@ export default function Sidebar({ mode = "light" }) {
       items: [
         { label: "Command Center", path: "/command-center", icon: "sparkles" },
         { label: "CEO Cockpit", path: "/dashboard", icon: "chart" },
-        { label: "Factory Pulse", path: "/factory-pulse", icon: "gauge" },
       ],
     },
     {
@@ -24,45 +23,47 @@ export default function Sidebar({ mode = "light" }) {
       ],
     },
     {
-      section: "Advanced",
-      icon: "settings",
+      section: "Material Inventory",
+      icon: "boxes",
       items: [
-        { label: "Legacy Live Flow", path: "/production", icon: "activity" },
-        { label: "Legacy RM Inward", path: "/rm-inward", icon: "package" },
-        { label: "Legacy Color Sorter", path: "/color-sorter-batches", icon: "sparkles" },
-        { label: "Legacy Extrusion", path: "/extrusion-batches", icon: "factory" },
-        { label: "Material Transformation", path: "/material-transformation", icon: "factory" },
+        { label: "Material Inventory", path: "/material-inventory", icon: "activity" },
+        { label: "Traceability", path: "/traceability", icon: "sparkles" },
       ],
     },
     {
-      section: "Inventory & Stores",
+      section: "Stores",
       icon: "boxes",
       items: [
         { label: "Stores Hub", path: "/stores-dashboard", icon: "boxes" },
         { label: "Stores Inward", path: "/stores-inward", icon: "package" },
         { label: "Stores Issue", path: "/stores-issue", icon: "truck" },
-        { label: "Live Inventory", path: "/live-inventory", icon: "activity" },
       ],
     },
     {
       section: "Control Rooms",
       icon: "lock",
       items: [
-        { label: "Month Close", path: "/monthly-close", icon: "lock" },
-        { label: "Adjustments", path: "/inventory-adjustments", icon: "alert" },
+        { label: "Month Close Control Room", path: "/monthly-close", icon: "lock" },
+        { label: "Quality", path: "/quality", icon: "sparkles" },
         { label: "Cost Control", path: "/factory-cost-master", icon: "chart" },
         { label: "Factory Expenses", path: "/factory-expenses", icon: "package" },
       ],
     },
     {
-      section: "Masters & Admin",
+      section: "Masters",
       icon: "settings",
       items: [
         { label: "Suppliers", path: "/suppliers", icon: "boxes" },
-        { label: "RM List", path: "/rm-list", icon: "package" },
+        { label: "Material Master", path: "/production-materials", icon: "factory" },
         { label: "FG Rates", path: "/fg-rates", icon: "chart" },
-        { label: "Materials", path: "/production-materials", icon: "factory" },
+      ],
+    },
+    {
+      section: "Settings",
+      icon: "settings",
+      items: [
         { label: "Alerts", path: "/alert-center", icon: "alert" },
+        { label: "Alert Settings", path: "/alert-settings", icon: "settings" },
       ],
     },
   ];

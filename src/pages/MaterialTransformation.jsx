@@ -100,12 +100,12 @@ export default function MaterialTransformation() {
     });
 
     if (!res.ok) {
-      setMessage(res.error || "Could not save material bucket");
+      setMessage(res.error || "Could not save material");
       return;
     }
 
     setBucketForm(blankBucket);
-    setMessage("Material bucket saved");
+    setMessage("Material saved");
     loadData();
   }
 
@@ -163,7 +163,7 @@ export default function MaterialTransformation() {
           <h1 style={title}>Production Control</h1>
           <div style={subtitle}>
             Select Wash, Sorting, Extrusion or Rework. Consume Material
-            Buckets, create output buckets, and post inventory movements through
+            Inventory, create output materials, and post inventory movements through
             one transformation engine.
           </div>
         </div>
@@ -300,9 +300,9 @@ export default function MaterialTransformation() {
         </form>
 
         <form onSubmit={saveBucket} style={card}>
-          <h2 style={cardTitle}>Quick Add Material Bucket</h2>
+          <h2 style={cardTitle}>Quick Add Material</h2>
           <div style={grid}>
-            <Field label="Bucket Name">
+            <Field label="Material Name">
               <input
                 value={bucketForm.bucketName}
                 onChange={(e) =>
@@ -313,7 +313,7 @@ export default function MaterialTransformation() {
               />
             </Field>
 
-            <Field label="Bucket Type">
+            <Field label="Material Category">
               <select
                 value={bucketForm.bucketType}
                 onChange={(e) =>
@@ -369,12 +369,12 @@ export default function MaterialTransformation() {
             </Field>
           </div>
 
-          <button style={secondaryButton}>Add Bucket</button>
+          <button style={secondaryButton}>Add Material</button>
 
-          <h3 style={smallTitle}>Active Buckets</h3>
+          <h3 style={smallTitle}>Active Materials</h3>
           <div style={bucketList}>
             {buckets.length === 0 ? (
-              <div style={empty}>No material buckets yet.</div>
+              <div style={empty}>No materials yet.</div>
             ) : (
               buckets.slice(0, 12).map((bucket) => (
                 <div key={bucket.bucketId || bucket.bucketName} style={bucketPill}>
@@ -452,7 +452,7 @@ function BucketRows({
       <div style={sectionHeader}>
         <h3 style={smallTitle}>{title}</h3>
         <button type="button" onClick={onAdd} style={miniButton}>
-          + Add {title === "Inputs" ? "Input" : "Output"} Bucket
+          + Add {title === "Inputs" ? "Input" : "Output"} Material
         </button>
       </div>
 
@@ -463,7 +463,7 @@ function BucketRows({
             onChange={(e) => onChange(index, bucketField, e.target.value)}
             style={input}
           >
-            <option value="">Select Material Bucket</option>
+            <option value="">Select Material</option>
             {buckets.map((bucket) => (
               <option
                 key={bucket.bucketId || bucket.bucketName}

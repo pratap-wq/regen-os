@@ -26,10 +26,18 @@ function doGet(e) {
     if (p.fn === "productionMaterials.seedDefaults") return seedProductionMaterials();
     if (p.fn === "materialBuckets.list") return listMaster("Material_Buckets");
     if (p.fn === "materialBuckets.add") return addMaterialBucket(p);
+    if (p.fn === "materialMaster.list") return listMaster("Material_Buckets");
+    if (p.fn === "materialMaster.add") return addMaterialBucket(p);
     if (p.fn === "materialReceiving.list") return listMaterialReceiving(p);
     if (p.fn === "materialReceiving.add") return addMaterialReceiving(p);
     if (p.fn === "transformationRuns.list") return listTransformationRuns(p);
     if (p.fn === "transformationRuns.add") return addTransformationRun(p);
+    if (p.fn === "manufacturingCutover.migrateReceiving") return migrateLegacyReceiving(p);
+    if (p.fn === "manufacturingCutover.migrateWash") return migrateLegacyWash(p);
+    if (p.fn === "manufacturingCutover.migrateSorting") return migrateLegacySorting(p);
+    if (p.fn === "manufacturingCutover.migrateExtrusion") return migrateLegacyExtrusion(p);
+    if (p.fn === "manufacturingCutover.migrateInventory") return migrateLegacyInventory(p);
+    if (p.fn === "manufacturingCutover.validateJune2026") return validateManufacturingCutover(p);
     if (p.fn === "physicalCounts.get") return getPhysicalCount(p);
     if (p.fn === "physicalCounts.save") return savePhysicalCount(p);
     // RM
@@ -940,6 +948,10 @@ const REGEN_DB_SCHEMA = {
     "status",
     "createdBy",
     "createdAt",
+    "legacySourceSheet",
+    "legacySourceId",
+    "migrationId",
+    "migratedAt",
   ],
   Material_Buckets: [
     "bucketId",
@@ -948,6 +960,8 @@ const REGEN_DB_SCHEMA = {
     "materialFamily",
     "processStage",
     "defaultNextProcess",
+    "qualitySampleDefault",
+    "qualityTestType",
     "status",
     "createdBy",
     "createdAt",
@@ -965,6 +979,10 @@ const REGEN_DB_SCHEMA = {
     "status",
     "createdBy",
     "createdAt",
+    "legacySourceSheet",
+    "legacySourceId",
+    "migrationId",
+    "migratedAt",
   ],
   Material_Receiving_Lines: [
     "lineId",
@@ -979,6 +997,10 @@ const REGEN_DB_SCHEMA = {
     "status",
     "createdBy",
     "createdAt",
+    "legacySourceSheet",
+    "legacySourceId",
+    "migrationId",
+    "migratedAt",
   ],
   Transformation_Runs: [
     "runId",
@@ -997,6 +1019,10 @@ const REGEN_DB_SCHEMA = {
     "status",
     "createdBy",
     "createdAt",
+    "legacySourceSheet",
+    "legacySourceId",
+    "migrationId",
+    "migratedAt",
   ],
   Transformation_Inputs: [
     "inputId",
@@ -1006,6 +1032,10 @@ const REGEN_DB_SCHEMA = {
     "status",
     "createdBy",
     "createdAt",
+    "legacySourceSheet",
+    "legacySourceId",
+    "migrationId",
+    "migratedAt",
   ],
   Transformation_Outputs: [
     "outputId",
@@ -1016,6 +1046,10 @@ const REGEN_DB_SCHEMA = {
     "status",
     "createdBy",
     "createdAt",
+    "legacySourceSheet",
+    "legacySourceId",
+    "migrationId",
+    "migratedAt",
   ],
   RM_Quality: [
     "qualityId",
@@ -1849,9 +1883,8 @@ function isMonthClosed_(periodMonth) {
 }
 
 // =====================================================
-// MATERIAL BUCKETS + TRANSFORMATION RUNS
-// Bucket-based manufacturing foundation. Additive only.
-// Legacy wash/sorting/extrusion routes remain unchanged.
+// MATERIAL MASTER + TRANSFORMATION RUNS
+// Material-inventory manufacturing foundation.
 // =====================================================
 
 function transformationSchemaHeaders_(sheetName) {
@@ -1879,9 +1912,9 @@ function addMaterialBucket(data = {}) {
   const bucketName = String(data.bucketName || "").trim();
   const bucketType = String(data.bucketType || "").trim().toUpperCase();
 
-  if (!bucketName) throw new Error("Material bucket name is required");
+  if (!bucketName) throw new Error("Material name is required");
   if (["RM", "WIP", "FG", "WASTE", "STORES"].indexOf(bucketType) === -1) {
-    throw new Error("Bucket type must be RM, WIP, FG, WASTE, or STORES");
+    throw new Error("Material category must be RM, WIP, FG, WASTE, or STORES");
   }
 
   const bucketId = data.bucketId || generateBatchId("BKT");
@@ -1893,6 +1926,8 @@ function addMaterialBucket(data = {}) {
     materialFamily: data.materialFamily || "",
     processStage: data.processStage || "",
     defaultNextProcess: data.defaultNextProcess || "",
+    qualitySampleDefault: data.qualitySampleDefault || "",
+    qualityTestType: data.qualityTestType || "",
     status: data.status || "ACTIVE",
     createdBy: data.createdBy || "System",
     createdAt: new Date(),
@@ -2292,6 +2327,633 @@ function addTransformationRun(data = {}) {
     varianceKg,
     recoveryPercent,
     lossPercent,
+  });
+}
+
+// =====================================================
+// MANUFACTURING OPERATING MODEL CUT-OVER
+// One-time June 2026 migration helpers. These functions
+// are idempotent and never run automatically.
+// =====================================================
+
+const MANUFACTURING_CUTOVER_MONTH = "2026-06";
+const MANUFACTURING_MIGRATION_ID = "MOM-CUTOVER-2026-06";
+
+function migrationMonth_(data = {}) {
+  return String(data.periodMonth || data.month || MANUFACTURING_CUTOVER_MONTH).slice(0, 7);
+}
+
+function migrationNow_() {
+  return new Date().toISOString();
+}
+
+function rowPeriodMonth_(row) {
+  return String(row.periodMonth || getPeriodMonth(row.date || "") || "").slice(0, 7);
+}
+
+function isMigrationPeriod_(row, periodMonth) {
+  return rowPeriodMonth_(row) === String(periodMonth || "").slice(0, 7);
+}
+
+function materialName_(value, fallback) {
+  const raw = String(value || fallback || "").trim();
+  if (!raw) return "Mixed Material";
+  return raw
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function materialCategory_(materialName) {
+  const name = String(materialName || "").toUpperCase();
+  if (/^E[1-5]$/.test(name)) return "FG";
+  if (name.indexOf("WASTE") !== -1 || name.indexOf("REJECT") !== -1 || name.indexOf("DUST") !== -1 || name.indexOf("SINK") !== -1 || name.indexOf("PURGING") !== -1 || name.indexOf("LUMP") !== -1) return "WASTE";
+  if (name.indexOf("WASHED") !== -1 || name.indexOf("SORTED") !== -1 || name.indexOf("COMMODITY") !== -1 || name.indexOf("REWORK") !== -1) return "WIP";
+  return "RM";
+}
+
+function migrationExists_(sheetName, legacySourceSheet, legacySourceId) {
+  if (!legacySourceId) return false;
+  return getRowsAsObjects(sheetName).some((row) =>
+    String(row.legacySourceSheet || "") === legacySourceSheet &&
+    String(row.legacySourceId || "") === String(legacySourceId)
+  );
+}
+
+function ledgerMigrationExists_(legacySourceSheet, legacySourceId, movementType, itemName) {
+  return getRowsAsObjects("Inventory_Ledger").some((row) =>
+    String(row.legacySourceSheet || "") === legacySourceSheet &&
+    String(row.legacySourceId || "") === String(legacySourceId) &&
+    String(row.movementType || "") === String(movementType || "") &&
+    String(row.itemName || "") === String(itemName || "")
+  );
+}
+
+function appendMigrationLedger_(payload, legacySourceSheet, legacySourceId) {
+  const movementType = payload.movementType || "";
+  const itemName = payload.itemName || "";
+
+  if (ledgerMigrationExists_(legacySourceSheet, legacySourceId, movementType, itemName)) {
+    return false;
+  }
+
+  addInventoryLedger({
+    ...payload,
+    legacySourceSheet,
+    legacySourceId,
+    migrationId: MANUFACTURING_MIGRATION_ID,
+    migratedAt: migrationNow_(),
+  });
+
+  return true;
+}
+
+function appendMigrationRow_(sheetName, payload, legacySourceSheet, legacySourceId) {
+  const sh = getSheet(sheetName);
+  ensureHeaders_(sheetName, transformationSchemaHeaders_(sheetName));
+  appendObjectRow(sh, {
+    ...payload,
+    legacySourceSheet,
+    legacySourceId,
+    migrationId: MANUFACTURING_MIGRATION_ID,
+    migratedAt: migrationNow_(),
+  });
+}
+
+function migrationSummary_(functionName, periodMonth) {
+  return {
+    ok: true,
+    functionName,
+    periodMonth,
+    migrationId: MANUFACTURING_MIGRATION_ID,
+    legacyRowsRead: 0,
+    rowsMigrated: 0,
+    rowsSkippedAlreadyMigrated: 0,
+    rowsFlaggedForReview: 0,
+    ledgerMovementsCreated: 0,
+    warnings: [],
+    migrated: [],
+  };
+}
+
+function makeLegacyRunId_(prefix, legacyId) {
+  return `${prefix}-${String(legacyId || Utilities.getUuid()).replace(/[^A-Za-z0-9]/g, "").slice(0, 28)}`;
+}
+
+function aggregateInputRows_(rows) {
+  const map = {};
+  (rows || []).forEach((row) => {
+    const material = materialName_(row.material, "");
+    const quantityKg = num(row.quantityKg);
+    if (!material || quantityKg <= 0) return;
+    if (!map[material]) map[material] = { material, quantityKg: 0 };
+    map[material].quantityKg += quantityKg;
+  });
+  return Object.keys(map).map((key) => ({
+    material: map[key].material,
+    quantityKg: round2(map[key].quantityKg),
+  }));
+}
+
+function aggregateOutputRows_(rows) {
+  const map = {};
+  (rows || []).forEach((row) => {
+    const material = materialName_(row.material, "");
+    const outputType = String(row.outputType || "GOOD").toUpperCase();
+    const quantityKg = num(row.quantityKg);
+    if (!material || quantityKg <= 0) return;
+    const key = material + "|" + outputType;
+    if (!map[key]) map[key] = { material, outputType, quantityKg: 0 };
+    map[key].quantityKg += quantityKg;
+  });
+  return Object.keys(map).map((key) => ({
+    material: map[key].material,
+    outputType: map[key].outputType,
+    quantityKg: round2(map[key].quantityKg),
+  }));
+}
+
+function addTransformationMigration_(options) {
+  const legacySheet = options.legacySheet;
+  const legacyId = String(options.legacyId || "");
+  const runId = options.runId || makeLegacyRunId_("TRN", legacyId);
+  const date = normalizeDateOnly_(options.date || todayYmd());
+  const periodMonth = String(options.periodMonth || getPeriodMonth(date)).slice(0, 7);
+  const inputs = aggregateInputRows_(options.inputs || []);
+  const outputs = aggregateOutputRows_(options.outputs || []);
+
+  if (migrationExists_("Transformation_Runs", legacySheet, legacyId)) {
+    return { migrated: false, skipped: true, runId, ledgerMovementsCreated: 0 };
+  }
+
+  const totalInputKg = round2(inputs.reduce((s, row) => s + num(row.quantityKg), 0));
+  const totalOutputKg = round2(outputs.reduce((s, row) => s + num(row.quantityKg), 0));
+  const goodOutputKg = outputs
+    .filter((row) => ["GOOD", "REWORK"].indexOf(String(row.outputType || "").toUpperCase()) !== -1)
+    .reduce((s, row) => s + num(row.quantityKg), 0);
+  const lossOutputKg = outputs
+    .filter((row) => ["WASTE", "LOSS"].indexOf(String(row.outputType || "").toUpperCase()) !== -1)
+    .reduce((s, row) => s + num(row.quantityKg), 0);
+  const varianceKg = round2(totalInputKg - totalOutputKg);
+  const recoveryPercent = totalInputKg > 0 ? round2((goodOutputKg / totalInputKg) * 100) : 0;
+  const lossPercent = totalInputKg > 0 ? round2(((lossOutputKg + Math.max(varianceKg, 0)) / totalInputKg) * 100) : 0;
+  const createdBy = options.createdBy || "Legacy Migration";
+
+  appendMigrationRow_("Transformation_Runs", {
+    runId,
+    date,
+    periodMonth,
+    shift: options.shift || "",
+    processType: options.processType,
+    machine: options.machine || "",
+    operator: options.operator || "",
+    remarks: options.remarks || "Migrated from " + legacySheet,
+    totalInputKg,
+    totalOutputKg,
+    varianceKg,
+    recoveryPercent,
+    lossPercent,
+    status: options.status || "ACTIVE",
+    createdBy,
+    createdAt: new Date(),
+  }, legacySheet, legacyId);
+
+  let ledgerMovementsCreated = 0;
+
+  inputs.forEach((row) => {
+    appendMigrationRow_("Transformation_Inputs", {
+      inputId: generateBatchId("TRI"),
+      runId,
+      inputBucket: row.material,
+      quantityKg: num(row.quantityKg),
+      status: "ACTIVE",
+      createdBy,
+      createdAt: new Date(),
+    }, legacySheet, legacyId);
+
+    if (appendMigrationLedger_({
+      date,
+      module: "Manufacturing Cutover",
+      movementType: "TRANSFORMATION_INPUT",
+      itemType: materialCategory_(row.material),
+      itemName: row.material,
+      sourceRef: legacyId,
+      targetRef: runId,
+      qtyIn: 0,
+      qtyOut: num(row.quantityKg),
+      unit: "Kg",
+      remarks: `${options.processType} input migrated from ${legacySheet}`,
+      createdBy,
+    }, legacySheet, legacyId)) {
+      ledgerMovementsCreated += 1;
+    }
+  });
+
+  outputs.forEach((row) => {
+    const outputType = String(row.outputType || "GOOD").toUpperCase();
+    appendMigrationRow_("Transformation_Outputs", {
+      outputId: generateBatchId("TRO"),
+      runId,
+      outputBucket: row.material,
+      quantityKg: num(row.quantityKg),
+      outputType,
+      status: "ACTIVE",
+      createdBy,
+      createdAt: new Date(),
+    }, legacySheet, legacyId);
+
+    if (appendMigrationLedger_({
+      date,
+      module: "Manufacturing Cutover",
+      movementType: "TRANSFORMATION_OUTPUT_" + outputType,
+      itemType: materialCategory_(row.material),
+      itemName: row.material,
+      sourceRef: legacyId,
+      targetRef: runId,
+      qtyIn: num(row.quantityKg),
+      qtyOut: 0,
+      unit: "Kg",
+      remarks: `${options.processType} output migrated from ${legacySheet}`,
+      createdBy,
+    }, legacySheet, legacyId)) {
+      ledgerMovementsCreated += 1;
+    }
+  });
+
+  return {
+    migrated: true,
+    skipped: false,
+    runId,
+    totalInputKg,
+    totalOutputKg,
+    varianceKg,
+    recoveryPercent,
+    ledgerMovementsCreated,
+  };
+}
+
+function migrateLegacyReceiving(data = {}) {
+  const periodMonth = migrationMonth_(data);
+  const summary = migrationSummary_("migrateLegacyReceiving", periodMonth);
+  const rows = getRowsAsObjects("RM_Inward").filter((row) => !isDeleted_(row) && isMigrationPeriod_(row, periodMonth));
+  summary.legacyRowsRead = rows.length;
+
+  rows.forEach((row, index) => {
+    const legacyId = String(row.inwardId || row.batchId || `RM-${index + 1}`);
+    const material = materialName_(row.material || row.color, "Mixed Material");
+    const quantityKg = num(row.netWeight || row.inputWeightKg || row.grossWeight);
+    const date = normalizeDateOnly_(row.date || todayYmd());
+    const receivingId = makeLegacyRunId_("MR", legacyId);
+    const grnId = makeReceivingGrnId_(date, row.supplier || "SUPPLIER", material, index + 1);
+
+    if (!quantityKg) {
+      summary.rowsFlaggedForReview += 1;
+      summary.warnings.push({ legacySourceId: legacyId, reason: "RM inward has no net weight" });
+      return;
+    }
+
+    if (migrationExists_("Material_Receiving", "RM_Inward", legacyId)) {
+      summary.rowsSkippedAlreadyMigrated += 1;
+      return;
+    }
+
+    appendMigrationRow_("Material_Receiving", {
+      receivingId,
+      date,
+      periodMonth,
+      supplier: row.supplier || "",
+      vehicleNo: row.vehicleNo || "",
+      weighbridgeSlipNo: "",
+      totalTruckWeightKg: quantityKg,
+      qualitySampleRequired: (num(row.moisture) || num(row.contamination)) ? "YES" : "NO",
+      remarks: row.remarks || "Migrated from RM Inward",
+      status: row.status || "ACTIVE",
+      createdBy: row.createdBy || "Legacy Migration",
+      createdAt: row.createdAt || new Date(),
+    }, "RM_Inward", legacyId);
+
+    appendMigrationRow_("Material_Receiving_Lines", {
+      lineId: generateBatchId("MRL"),
+      receivingId,
+      grnId,
+      materialBucket: material,
+      bucketType: materialCategory_(material),
+      quantityKg,
+      ratePerKg: num(row.ratePerKg),
+      value: round2(quantityKg * num(row.ratePerKg)),
+      qualitySampleRequired: (num(row.moisture) || num(row.contamination)) ? "YES" : "NO",
+      status: row.status || "ACTIVE",
+      createdBy: row.createdBy || "Legacy Migration",
+      createdAt: row.createdAt || new Date(),
+    }, "RM_Inward", legacyId);
+
+    if (appendMigrationLedger_({
+      date,
+      module: "Manufacturing Cutover",
+      movementType: "MATERIAL_RECEIVING_IN",
+      itemType: materialCategory_(material),
+      itemName: material,
+      sourceRef: legacyId,
+      targetRef: grnId,
+      qtyIn: quantityKg,
+      qtyOut: 0,
+      unit: "Kg",
+      remarks: "RM inward migrated to Material Receiving",
+      createdBy: row.createdBy || "Legacy Migration",
+    }, "RM_Inward", legacyId)) {
+      summary.ledgerMovementsCreated += 1;
+    }
+
+    summary.rowsMigrated += 1;
+    summary.migrated.push({ legacySourceId: legacyId, receivingId, grnId, material, quantityKg });
+  });
+
+  return output(summary);
+}
+
+function migrateLegacyWash(data = {}) {
+  const periodMonth = migrationMonth_(data);
+  const summary = migrationSummary_("migrateLegacyWash", periodMonth);
+  const rows = getRowsAsObjects("Wash_Batches").filter((row) => !isDeleted_(row) && isMigrationPeriod_(row, periodMonth));
+  summary.legacyRowsRead = rows.length;
+
+  rows.forEach((row, index) => {
+    const legacyId = String(row.washBatchId || row.batchId || `WASH-${index + 1}`);
+    const inputMaterial = materialName_(row.inputMaterial, "Mixed Material");
+    const washedMaterial = inputMaterial.toUpperCase().indexOf("WHITE") !== -1 ? "Washed White Flakes" : "Washed Mixed";
+    const outputs = [
+      { material: washedMaterial, quantityKg: num(row.washedOutputKg), outputType: "GOOD" },
+      { material: "Sink Material", quantityKg: num(row.sinkMaterialKg), outputType: "WASTE" },
+      { material: "Color Reject", quantityKg: num(row.otherColorKg), outputType: "WASTE" },
+      { material: "Dust", quantityKg: num(row.dustKg), outputType: "WASTE" },
+      { material: "Raffia Reject", quantityKg: num(row.raffiaKg), outputType: "WASTE" },
+      { material: "Wrapper Reject", quantityKg: num(row.wrappersKg), outputType: "WASTE" },
+      { material: "Micro Plastic", quantityKg: num(row.microPlasticKg), outputType: "WASTE" },
+      { material: "Metal Reject", quantityKg: num(row.ironScrapKg), outputType: "WASTE" },
+      { material: "Sludge", quantityKg: num(row.sludgeKg), outputType: "WASTE" },
+    ];
+    const result = addTransformationMigration_({
+      legacySheet: "Wash_Batches",
+      legacyId,
+      runId: makeLegacyRunId_("WASH", legacyId),
+      date: row.date,
+      periodMonth,
+      shift: row.shift,
+      processType: "WASH",
+      machine: row.machine,
+      operator: row.operatorName,
+      remarks: row.remarks,
+      status: row.status,
+      createdBy: row.createdBy,
+      inputs: [{ material: inputMaterial, quantityKg: num(row.inputWeightKg) }],
+      outputs,
+    });
+
+    if (result.skipped) summary.rowsSkippedAlreadyMigrated += 1;
+    if (result.migrated) {
+      summary.rowsMigrated += 1;
+      summary.ledgerMovementsCreated += result.ledgerMovementsCreated;
+      summary.migrated.push({ legacySourceId: legacyId, runId: result.runId, ...result });
+    }
+    if (!num(row.inputWeightKg)) {
+      summary.rowsFlaggedForReview += 1;
+      summary.warnings.push({ legacySourceId: legacyId, reason: "Wash batch has no input weight" });
+    }
+  });
+
+  return output(summary);
+}
+
+function migrateLegacySorting(data = {}) {
+  const periodMonth = migrationMonth_(data);
+  const summary = migrationSummary_("migrateLegacySorting", periodMonth);
+  const rows = getRowsAsObjects("Sorting_Batches").filter((row) => !isDeleted_(row) && isMigrationPeriod_(row, periodMonth));
+  summary.legacyRowsRead = rows.length;
+
+  rows.forEach((row, index) => {
+    const legacyId = String(row.sortingBatchId || `SORT-${index + 1}`);
+    const result = addTransformationMigration_({
+      legacySheet: "Sorting_Batches",
+      legacyId,
+      runId: makeLegacyRunId_("SORT", legacyId),
+      date: row.date,
+      periodMonth,
+      shift: row.shift,
+      processType: "SORTING",
+      machine: row.machine,
+      operator: row.operatorName,
+      remarks: row.remarks,
+      status: row.status,
+      createdBy: row.createdBy,
+      inputs: [{ material: "Washed Mixed", quantityKg: num(row.inputWeightKg) }],
+      outputs: [
+        { material: "White Sorted", quantityKg: num(row.acceptedQtyKg), outputType: "GOOD" },
+        { material: "Color Reject", quantityKg: num(row.rejectedQtyKg), outputType: "WASTE" },
+        { material: "Rubber Reject", quantityKg: num(row.rubberRejectKg), outputType: "WASTE" },
+        { material: "Black Specs Reject", quantityKg: num(row.blackSpecsRejectKg), outputType: "WASTE" },
+        { material: "Raffia Reject", quantityKg: num(row.raffiaRejectKg), outputType: "WASTE" },
+        { material: "Rework Material", quantityKg: num(row.recoverableRejectKg), outputType: "REWORK" },
+        { material: "Sorting Waste", quantityKg: num(row.unrecoverableRejectKg), outputType: "WASTE" },
+      ],
+    });
+
+    if (result.skipped) summary.rowsSkippedAlreadyMigrated += 1;
+    if (result.migrated) {
+      summary.rowsMigrated += 1;
+      summary.ledgerMovementsCreated += result.ledgerMovementsCreated;
+      summary.migrated.push({ legacySourceId: legacyId, runId: result.runId, ...result });
+    }
+    if (!num(row.inputWeightKg)) {
+      summary.rowsFlaggedForReview += 1;
+      summary.warnings.push({ legacySourceId: legacyId, reason: "Sorting batch has no input weight" });
+    }
+  });
+
+  return output(summary);
+}
+
+function migrateLegacyExtrusion(data = {}) {
+  const periodMonth = migrationMonth_(data);
+  const summary = migrationSummary_("migrateLegacyExtrusion", periodMonth);
+  const rows = getRowsAsObjects("Extrusion_Batches").filter((row) => !isDeleted_(row) && isMigrationPeriod_(row, periodMonth));
+  summary.legacyRowsRead = rows.length;
+
+  rows.forEach((row, index) => {
+    const legacyId = String(row.extrusionBatchId || row.batchId || `EXT-${index + 1}`);
+    const grade = materialName_(row.productionGrade, "E1").toUpperCase();
+    const baseInputKg = num(row.inputWeightKg || row.totalInputKg);
+    const result = addTransformationMigration_({
+      legacySheet: "Extrusion_Batches",
+      legacyId,
+      runId: makeLegacyRunId_("EXT", legacyId),
+      date: row.date,
+      periodMonth,
+      shift: row.shift,
+      processType: "EXTRUSION",
+      machine: row.machine,
+      operator: row.operatorName,
+      remarks: row.remarks,
+      status: row.status,
+      createdBy: row.createdBy,
+      inputs: [
+        { material: materialName_(row.inputMaterial, "White Sorted"), quantityKg: baseInputKg },
+        { material: "Virgin Material", quantityKg: num(row.virginMaterialKg) },
+        { material: "Masterbatch", quantityKg: num(row.masterBatchKg) },
+        { material: "Battery Scrap", quantityKg: num(row.batteryFlakesKg) },
+        { material: "Rework Material", quantityKg: num(row.reworkGranulesKg) },
+        { material: "Lumps", quantityKg: num(row.lumpsReusedKg) },
+        { material: "Purging", quantityKg: num(row.purgingReusedKg) },
+        { material: "Anti Oxidant", quantityKg: num(row.antiOxidantKg) },
+      ],
+      outputs: [
+        { material: grade, quantityKg: num(row.fgOutputKg), outputType: "GOOD" },
+        { material: "Lumps", quantityKg: num(row.lumpsKg), outputType: "REWORK" },
+        { material: "Purging", quantityKg: num(row.purgingKg), outputType: "REWORK" },
+        { material: "Dust", quantityKg: num(row.dustKg), outputType: "WASTE" },
+        { material: "Extrusion Waste", quantityKg: num(row.microPlasticKg || row.rejectKg || row.meshRejectKg || row.meshRejectionKg), outputType: "WASTE" },
+        { material: "Rework Material", quantityKg: num(row.shadeVariationKg), outputType: "REWORK" },
+        { material: "Extrusion Waste", quantityKg: num(row.vacuumRejectKg) + num(row.floorSpillageKg), outputType: "WASTE" },
+      ],
+    });
+
+    if (result.skipped) summary.rowsSkippedAlreadyMigrated += 1;
+    if (result.migrated) {
+      summary.rowsMigrated += 1;
+      summary.ledgerMovementsCreated += result.ledgerMovementsCreated;
+      summary.migrated.push({ legacySourceId: legacyId, runId: result.runId, ...result });
+    }
+    if (!baseInputKg) {
+      summary.rowsFlaggedForReview += 1;
+      summary.warnings.push({ legacySourceId: legacyId, reason: "Extrusion batch has no input weight" });
+    }
+  });
+
+  return output(summary);
+}
+
+function migrateLegacyInventory(data = {}) {
+  const periodMonth = migrationMonth_(data);
+  const summary = migrationSummary_("migrateLegacyInventory", periodMonth);
+  const dispatches = getRowsAsObjects("Dispatches").filter((row) => !isDeleted_(row) && isMigrationPeriod_(row, periodMonth));
+  summary.legacyRowsRead = dispatches.length;
+
+  dispatches.forEach((row, index) => {
+    const legacyId = String(row.dispatchId || `DISP-${index + 1}`);
+    const grade = materialName_(row.grade || row.productionGrade, "E1").toUpperCase();
+    const quantityKg = num(row.quantityKg);
+
+    if (!quantityKg) {
+      summary.rowsFlaggedForReview += 1;
+      summary.warnings.push({ legacySourceId: legacyId, reason: "Dispatch has no quantity" });
+      return;
+    }
+
+    if (appendMigrationLedger_({
+      date: row.date,
+      module: "Manufacturing Cutover",
+      movementType: "FG_DISPATCH_OUT",
+      itemType: "FG",
+      itemName: grade,
+      sourceRef: legacyId,
+      targetRef: row.invoiceNo || "",
+      qtyIn: 0,
+      qtyOut: quantityKg,
+      unit: "Kg",
+      remarks: `Dispatch migrated for ${row.customerName || "customer"}`,
+      createdBy: row.createdBy || "Legacy Migration",
+    }, "Dispatches", legacyId)) {
+      summary.rowsMigrated += 1;
+      summary.ledgerMovementsCreated += 1;
+      summary.migrated.push({ legacySourceId: legacyId, grade, quantityKg });
+    } else {
+      summary.rowsSkippedAlreadyMigrated += 1;
+    }
+  });
+
+  return output(summary);
+}
+
+function validateManufacturingCutover(data = {}) {
+  const periodMonth = migrationMonth_(data);
+  const ledgerRows = getRowsAsObjects("Inventory_Ledger").filter((row) => !isDeleted_(row) && isMigrationPeriod_(row, periodMonth));
+  const byMaterial = {};
+  const totals = {
+    receivingKg: 0,
+    productionConsumptionKg: 0,
+    productionOutputKg: 0,
+    dispatchKg: 0,
+    closingInventoryKg: 0,
+  };
+
+  ledgerRows.forEach((row) => {
+    const itemName = materialName_(row.itemName, "Unknown Material");
+    if (!byMaterial[itemName]) {
+      byMaterial[itemName] = {
+        material: itemName,
+        category: row.itemType || materialCategory_(itemName),
+        openingKg: 0,
+        receivingKg: 0,
+        productionConsumptionKg: 0,
+        productionOutputKg: 0,
+        dispatchKg: 0,
+        netMovementKg: 0,
+        closingInventoryKg: 0,
+        status: "OK",
+      };
+    }
+
+    const qtyIn = num(row.qtyIn);
+    const qtyOut = num(row.qtyOut);
+    const movementType = String(row.movementType || "").toUpperCase();
+    const bucket = byMaterial[itemName];
+
+    if (movementType === "MATERIAL_RECEIVING_IN") {
+      bucket.receivingKg += qtyIn;
+      totals.receivingKg += qtyIn;
+    } else if (movementType.indexOf("TRANSFORMATION_INPUT") !== -1 || movementType.indexOf("TRANSFORMATION_CONSUME") !== -1) {
+      bucket.productionConsumptionKg += qtyOut;
+      totals.productionConsumptionKg += qtyOut;
+    } else if (movementType.indexOf("TRANSFORMATION_OUTPUT") !== -1) {
+      bucket.productionOutputKg += qtyIn;
+      totals.productionOutputKg += qtyIn;
+    } else if (movementType.indexOf("DISPATCH") !== -1) {
+      bucket.dispatchKg += qtyOut;
+      totals.dispatchKg += qtyOut;
+    }
+
+    bucket.netMovementKg += qtyIn - qtyOut;
+    bucket.closingInventoryKg = round2(bucket.openingKg + bucket.receivingKg - bucket.productionConsumptionKg + bucket.productionOutputKg - bucket.dispatchKg);
+  });
+
+  const materials = Object.keys(byMaterial)
+    .sort()
+    .map((name) => {
+      const row = byMaterial[name];
+      row.netMovementKg = round2(row.netMovementKg);
+      row.closingInventoryKg = round2(row.closingInventoryKg);
+      if (Math.abs(row.netMovementKg - row.closingInventoryKg) > 0.01) {
+        row.status = "MISMATCH";
+      }
+      return row;
+    });
+
+  totals.closingInventoryKg = round2(materials.reduce((s, row) => s + row.closingInventoryKg, 0));
+  const mismatches = materials.filter((row) => row.status !== "OK");
+  const readiness = mismatches.length === 0 ? "READY_FOR_LEGACY_CODE_REMOVAL" : "RECONCILIATION_REQUIRED";
+
+  return output({
+    ok: true,
+    functionName: "validateManufacturingCutover",
+    periodMonth,
+    formula: "Opening RM + Receiving - Production Consumption + Production Output - Dispatch = Closing Inventory",
+    totals,
+    materials,
+    mismatches,
+    reconciliationPercent: materials.length ? round2(((materials.length - mismatches.length) / materials.length) * 100) : 0,
+    readiness,
+    note: readiness === "READY_FOR_LEGACY_CODE_REMOVAL"
+      ? "Ledger formula reconciles by material for the selected period."
+      : "Do not remove legacy backend/pages until mismatches are resolved.",
   });
 }
 // RM
@@ -4083,7 +4745,11 @@ function addInventoryLedger(data={}){
       "unit","remarks",
       "status",
       "createdBy",
-      "createdAt"
+      "createdAt",
+      "legacySourceSheet",
+      "legacySourceId",
+      "migrationId",
+      "migratedAt"
   ]);
 
   appendObjectRow(sh,{
@@ -4111,7 +4777,11 @@ function addInventoryLedger(data={}){
       status:data.status||"ACTIVE",
 
       createdBy:data.createdBy||"System",
-      createdAt:new Date()
+      createdAt:new Date(),
+      legacySourceSheet:data.legacySourceSheet||"",
+      legacySourceId:data.legacySourceId||"",
+      migrationId:data.migrationId||"",
+      migratedAt:data.migratedAt||""
 
   });
 

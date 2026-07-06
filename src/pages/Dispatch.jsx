@@ -34,6 +34,7 @@ export default function Dispatch() {
     dispatchStatus: "DISPATCHED",
     ratePerKg: "",
     noOfBags: "",
+    truckCapacityKg: "",
     dispatchLocation: "",
     remarks: "",
 
@@ -531,13 +532,16 @@ export default function Dispatch() {
   const currentDispatchQty = getLineTotal(dispatchLines);
   const operatorDispatchQty = Number(form.quantityKg || 0) || currentDispatchQty;
   const currentSalesValue = operatorDispatchQty * Number(form.ratePerKg || 0);
-
-  const truckTargetKg = 25000;
-
+  const availableStockKg = Number(selectedInventory?.availableKg || 0);
+  const remainingAfterDispatchKg = Math.max(
+    availableStockKg - operatorDispatchQty,
+    0
+  );
+  const truckCapacityKg = Number(form.truckCapacityKg || 0);
   const truckFillPercent =
-    truckTargetKg > 0
-      ? ((operatorDispatchQty / truckTargetKg) * 100).toFixed(1)
-      : 0;
+    truckCapacityKg > 0
+      ? ((operatorDispatchQty / truckCapacityKg) * 100).toFixed(1)
+      : "";
 
   const customerSummary = useMemo(() => {
     const map = {};
@@ -740,14 +744,43 @@ export default function Dispatch() {
           </Field>
         </FormSection>
 
-        <FormSection title="Truck Loading Summary">
-          <Field label="Total Dispatch Qty Kg">
+        <FormSection title="Dispatch Summary">
+          <Field label="Available Stock">
+            <input
+              readOnly
+              value={`${availableStockKg.toFixed(2)} Kg`}
+              style={readonlyStyle}
+            />
+          </Field>
+
+          <Field label="Dispatch Quantity">
             <input readOnly value={operatorDispatchQty.toFixed(2)} style={readonlyStyle} />
           </Field>
 
-          <Field label="Truck Fill % vs 25T">
-            <input readOnly value={`${truckFillPercent}%`} style={readonlyStyle} />
+          <Field label="Remaining After Dispatch">
+            <input
+              readOnly
+              value={`${remainingAfterDispatchKg.toFixed(2)} Kg`}
+              style={readonlyStyle}
+            />
           </Field>
+
+          <Field label="Truck Capacity Kg (optional)">
+            <input
+              type="number"
+              name="truckCapacityKg"
+              value={form.truckCapacityKg}
+              onChange={onChange}
+              placeholder="Enter only if known"
+              style={inputStyle}
+            />
+          </Field>
+
+          {truckCapacityKg > 0 && (
+            <Field label="Truck Fill %">
+              <input readOnly value={`${truckFillPercent}%`} style={readonlyStyle} />
+            </Field>
+          )}
 
           <Field label="Rate / Kg">
             <input

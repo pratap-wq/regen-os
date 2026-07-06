@@ -22,6 +22,7 @@ export default function MaterialTransformation() {
     { outputBucket: "", quantityKg: "", outputType: "GOOD" },
   ]);
   const [buckets, setBuckets] = useState([]);
+  const [machines, setMachines] = useState([]);
   const [runs, setRuns] = useState([]);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -34,14 +35,25 @@ export default function MaterialTransformation() {
   }, []);
 
   async function loadData() {
-    const [bucketRes, runRes] = await Promise.all([
+    const [bucketRes, runRes, machineRes] = await Promise.all([
       apiCall({ fn: "materialBuckets.list" }),
       apiCall({ fn: "transformationRuns.list" }),
+      apiCall({ fn: "machines.list" }),
     ]);
 
     setBuckets(bucketRes.rows || []);
     setRuns(runRes.rows || []);
+    setMachines(machineRes.rows || []);
   }
+
+  const processMachines = useMemo(
+    () =>
+      machines
+        .filter((machine) => isMachineForProcess(machine, form.processType))
+        .filter((machine) => machineLabel(machine))
+        .sort((a, b) => machineLabel(a).localeCompare(machineLabel(b))),
+    [machines, form.processType]
+  );
 
   const summary = useMemo(() => {
     const totalInputKg = inputs.reduce(
@@ -93,6 +105,15 @@ export default function MaterialTransformation() {
     setMessage("");
 
     try {
+      if (!form.machine) {
+        setMessage(
+          `Select a ${processLabel(
+            form.processType
+          )} machine from Machine Master before saving.`
+        );
+        return;
+      }
+
       const cleanInputs = inputs
         .map((row) => ({
           inputBucket: row.inputBucket,
@@ -161,11 +182,12 @@ export default function MaterialTransformation() {
         <DataTable
           title="Production History"
           rows={runs}
-          searchFields={["runId", "processType", "shift", "operator"]}
+          searchFields={["runId", "processType", "machine", "shift", "operator"]}
           columns={[
             { key: "date", label: "Date" },
             { key: "runId", label: "Run" },
             { key: "processType", label: "Process" },
+            { key: "machine", label: "Machine" },
             { key: "shift", label: "Shift" },
             { key: "totalInputKg", label: "Input Kg" },
             { key: "totalOutputKg", label: "Output Kg" },
@@ -208,7 +230,7 @@ export default function MaterialTransformation() {
               <select
                 value={form.processType}
                 onChange={(e) =>
-                  setForm({ ...form, processType: e.target.value })
+                  setForm({ ...form, processType: e.target.value, machine: "" })
                 }
                 style={input}
               >
@@ -216,6 +238,35 @@ export default function MaterialTransformation() {
                 <option value="SORTING">Sorting</option>
                 <option value="EXTRUSION">Extrusion</option>
                 <option value="REWORK">Rework</option>
+              </select>
+            </Field>
+
+            <Field label="Machine">
+              <select
+                value={form.machine}
+                onChange={(e) => setForm({ ...form, machine: e.target.value })}
+                style={input}
+              >
+                <option value="">
+                  Select {processLabel(form.processType)} machine
+                </option>
+                {processMachines.map((machine) => {
+                  const label = machineLabel(machine);
+                  return (
+                    <option
+                      key={machine.machineId || machine.id || label}
+                      value={label}
+                    >
+                      {label}
+                    </option>
+                  );
+                })}
+                {processMachines.length === 0 && (
+                  <option value="" disabled>
+                    No active {processLabel(form.processType)} machines in
+                    Machine Master
+                  </option>
+                )}
               </select>
             </Field>
 
@@ -386,6 +437,77 @@ function Metric({ label, value, color = "#0f172a" }) {
 
 function fmt(value) {
   return Number(value || 0).toFixed(2);
+}
+
+function machineLabel(machine = {}) {
+  return (
+    machine.machineName ||
+    machine.name ||
+    machine.machine ||
+    machine.assetName ||
+    machine.equipmentName ||
+    machine.label ||
+    ""
+  );
+}
+
+function isMachineForProcess(machine = {}, processType = "") {
+  if (!isActiveMachine(machine)) return false;
+
+  const process = String(processType || "").toUpperCase();
+  const explicitProcessText = [
+    machine.processType,
+    machine.process,
+    machine.processStage,
+    machine.productionProcess,
+    machine.department,
+    machine.category,
+    machine.machineType,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toUpperCase();
+
+  if (explicitProcessText) {
+    return processKeywords(process).some((keyword) =>
+      explicitProcessText.includes(keyword)
+    );
+  }
+
+  const fallbackText = machineLabel(machine).toUpperCase();
+  return processKeywords(process).some((keyword) =>
+    fallbackText.includes(keyword)
+  );
+}
+
+function processKeywords(processType) {
+  const keywords = {
+    WASH: ["WASH", "WASHLINE", "WASH LINE"],
+    SORTING: ["SORT", "SORTER", "COLOUR", "COLOR"],
+    EXTRUSION: ["EXTRUSION", "EXTRUDER"],
+    REWORK: ["REWORK"],
+  };
+
+  return keywords[processType] || [processType];
+}
+
+function isActiveMachine(machine = {}) {
+  const statusText = String(
+    machine.status || machine.isActive || machine.active || "ACTIVE"
+  ).toUpperCase();
+
+  return !["DELETED", "INACTIVE", "FALSE", "NO", "0"].includes(statusText);
+}
+
+function processLabel(processType = "") {
+  const labels = {
+    WASH: "Wash",
+    SORTING: "Sorting",
+    EXTRUSION: "Extrusion",
+    REWORK: "Rework",
+  };
+
+  return labels[processType] || processType;
 }
 
 const card = {

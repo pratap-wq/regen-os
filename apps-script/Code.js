@@ -186,6 +186,13 @@ function addMonthClose(data = {}) {
   const closeId = data.closeId || generateBatchId("MCLOSE");
   const periodMonth = data.periodMonth || getPeriodMonth(todayYmd());
 
+  if (isMonthClosed_(periodMonth)) {
+    return output({
+      ok: false,
+      error: "Month already closed: " + periodMonth,
+    });
+  }
+
   appendObjectRow(sh, {
     closeId,
     periodMonth,
@@ -309,6 +316,7 @@ function addFactoryCostMaster(data = {}) {
   ]);
 
   const costId = data.costId || generateBatchId("FCM");
+  validateOperationalWrite_(data);
 
   appendObjectRow(sh, {
     costId,
@@ -326,6 +334,11 @@ function addFactoryCostMaster(data = {}) {
 }
 
 function updateFactoryCostMaster(data = {}) {
+  validateOperationalWrite_(
+    data,
+    getRowById_("Factory_Cost_Master", "costId", data.costId)
+  );
+
   return updateById("Factory_Cost_Master", "costId", data.costId, {
     periodMonth: data.periodMonth || "",
     costHead: data.costHead || "",
@@ -386,6 +399,12 @@ if (p.fn === "monthAudit.close") return closeMonthAudit(p);
 if (p.fn === "openingBalances.list") return listOpeningBalances(p);
 if (p.fn === "monthLocks.list") return listMaster("Month_Locks");
 
+// Database schema health / migrations
+if (p.fn === "db.health") return dbHealth(p);
+if (p.fn === "db.validateSchema") return dbValidateSchema(p);
+if (p.fn === "db.runMigrations") return dbRunMigrations(p);
+if (p.fn === "db.repairHeaders") return dbRepairHeaders(p);
+
     return output({
       ok: false,
       error: "Unknown fn: " + p.fn,
@@ -423,6 +442,900 @@ function output(obj) {
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
 }
+
+// ============================================================
+// DATABASE MIGRATION ENGINE
+// Safe, idempotent Google Sheets schema validation and repair.
+// Never deletes data, never renames operational sheets.
+// ============================================================
+
+const REGEN_DB_SCHEMA_VERSION = "2026.07.06-v1";
+
+const REGEN_DB_SCHEMA = {
+  Month_Close: [
+    "closeId",
+    "periodMonth",
+    "status",
+    "rmInwardKg",
+    "rmValue",
+    "avgRmPrice",
+    "washInputKg",
+    "washedOutputKg",
+    "sortingInputKg",
+    "sortingAcceptedKg",
+    "extrusionInputKg",
+    "fgProducedKg",
+    "dispatchKg",
+    "productionTon",
+    "dispatchTon",
+    "salesValue",
+    "salesPerKg",
+    "washLossKg",
+    "sortingLossKg",
+    "extrusionLossKg",
+    "totalLossKg",
+    "totalLossPercent",
+    "washRecovery",
+    "sortingRecovery",
+    "extrusionRecovery",
+    "overallRecovery",
+    "rmSystemClosingKg",
+    "washSystemClosingKg",
+    "sortingSystemClosingKg",
+    "fgSystemClosingKg",
+    "rmPhysicalKg",
+    "washPhysicalKg",
+    "sortingPhysicalKg",
+    "fgPhysicalKg",
+    "storesPhysicalValue",
+    "rmVarianceKg",
+    "washVarianceKg",
+    "sortingVarianceKg",
+    "fgVarianceKg",
+    "storesInwardValue",
+    "storesIssueQty",
+    "factoryExpenses",
+    "estimatedRmConsumedValue",
+    "conversionCost",
+    "grossProfit",
+    "manufacturingProfit",
+    "profitPercent",
+    "profitPerKg",
+    "profitPerTon",
+    "processingCostPerKg",
+    "avgQuality",
+    "downtimeHours",
+    "productionSignoff",
+    "storesSignoff",
+    "accountsSignoff",
+    "qcSignoff",
+    "ceoSignoff",
+    "exceptions",
+    "remarks",
+    "closedBy",
+    "createdBy",
+    "createdAt",
+  ],
+  Month_Locks: [
+    "lockId",
+    "periodMonth",
+    "status",
+    "lockedBy",
+    "lockedAt",
+    "remarks",
+  ],
+  Physical_Counts: [
+    "countId",
+    "periodMonth",
+    "rmPhysicalKg",
+    "washPhysicalKg",
+    "sortingPhysicalKg",
+    "fgPhysicalKg",
+    "storesPhysicalValue",
+    "productionSignoff",
+    "storesSignoff",
+    "accountsSignoff",
+    "qcSignoff",
+    "ceoSignoff",
+    "remarks",
+    "savedBy",
+    "savedAt",
+    "status",
+  ],
+  Inventory_Adjustments: [
+    "adjustmentId",
+    "periodMonth",
+    "date",
+    "module",
+    "itemType",
+    "itemCode",
+    "adjustmentType",
+    "quantityKg",
+    "value",
+    "reason",
+    "remarks",
+    "sourceRef",
+    "status",
+    "approvedBy",
+    "approvedAt",
+    "createdBy",
+    "createdAt",
+    "updatedAt",
+  ],
+  Factory_Cost_Master: [
+    "costId",
+    "periodMonth",
+    "costHead",
+    "amount",
+    "allocationType",
+    "remarks",
+    "status",
+    "createdBy",
+    "createdAt",
+  ],
+  Factory_Expenses: [
+    "entryId",
+    "month",
+    "year",
+    "category",
+    "itemName",
+    "amount",
+    "remarks",
+    "createdBy",
+    "createdAt",
+    "expenseId",
+    "date",
+    "periodMonth",
+    "description",
+    "paidBy",
+    "status",
+  ],
+  Production_Materials: [
+    "materialId",
+    "materialName",
+    "materialType",
+    "unit",
+    "standardRate",
+    "isActive",
+    "remarks",
+    "status",
+    "createdBy",
+    "createdAt",
+  ],
+  RM_Inward: [
+    "inwardId",
+    "date",
+    "supplier",
+    "vehicleNo",
+    "material",
+    "grossWeight",
+    "tareWeight",
+    "netWeight",
+    "moisture",
+    "contamination",
+    "estimatedRecovery",
+    "ratePerKg",
+    "remarks",
+    "createdBy",
+    "createdAt",
+    "color",
+    "status",
+    "transportPaidBy",
+    "transportCost",
+    "transportRemarks",
+  ],
+  Suppliers: [
+    "supplierId",
+    "supplierName",
+    "name",
+    "supplierType",
+    "city",
+    "state",
+    "address",
+    "contactPerson",
+    "phone",
+    "email",
+    "gstNo",
+    "panNo",
+    "msmeNo",
+    "bankName",
+    "accountName",
+    "accountNumber",
+    "ifscCode",
+    "materialType",
+    "qualityRating",
+    "recoveryPercent",
+    "contaminationRisk",
+    "paymentTerms",
+    "creditDays",
+    "isPreferred",
+    "isActive",
+    "remarks",
+    "createdAt",
+  ],
+  FG_Rates: [
+    "rateId",
+    "month",
+    "year",
+    "grade",
+    "ratePerKg",
+    "isActive",
+    "remarks",
+    "createdBy",
+    "createdAt",
+    "date",
+    "customerName",
+    "freightPerKg",
+    "status",
+  ],
+  Wash_Batches: [
+    "washBatchId",
+    "date",
+    "shift",
+    "machine",
+    "entryMode",
+    "periodMonth",
+    "inputMaterial",
+    "inputWeightKg",
+    "washedOutputKg",
+    "raffiaKg",
+    "wrappersKg",
+    "microPlasticKg",
+    "sinkMaterialKg",
+    "ironScrapKg",
+    "otherColorKg",
+    "dustKg",
+    "sludgeKg",
+    "estimatedRecoveryPercent",
+    "operatorName",
+    "remarks",
+    "status",
+    "createdBy",
+    "createdAt",
+    "sortingRequired",
+    "nextProcess",
+    "sourceRmInwardId",
+    "linkedSortingBatchId",
+    "linkedExtrusionBatchId",
+    "supervisorName",
+    "machineRunningHours",
+    "downtimeHours",
+    "downtimeReason",
+    "visualCleanlinessRating",
+    "moistureRating",
+    "odourRating",
+    "blackSpecsRating",
+    "colorConsistencyRating",
+    "overallQualityRating",
+    "qcRemarks",
+    "batchId",
+    "sourceRMId",
+    "supplier",
+    "availableRMQty",
+    "washVarianceKg",
+    "recoverySeverity",
+  ],
+  Sorting_Batches: [
+    "sortingBatchId",
+    "sourceWashBatchId",
+    "date",
+    "shift",
+    "machine",
+    "inputWeightKg",
+    "acceptedQtyKg",
+    "rejectedQtyKg",
+    "rubberRejectKg",
+    "blackSpecsRejectKg",
+    "raffiaRejectKg",
+    "operatorName",
+    "remarks",
+    "status",
+    "createdBy",
+    "createdAt",
+    "nextProcess",
+    "sortingDecision",
+    "linkedExtrusionBatchId",
+    "rejectedMaterialAction",
+    "recoverableRejectKg",
+    "unrecoverableRejectKg",
+    "supervisorName",
+    "machineRunningHours",
+    "downtimeHours",
+    "downtimeReason",
+    "visualCleanlinessRating",
+    "moistureRating",
+    "odourRating",
+    "blackSpecsRating",
+    "colorConsistencyRating",
+    "overallQualityRating",
+    "qcRemarks",
+  ],
+  Extrusion_Batches: [
+    "extrusionBatchId",
+    "sourceSortingBatchId",
+    "date",
+    "shift",
+    "machine",
+    "entryMode",
+    "periodMonth",
+    "inputMaterial",
+    "inputWeightKg",
+    "fgOutputKg",
+    "lumpsKg",
+    "purgingKg",
+    "microPlasticKg",
+    "shadeVariationKg",
+    "reworkGranulesKg",
+    "lumpsReusedKg",
+    "lumpsSoldKg",
+    "lumpsDiscardedKg",
+    "purgingReusedKg",
+    "purgingSoldKg",
+    "purgingDiscardedKg",
+    "dustKg",
+    "productionGrade",
+    "operatorName",
+    "remarks",
+    "status",
+    "createdBy",
+    "createdAt",
+    "sourceType",
+    "sourceBatchId",
+    "linkedPackingBatchId",
+    "directWashBypass",
+    "sortingRequired",
+    "meshTypeUsed",
+    "meshRejectionKg",
+    "vacuumRejectKg",
+    "virginMaterialKg",
+    "masterBatchKg",
+    "antiOxidantKg",
+    "batteryFlakesKg",
+    "dosingRecipe",
+    "dfcBladeConsumption",
+    "lineRecoveryPercent",
+    "finalYieldPercent",
+    "holdReason",
+    "supervisorName",
+    "machineRunningHours",
+    "downtimeHours",
+    "downtimeReason",
+    "visualCleanlinessRating",
+    "moistureRating",
+    "odourRating",
+    "blackSpecsRating",
+    "colorConsistencyRating",
+    "overallQualityRating",
+    "qcRemarks",
+    "batchId",
+    "sourceWashBatchId",
+    "sourceSupplier",
+    "availableSourceQty",
+    "totalInputKg",
+    "feedComposition",
+    "rejectKg",
+    "meshRejectKg",
+    "floorSpillageKg",
+    "totalRecoverableKg",
+    "totalNonRecoverableKg",
+    "totalOutputKg",
+    "varianceKg",
+    "recoveryPercent",
+    "recoveryMaterialPercent",
+    "virginRatioPercent",
+    "batteryRatioPercent",
+    "additiveRatioPercent",
+    "nextProcess",
+    "recoverySeverity",
+    "lotNo",
+  ],
+  Dispatches: [
+    "dispatchId",
+    "date",
+    "customerName",
+    "invoiceNo",
+    "vehicleNo",
+    "grade",
+    "lotNo",
+    "quantityKg",
+    "noOfBags",
+    "ratePerKg",
+    "dispatchLocation",
+    "remarks",
+    "createdBy",
+    "createdAt",
+    "sourceExtrusionBatchId",
+    "sourceSupplier",
+    "availableFGQty",
+    "customerUnit",
+    "driverName",
+    "dispatchStatus",
+    "status",
+    "linkedFgBatchId",
+    "transporterName",
+    "ewayBillNo",
+    "dispatchLines",
+    "productionDate",
+    "productionShift",
+    "updatedAt",
+  ],
+  Stores_Master: [
+    "itemId",
+    "itemName",
+    "category",
+    "uom",
+    "minStock",
+    "isActive",
+    "remarks",
+    "createdBy",
+    "createdAt",
+    "unit",
+    "reorderLevel",
+    "preferredSupplier",
+    "standardRate",
+    "status",
+    "minLevel",
+    "maxLevel",
+    "vendor",
+  ],
+  Stores_Inward: [
+    "inwardId",
+    "date",
+    "itemName",
+    "category",
+    "qty",
+    "rate",
+    "totalAmount",
+    "supplier",
+    "remarks",
+    "createdBy",
+    "createdAt",
+    "storesInwardId",
+    "unit",
+    "vendor",
+    "invoiceNo",
+    "minLevel",
+    "status",
+    "inwardStatus",
+  ],
+  Stores_Issue: [
+    "issueId",
+    "date",
+    "itemName",
+    "category",
+    "qty",
+    "department",
+    "purpose",
+    "remarks",
+    "createdBy",
+    "createdAt",
+    "storesIssueId",
+    "unit",
+    "status",
+    "issueStatus",
+    "issueRate",
+    "issueValue",
+    "rateSource",
+    "issuedTo",
+  ],
+  Inventory_Ledger: [
+    "ledgerId",
+    "date",
+    "module",
+    "movementType",
+    "itemType",
+    "itemName",
+    "sourceRef",
+    "targetRef",
+    "qtyIn",
+    "qtyOut",
+    "unit",
+    "remarks",
+    "status",
+    "createdBy",
+    "createdAt",
+  ],
+  RM_Quality: [
+    "qualityId",
+    "date",
+    "rmInwardId",
+    "formOfMaterial",
+    "conditionOfMaterial",
+    "sampleQtyGm",
+    "dryDustGm",
+    "colouredFlakesGm",
+    "rubberContaminationNo",
+    "ppGm",
+    "sinkMaterialGm",
+    "dryDustPercent",
+    "colouredFlakesPercent",
+    "ppPercent",
+    "sinkMaterialPercent",
+    "acceptGm",
+    "remarks",
+    "status",
+    "createdBy",
+    "createdAt",
+  ],
+  FG_Quality: [
+    "qualityId",
+    "date",
+    "extrusionBatchId",
+    "fgBatchCode",
+    "moisturePercent",
+    "mfi",
+    "colour",
+    "appearance",
+    "bagWeight1Kg",
+    "bagWeight2Kg",
+    "bagWeight3Kg",
+    "bagWeight4Kg",
+    "avgBagWeightKg",
+    "remarks",
+    "status",
+    "createdBy",
+    "createdAt",
+  ],
+  Alert_Settings: [
+    "alertId",
+    "module",
+    "item",
+    "condition",
+    "threshold",
+    "severity",
+    "notifyType",
+    "emails",
+    "enabled",
+    "remarks",
+    "createdAt",
+  ],
+  Alert_Log: [
+    "logId",
+    "alertId",
+    "module",
+    "item",
+    "severity",
+    "currentValue",
+    "threshold",
+    "message",
+    "emails",
+    "triggeredAt",
+    "status",
+  ],
+  System_Metadata: [
+    "key",
+    "value",
+    "updatedAt",
+    "updatedBy",
+  ],
+};
+
+function getRequiredDbSchema_() {
+  return REGEN_DB_SCHEMA;
+}
+
+function dbHealth(data) {
+  return output(buildDatabaseHealth_());
+}
+
+function dbValidateSchema(data) {
+  return output(buildDatabaseHealth_());
+}
+
+function dbRepairHeaders(data) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const schema = getRequiredDbSchema_();
+  const changes = [];
+
+  Object.keys(schema).forEach((sheetName) => {
+    const sheet = ss.getSheetByName(sheetName);
+    if (!sheet) return;
+
+    const duplicateChanges = repairDuplicateHeaders_(sheet);
+    if (duplicateChanges.length) {
+      changes.push({
+        sheet: sheetName,
+        action: "repairDuplicateHeaders",
+        changes: duplicateChanges,
+      });
+    }
+
+    const missing = addMissingHeaders_(sheet, schema[sheetName]);
+    if (missing.length) {
+      changes.push({
+        sheet: sheetName,
+        action: "addMissingHeaders",
+        headers: missing,
+      });
+    }
+
+    freezeHeaderRow_(sheet);
+  });
+
+  updateSystemMetadata_("lastHeaderRepairAt", new Date().toISOString());
+  updateSystemMetadata_("schemaVersion", REGEN_DB_SCHEMA_VERSION);
+
+  return output({
+    ok: true,
+    schemaVersion: REGEN_DB_SCHEMA_VERSION,
+    changes,
+    health: buildDatabaseHealth_(),
+  });
+}
+
+function dbRunMigrations(data) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const schema = getRequiredDbSchema_();
+  const changes = [];
+
+  Object.keys(schema).forEach((sheetName) => {
+    let sheet = ss.getSheetByName(sheetName);
+
+    if (!sheet) {
+      sheet = ss.insertSheet(sheetName);
+      sheet.getRange(1, 1, 1, schema[sheetName].length).setValues([schema[sheetName]]);
+      changes.push({
+        sheet: sheetName,
+        action: "createSheet",
+        headers: schema[sheetName],
+      });
+    } else {
+      const duplicateChanges = repairDuplicateHeaders_(sheet);
+      if (duplicateChanges.length) {
+        changes.push({
+          sheet: sheetName,
+          action: "repairDuplicateHeaders",
+          changes: duplicateChanges,
+        });
+      }
+
+      const missing = addMissingHeaders_(sheet, schema[sheetName]);
+      if (missing.length) {
+        changes.push({
+          sheet: sheetName,
+          action: "addMissingHeaders",
+          headers: missing,
+        });
+      }
+    }
+
+    freezeHeaderRow_(sheet);
+  });
+
+  updateSystemMetadata_("schemaVersion", REGEN_DB_SCHEMA_VERSION);
+  updateSystemMetadata_("lastMigrationAt", new Date().toISOString());
+  updateSystemMetadata_("lastMigrationBy", "RegenOS Database Migration Engine");
+
+  return output({
+    ok: true,
+    schemaVersion: REGEN_DB_SCHEMA_VERSION,
+    changes,
+    health: buildDatabaseHealth_(),
+  });
+}
+
+function buildDatabaseHealth_() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const schema = getRequiredDbSchema_();
+  const requiredSheets = Object.keys(schema);
+  const allSheets = ss.getSheets();
+  const existingSheetNames = allSheets.map((sheet) => sheet.getName());
+  const missingSheets = requiredSheets.filter((name) => existingSheetNames.indexOf(name) === -1);
+  const extraSheets = existingSheetNames.filter((name) => requiredSheets.indexOf(name) === -1);
+  const missingColumns = [];
+  const duplicateHeaders = [];
+  const emptySheets = [];
+
+  allSheets.forEach((sheet) => {
+    const sheetName = sheet.getName();
+    const headers = getHeadersForSheet_(sheet);
+    const duplicateInfo = findDuplicateHeaders_(headers);
+
+    if (duplicateInfo.length) {
+      duplicateHeaders.push({
+        sheet: sheetName,
+        duplicates: duplicateInfo,
+      });
+    }
+
+    if (isSheetHeaderOnlyOrEmpty_(sheet)) {
+      emptySheets.push(sheetName);
+    }
+
+    if (schema[sheetName]) {
+      const missing = schema[sheetName].filter((header) => headers.indexOf(header) === -1);
+      if (missing.length) {
+        missingColumns.push({
+          sheet: sheetName,
+          columns: missing,
+        });
+      }
+    }
+  });
+
+  const needsMigration =
+    missingSheets.length > 0 ||
+    missingColumns.length > 0 ||
+    duplicateHeaders.length > 0;
+
+  return {
+    ok: true,
+    schemaVersion: REGEN_DB_SCHEMA_VERSION,
+    requiredSheets,
+    missingSheets,
+    missingColumns,
+    duplicateHeaders,
+    extraSheets,
+    emptySheets,
+    schemaStatus: needsMigration ? "NEEDS_MIGRATION" : "OK",
+    recommendedAction: needsMigration
+      ? "Run db.runMigrations. Extra sheets are reported only and will not be deleted, hidden, or renamed."
+      : "No schema migration required. Extra sheets are reported only.",
+  };
+}
+
+function getHeadersForSheet_(sheet) {
+  const lastColumn = Math.max(sheet.getLastColumn(), 1);
+  const values = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+  return values.map((value) => String(value || "").trim());
+}
+
+function findDuplicateHeaders_(headers) {
+  const seen = {};
+  const duplicates = {};
+
+  headers.forEach((header, index) => {
+    if (!header) return;
+
+    if (!seen[header]) {
+      seen[header] = [];
+    }
+
+    seen[header].push(index + 1);
+  });
+
+  Object.keys(seen).forEach((header) => {
+    if (seen[header].length > 1) {
+      duplicates[header] = seen[header];
+    }
+  });
+
+  return Object.keys(duplicates).map((header) => ({
+    header,
+    columns: duplicates[header],
+  }));
+}
+
+function repairDuplicateHeaders_(sheet) {
+  const headers = getHeadersForSheet_(sheet);
+  const counts = {};
+  const changes = [];
+
+  headers.forEach((header, index) => {
+    if (!header) {
+      const replacement = "unnamedColumn" + (index + 1);
+      sheet.getRange(1, index + 1).setValue(replacement);
+      changes.push({
+        column: index + 1,
+        from: "",
+        to: replacement,
+      });
+      return;
+    }
+
+    counts[header] = (counts[header] || 0) + 1;
+
+    if (counts[header] > 1) {
+      const replacement = makeUniqueHeaderName_(headers, header, counts[header]);
+      sheet.getRange(1, index + 1).setValue(replacement);
+      headers[index] = replacement;
+      changes.push({
+        column: index + 1,
+        from: header,
+        to: replacement,
+      });
+    }
+  });
+
+  return changes;
+}
+
+function makeUniqueHeaderName_(headers, baseName, duplicateNumber) {
+  let candidate = baseName + "_duplicate" + duplicateNumber;
+  let counter = duplicateNumber;
+
+  while (headers.indexOf(candidate) !== -1) {
+    counter += 1;
+    candidate = baseName + "_duplicate" + counter;
+  }
+
+  return candidate;
+}
+
+function addMissingHeaders_(sheet, requiredHeaders) {
+  let headers = getHeadersForSheet_(sheet);
+  const added = [];
+
+  requiredHeaders.forEach((header) => {
+    if (headers.indexOf(header) !== -1) return;
+
+    const nextColumn = Math.max(sheet.getLastColumn(), 0) + 1;
+    sheet.getRange(1, nextColumn).setValue(header);
+    added.push(header);
+    headers = getHeadersForSheet_(sheet);
+  });
+
+  return added;
+}
+
+function freezeHeaderRow_(sheet) {
+  try {
+    sheet.setFrozenRows(1);
+  } catch (err) {
+    // Some sheet states may reject freezing. Schema repair must continue.
+  }
+}
+
+function isSheetHeaderOnlyOrEmpty_(sheet) {
+  if (sheet.getLastRow() <= 1) return true;
+
+  const values = sheet
+    .getRange(2, 1, sheet.getLastRow() - 1, Math.max(sheet.getLastColumn(), 1))
+    .getValues();
+
+  return values.every((row) =>
+    row.every((cell) => cell === "" || cell === null)
+  );
+}
+
+function updateSystemMetadata_(key, value) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  let sheet = ss.getSheetByName("System_Metadata");
+
+  if (!sheet) {
+    sheet = ss.insertSheet("System_Metadata");
+    sheet.getRange(1, 1, 1, REGEN_DB_SCHEMA.System_Metadata.length)
+      .setValues([REGEN_DB_SCHEMA.System_Metadata]);
+    freezeHeaderRow_(sheet);
+  } else {
+    addMissingHeaders_(sheet, REGEN_DB_SCHEMA.System_Metadata);
+    freezeHeaderRow_(sheet);
+  }
+
+  const headers = getHeadersForSheet_(sheet);
+  const keyIndex = headers.indexOf("key");
+  const valueIndex = headers.indexOf("value");
+  const updatedAtIndex = headers.indexOf("updatedAt");
+  const updatedByIndex = headers.indexOf("updatedBy");
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow > 1) {
+    const keys = sheet.getRange(2, keyIndex + 1, lastRow - 1, 1).getValues();
+    for (let i = 0; i < keys.length; i += 1) {
+      if (String(keys[i][0]) === String(key)) {
+        const rowNumber = i + 2;
+        sheet.getRange(rowNumber, valueIndex + 1).setValue(value);
+        sheet.getRange(rowNumber, updatedAtIndex + 1).setValue(new Date());
+        sheet.getRange(rowNumber, updatedByIndex + 1).setValue("Migration Engine");
+        return;
+      }
+    }
+  }
+
+  const row = new Array(headers.length).fill("");
+  row[keyIndex] = key;
+  row[valueIndex] = value;
+  row[updatedAtIndex] = new Date();
+  row[updatedByIndex] = "Migration Engine";
+  sheet.appendRow(row);
+}
+
+function testDatabaseHealth() {
+  const health = buildDatabaseHealth_();
+  Logger.log(JSON.stringify(health, null, 2));
+  return health;
+}
+
 function addProductionMaterial(data = {}) {
   const sh = getSheet("Production_Materials");
 
@@ -757,6 +1670,48 @@ function validateMonthLock(periodMonth) {
     }
   }
 }
+
+function writePeriodMonth_(data = {}) {
+  if (data.periodMonth) return String(data.periodMonth).slice(0, 7);
+  return getPeriodMonth(data.date || data.productionDate || todayYmd());
+}
+
+function getRowById_(sheetName, idColumn, idValue) {
+  if (!idValue) return null;
+
+  const rows = getRowsAsObjects(sheetName);
+  return rows.find((r) => String(r[idColumn] || "") === String(idValue)) || null;
+}
+
+function validateOperationalWrite_(data = {}, existing = null) {
+  if (existing) {
+    validateMonthLock(writePeriodMonth_(existing));
+  }
+
+  validateMonthLock(writePeriodMonth_(data));
+}
+
+function isMonthClosed_(periodMonth) {
+  if (!periodMonth) return false;
+
+  try {
+    const closeRows = getRowsAsObjects("Month_Close").filter((r) => !isDeleted_(r));
+    if (closeRows.some((r) => String(r.periodMonth || "") === String(periodMonth))) {
+      return true;
+    }
+  } catch (err) {}
+
+  try {
+    const lockRows = getRowsAsObjects("Month_Locks").filter((r) => !isDeleted_(r));
+    return lockRows.some(
+      (r) =>
+        String(r.periodMonth || "") === String(periodMonth) &&
+        String(r.status || "").toUpperCase() === "LOCKED"
+    );
+  } catch (err) {
+    return false;
+  }
+}
 // RM
 
 function addRM(data = {}) {
@@ -787,6 +1742,7 @@ function addRM(data = {}) {
 
   const inwardId = data.inwardId || data.batchId || generateBatchId("RMIN");
   const date = normalizeDateOnly_(data.date || todayYmd());
+  validateOperationalWrite_({ ...data, date });
 
   appendObjectRow(sh, {
     inwardId,
@@ -835,6 +1791,12 @@ function addRM(data = {}) {
 }
 
 function updateRM(data = {}) {
+  const idValue = data.inwardId || data.batchId;
+  validateOperationalWrite_(
+    data,
+    getRowById_("RM_Inward", "inwardId", idValue)
+  );
+
   ensureHeaders_("RM_Inward", [
     "status",
     "transportPaidBy",
@@ -842,7 +1804,7 @@ function updateRM(data = {}) {
     "transportRemarks",
   ]);
 
-  return updateById("RM_Inward", "inwardId", data.inwardId || data.batchId, {
+  return updateById("RM_Inward", "inwardId", idValue, {
     date: normalizeDateOnly_(data.date || todayYmd()),
     supplier: data.supplier || "",
     vehicleNo: data.vehicleNo || "",
@@ -991,6 +1953,7 @@ function addFgRate(data = {}) {
 
   const rateId = data.rateId || generateBatchId("FGR");
   const date = normalizeDateOnly_(data.date || todayYmd());
+  validateOperationalWrite_({ ...data, date });
 
   appendObjectRow(sh, {
     rateId,
@@ -1009,6 +1972,11 @@ function addFgRate(data = {}) {
 }
 
 function updateFgRate(data = {}) {
+  validateOperationalWrite_(
+    data,
+    getRowById_("FG_Rates", "rateId", data.rateId)
+  );
+
   return updateById("FG_Rates", "rateId", data.rateId, {
     date: normalizeDateOnly_(data.date || todayYmd()),
     grade: data.grade || "",
@@ -1041,6 +2009,7 @@ function addFactoryExpense(data = {}) {
 
   const expenseId = data.expenseId || generateBatchId("EXP");
   const date = normalizeDateOnly_(data.date || todayYmd());
+  validateOperationalWrite_({ ...data, date });
 
   appendObjectRow(sh, {
     expenseId,
@@ -1074,6 +2043,7 @@ function addFactoryCostMaster(data = {}) {
   ]);
 
   const costId = data.costId || generateBatchId("FCM");
+  validateOperationalWrite_(data);
 
   appendObjectRow(sh, {
     costId,
@@ -1091,6 +2061,11 @@ function addFactoryCostMaster(data = {}) {
 }
 
 function updateFactoryCostMaster(data = {}) {
+  validateOperationalWrite_(
+    data,
+    getRowById_("Factory_Cost_Master", "costId", data.costId)
+  );
+
   return updateById("Factory_Cost_Master", "costId", data.costId, {
     periodMonth: data.periodMonth || "",
     costHead: data.costHead || "",
@@ -1102,6 +2077,10 @@ function updateFactoryCostMaster(data = {}) {
 }
 function updateFactoryExpense(data = {}) {
   const date = normalizeDateOnly_(data.date || todayYmd());
+  validateOperationalWrite_(
+    { ...data, date },
+    getRowById_("Factory_Expenses", "expenseId", data.expenseId)
+  );
 
   return updateById("Factory_Expenses", "expenseId", data.expenseId, {
     date,
@@ -1120,7 +2099,7 @@ function updateFactoryExpense(data = {}) {
 
 function addWashBatch(data = {}) {
 
-  validateMonthLock(data.periodMonth);
+  validateOperationalWrite_(data);
 
   const sh = getSheet("Wash_Batches");
 
@@ -1224,11 +2203,16 @@ function addWashBatch(data = {}) {
 
 
 function updateWashBatch(data = {}) {
+  const idValue = data.washBatchId || data.batchId;
+  validateOperationalWrite_(
+    data,
+    getRowById_("Wash_Batches", "washBatchId", idValue)
+  );
 
   return updateById(
     "Wash_Batches",
     "washBatchId",
-    data.washBatchId || data.batchId,
+    idValue,
     {
 
       sourceRMId:data.sourceRMId||"",
@@ -1320,7 +2304,7 @@ function listWashAvailableForExtrusion(){
 
 function addSortingBatch(data={}){
 
-    validateMonthLock(data.periodMonth);
+    validateOperationalWrite_(data);
 
     const sh=getSheet("Sorting_Batches");
 
@@ -1381,6 +2365,10 @@ function addSortingBatch(data={}){
 
 
 function updateSortingBatch(data={}){
+    validateOperationalWrite_(
+        data,
+        getRowById_("Sorting_Batches", "sortingBatchId", data.sortingBatchId)
+    );
 
     return updateById(
         "Sorting_Batches",
@@ -1444,7 +2432,7 @@ function listSortingAvailableForExtrusion(){
 // EXTRUSION
 
 function addExtrusionBatch(data = {}) {
-  validateMonthLock(data.periodMonth);
+  validateOperationalWrite_(data);
 
   const sh = getSheet("Extrusion_Batches");
 
@@ -1710,11 +2698,16 @@ function addExtrusionBatch(data = {}) {
 
 function updateExtrusionBatch(data = {}) {
   const date = normalizeDateOnly_(data.date || todayYmd());
+  const idValue = data.extrusionBatchId || data.batchId;
+  validateOperationalWrite_(
+    { ...data, date },
+    getRowById_("Extrusion_Batches", "extrusionBatchId", idValue)
+  );
 
   return updateById(
     "Extrusion_Batches",
     "extrusionBatchId",
-    data.extrusionBatchId || data.batchId,
+    idValue,
     {
       sourceType: data.sourceType || "",
       sourceBatchId: data.sourceBatchId || "",
@@ -1844,6 +2837,80 @@ function normalizeDispatchLines_(data = {}) {
   ]);
 }
 
+function parseDispatchLines_(dispatchLines) {
+  try {
+    const parsed = JSON.parse(dispatchLines || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function fgProducedForBatch_(batchId) {
+  if (!batchId) return 0;
+
+  return getRowsAsObjects("Extrusion_Batches")
+    .filter((r) => !isDeleted_(r))
+    .filter((r) =>
+      [r.extrusionBatchId, r.batchId, r.lotNo]
+        .map((v) => String(v || ""))
+        .includes(String(batchId))
+    )
+    .reduce((s, r) => s + num(r.fgOutputKg), 0);
+}
+
+function fgDispatchedForBatch_(batchId, excludeDispatchId) {
+  if (!batchId) return 0;
+
+  return getRowsAsObjects("Dispatches")
+    .filter((r) => !isDeleted_(r))
+    .filter((r) => String(r.dispatchId || "") !== String(excludeDispatchId || ""))
+    .reduce((sum, r) => {
+      const lines = parseDispatchLines_(r.dispatchLines);
+
+      if (lines.length > 0) {
+        return (
+          sum +
+          lines
+            .filter((line) => String(line.sourceExtrusionBatchId || "") === String(batchId))
+            .reduce((s, line) => s + num(line.dispatchQtyKg), 0)
+        );
+      }
+
+      const sourceId = r.sourceExtrusionBatchId || r.linkedFgBatchId || "";
+      return String(sourceId) === String(batchId) ? sum + num(r.quantityKg) : sum;
+    }, 0);
+}
+
+function validateDispatchAvailability_(data = {}) {
+  const lines = parseDispatchLines_(normalizeDispatchLines_(data))
+    .filter((line) => line.sourceExtrusionBatchId && num(line.dispatchQtyKg) > 0);
+
+  const requestedByBatch = {};
+
+  lines.forEach((line) => {
+    const batchId = String(line.sourceExtrusionBatchId || "");
+    requestedByBatch[batchId] =
+      (requestedByBatch[batchId] || 0) + num(line.dispatchQtyKg);
+  });
+
+  Object.keys(requestedByBatch).forEach((batchId) => {
+    const available =
+      fgProducedForBatch_(batchId) -
+      fgDispatchedForBatch_(batchId, data.dispatchId);
+
+    if (requestedByBatch[batchId] > available + 0.01) {
+      throw new Error(
+        "Dispatch exceeds available FG stock for " +
+          batchId +
+          ". Available: " +
+          round2(available) +
+          " Kg"
+      );
+    }
+  });
+}
+
 function addDispatch(data = {}) {
   const sh = getSheet("Dispatches");
   ensureDispatchHeaders_();
@@ -1852,6 +2919,8 @@ function addDispatch(data = {}) {
   const date = normalizeDateOnly_(data.date || todayYmd());
   const sourceId = data.sourceExtrusionBatchId || data.linkedFgBatchId || "";
   const dispatchLines = normalizeDispatchLines_(data);
+  validateOperationalWrite_({ ...data, date });
+  validateDispatchAvailability_({ ...data, dispatchId });
 
   appendObjectRow(sh, {
     dispatchId,
@@ -1913,6 +2982,14 @@ function updateDispatch(data = {}) {
   const isDeleted =
     String(data.status || "").toUpperCase() === "DELETED" ||
     String(data.dispatchStatus || "").toUpperCase() === "DELETED";
+  validateOperationalWrite_(
+    { ...data, date },
+    getRowById_("Dispatches", "dispatchId", data.dispatchId)
+  );
+
+  if (!isDeleted) {
+    validateDispatchAvailability_(data);
+  }
 
   return updateById("Dispatches", "dispatchId", data.dispatchId, {
     sourceExtrusionBatchId: sourceId,
@@ -2070,6 +3147,7 @@ function updateStoresMaster(data={}){
 function addStoresInward(data={}){
 
   const sh=getSheet("Stores_Inward");
+  validateOperationalWrite_(data);
 
   ensureHeaders_("Stores_Inward",[
     "inwardId","storesInwardId","date","itemName",
@@ -2153,11 +3231,16 @@ function addStoresInward(data={}){
 }
 
 function updateStoresInward(data={}){
+  const idValue = data.inwardId || data.storesInwardId;
+  validateOperationalWrite_(
+      data,
+      getRowById_("Stores_Inward", "inwardId", idValue)
+  );
 
   return updateById(
       "Stores_Inward",
       "inwardId",
-      data.inwardId||data.storesInwardId,
+      idValue,
       {
 
           date:normalizeDateOnly_(data.date||todayYmd()),
@@ -2193,16 +3276,24 @@ function updateStoresInward(data={}){
 function addStoresIssue(data={}){
 
   const sh=getSheet("Stores_Issue");
+  validateOperationalWrite_(data);
 
   ensureHeaders_("Stores_Issue",[
       "issueId","date","department",
       "itemName","category","unit",
-      "qty","remarks","status",
+      "qty","issueRate","issueValue","rateSource","remarks","status",
       "issueStatus","issuedTo",
       "createdBy","createdAt"
   ]);
 
   const issueId=data.issueId||generateBatchId("ISS");
+  const qty=num(data.qty);
+  const issueRate=num(data.issueRate || data.rate);
+  const issueValue =
+      data.issueValue!==undefined &&
+      data.issueValue!==""
+          ? num(data.issueValue)
+          : qty*issueRate;
 
   appendObjectRow(sh,{
 
@@ -2215,7 +3306,10 @@ function addStoresIssue(data={}){
       category:data.category||"",
       unit:data.unit||"",
 
-      qty:num(data.qty),
+      qty,
+      issueRate,
+      issueValue,
+      rateSource:data.rateSource||"",
 
       remarks:data.remarks||"",
 
@@ -2243,11 +3337,13 @@ function addStoresIssue(data={}){
       targetRef:data.department||"",
 
       qtyIn:0,
-      qtyOut:num(data.qty),
+      qtyOut:qty,
 
       unit:data.unit||"Nos",
 
-      remarks:data.remarks||"",
+      remarks:
+          (data.remarks||"") +
+          (issueRate ? " | Issue rate " + issueRate + " | Value " + issueValue : ""),
       createdBy:data.createdBy||"System"
 
   });
@@ -2260,6 +3356,16 @@ function addStoresIssue(data={}){
 }
 
 function updateStoresIssue(data={}){
+  const existing = getRowById_("Stores_Issue", "issueId", data.issueId);
+  validateOperationalWrite_(data, existing);
+
+  const qty=num(data.qty);
+  const issueRate=num(data.issueRate || data.rate);
+  const issueValue =
+      data.issueValue!==undefined &&
+      data.issueValue!==""
+          ? num(data.issueValue)
+          : qty*issueRate;
 
   return updateById(
       "Stores_Issue",
@@ -2274,7 +3380,10 @@ function updateStoresIssue(data={}){
           category:data.category||"",
           unit:data.unit||"",
 
-          qty:num(data.qty),
+          qty,
+          issueRate,
+          issueValue,
+          rateSource:data.rateSource||"",
 
           remarks:data.remarks||"",
 
@@ -2622,83 +3731,6 @@ function syncOldQualityData() {
   });
 }
 
-// MONTH CLOSE
-
-function addMonthClose(data = {}) {
-  const sh = getSheet("Month_Close");
-
-  ensureHeaders_("Month_Close", [
-    "closeId",
-    "periodMonth",
-    "rmInwardKg",
-    "rmValue",
-    "washInputKg",
-    "washedOutputKg",
-    "sortingInputKg",
-    "sortingOutputKg",
-    "extrusionInputKg",
-    "fgProducedKg",
-    "dispatchKg",
-    "turnover",
-    "storesInwardValue",
-    "storesIssueQty",
-    "factoryExpenses",
-    "avgRmPrice",
-    "grossContribution",
-    "manufacturingProfit",
-    "remarks",
-    "closedBy",
-    "createdAt",
-  ]);
-
-  const closeId = generateBatchId("MCLOSE");
-
-  appendObjectRow(sh, {
-    closeId,
-    periodMonth: data.periodMonth || "",
-    rmInwardKg: num(data.rmInwardKg),
-    rmValue: num(data.rmValue),
-    washInputKg: num(data.washInputKg),
-    washedOutputKg: num(data.washedOutputKg),
-    sortingInputKg: num(data.sortingInputKg),
-    sortingOutputKg: num(data.sortingOutputKg),
-    extrusionInputKg: num(data.extrusionInputKg),
-    fgProducedKg: num(data.fgProducedKg),
-    dispatchKg: num(data.dispatchKg),
-    turnover: num(data.turnover),
-    storesInwardValue: num(data.storesInwardValue),
-    storesIssueQty: num(data.storesIssueQty),
-    factoryExpenses: num(data.factoryExpenses),
-    avgRmPrice: num(data.avgRmPrice),
-    grossContribution: num(data.grossContribution),
-    manufacturingProfit: num(data.manufacturingProfit),
-    remarks: data.remarks || "",
-    closedBy: data.closedBy || "System",
-    createdAt: new Date(),
-  });
-
-  try {
-    const lockSh = getSheet("Month_Locks");
-
-    ensureHeaders_("Month_Locks", [
-      "periodMonth",
-      "status",
-      "lockedBy",
-      "lockedAt",
-      "remarks",
-    ]);
-
-    appendObjectRow(lockSh, {
-      periodMonth: data.periodMonth || "",
-      status: "LOCKED",
-      lockedBy: data.closedBy || "System",
-      lockedAt: new Date(),
-      remarks: "Operational month freeze",
-    });
-  } catch (err) {}
-
-  return output({ ok: true, closeId });
-}
 // MONTH AUDIT - SAFE ADD-ON
 function createSheetIfMissing_(sheetName, headers) {
   const ss = SpreadsheetApp.openById(SHEET_ID);

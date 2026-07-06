@@ -385,6 +385,7 @@ function updateFactoryCostMaster(data = {}) {
     if (p.fn === "inventoryLedger.add") return addInventoryLedger(p);
     if (p.fn === "inventoryLedger.balance") return getInventoryLedgerBalance();
     if (p.fn === "inventoryLedger.audit") return auditInventoryLedger(p);
+    if (p.fn === "inventoryLedger.rebuild") return rebuildInventoryLedger(p);
     if (p.fn === "trace.batch") return traceBatch(p);
     if (p.fn === "inventory.summary") {
       return output({
@@ -4928,6 +4929,533 @@ function getInventoryLedgerBalance(){
 
 }
 
+function rebuildInventoryLedger(data = {}) {
+  const dryRun = String(data.dryRun || "").toUpperCase() === "TRUE";
+  const lock = LockService.getScriptLock();
+
+  if (!lock.tryLock(30000)) {
+    return output({ ok: false, error: "Inventory ledger rebuild is already in progress" });
+  }
+
+  try {
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const ledgerSheet = getSheet("Inventory_Ledger");
+    const headers = inventoryLedgerHeaders_();
+    ensureHeaders_("Inventory_Ledger", headers);
+
+    const beforeRows = getRowsAsObjects("Inventory_Ledger").filter((row) => !isDeleted_(row));
+    const beforeBalances = ledgerBalancesForItems_(beforeRows, ["E1", "E2", "E3"]);
+    const backupSheetName = dryRun ? "" : backupInventoryLedger_(ss, ledgerSheet);
+    const rebuilt = buildInventoryLedgerRowsFromSources_();
+    const afterBalances = ledgerBalancesForItems_(rebuilt.rows, ["E1", "E2", "E3"]);
+    const duplicatePhysicalMovementCount = auditFindPhysicalMovementDuplicates_(rebuilt.rows).length;
+
+    if (!dryRun) {
+      clearInventoryLedger_(ledgerSheet, headers);
+      writeInventoryLedgerRows_(ledgerSheet, headers, rebuilt.rows);
+    }
+
+    return output({
+      ok: true,
+      route: "inventoryLedger.rebuild",
+      dryRun,
+      backupSheetName,
+      beforeBalances,
+      afterBalances,
+      duplicatePhysicalMovementCount,
+      rowsBefore: beforeRows.length,
+      rowsRebuilt: rebuilt.rows.length,
+      sourceCounts: rebuilt.sourceCounts,
+      warnings: rebuilt.warnings,
+      message: dryRun
+        ? "Dry run complete. Inventory_Ledger was not changed."
+        : "Inventory_Ledger was backed up, cleared, and rebuilt from source sheets.",
+    });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function inventoryLedgerHeaders_() {
+  return [
+    "ledgerId",
+    "date",
+    "module",
+    "movementType",
+    "itemType",
+    "itemName",
+    "sourceRef",
+    "targetRef",
+    "qtyIn",
+    "qtyOut",
+    "unit",
+    "remarks",
+    "status",
+    "createdBy",
+    "createdAt",
+    "legacySourceSheet",
+    "legacySourceId",
+    "migrationId",
+    "migratedAt",
+  ];
+}
+
+function backupInventoryLedger_(ss, ledgerSheet) {
+  const timestamp = Utilities.formatDate(
+    new Date(),
+    Session.getScriptTimeZone(),
+    "yyyyMMdd_HHmmss"
+  );
+  const baseName = "Inventory_Ledger_Backup_" + timestamp;
+  let backupName = baseName;
+  let suffix = 1;
+
+  while (ss.getSheetByName(backupName)) {
+    backupName = baseName + "_" + suffix;
+    suffix += 1;
+  }
+
+  const backup = ss.insertSheet(backupName);
+  const values = ledgerSheet.getDataRange().getValues();
+  if (values.length && values[0].length) {
+    backup.getRange(1, 1, values.length, values[0].length).setValues(values);
+    backup.setFrozenRows(1);
+  }
+  return backupName;
+}
+
+function clearInventoryLedger_(ledgerSheet, headers) {
+  ledgerSheet.clearContents();
+  ledgerSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  ledgerSheet.setFrozenRows(1);
+}
+
+function writeInventoryLedgerRows_(ledgerSheet, headers, rows) {
+  if (!rows.length) return;
+  const values = rows.map((row) => headers.map((header) => row[header] !== undefined ? row[header] : ""));
+  ledgerSheet.getRange(2, 1, values.length, headers.length).setValues(values);
+}
+
+function buildInventoryLedgerRowsFromSources_() {
+  const ctx = {
+    rows: [],
+    sourceCounts: {},
+    warnings: [],
+    rebuildAt: new Date(),
+  };
+
+  rebuildFromRmInward_(ctx);
+  rebuildFromWashBatches_(ctx);
+  rebuildFromSortingBatches_(ctx);
+  rebuildFromExtrusionBatches_(ctx);
+  rebuildFromDispatches_(ctx);
+  rebuildFromStoresInward_(ctx);
+  rebuildFromStoresIssue_(ctx);
+  rebuildFromInventoryAdjustments_(ctx);
+
+  return {
+    rows: ctx.rows,
+    sourceCounts: ctx.sourceCounts,
+    warnings: ctx.warnings,
+  };
+}
+
+function pushRebuiltLedgerRow_(ctx, sourceSheet, sourceId, payload) {
+  const qtyIn = num(payload.qtyIn);
+  const qtyOut = num(payload.qtyOut);
+  if (qtyIn <= 0 && qtyOut <= 0) return false;
+
+  const index = ctx.rows.length + 1;
+  ctx.rows.push({
+    ledgerId: payload.ledgerId || "RBL-" + sourceSheet.replace(/[^A-Za-z0-9]/g, "") + "-" + String(sourceId || index).replace(/[^A-Za-z0-9]/g, "").slice(0, 28) + "-" + index,
+    date: normalizeDateOnly_(payload.date || todayYmd()),
+    module: payload.module || "",
+    movementType: payload.movementType || "",
+    itemType: payload.itemType || "",
+    itemName: payload.itemName || "",
+    sourceRef: payload.sourceRef || sourceId || "",
+    targetRef: payload.targetRef || "",
+    qtyIn,
+    qtyOut,
+    unit: payload.unit || "Kg",
+    remarks: payload.remarks || "",
+    status: payload.status || "ACTIVE",
+    createdBy: payload.createdBy || "Ledger Rebuild",
+    createdAt: ctx.rebuildAt,
+    legacySourceSheet: sourceSheet,
+    legacySourceId: sourceId || "",
+    migrationId: "LEDGER_REBUILD_FROM_SOURCE",
+    migratedAt: ctx.rebuildAt,
+  });
+
+  ctx.sourceCounts[sourceSheet] = (ctx.sourceCounts[sourceSheet] || 0) + 1;
+  return true;
+}
+
+function rebuildFromRmInward_(ctx) {
+  const rows = getRowsAsObjects("RM_Inward").filter((row) => !isDeleted_(row));
+  rows.forEach((row, index) => {
+    const sourceId = String(row.inwardId || row.batchId || "RM-" + (index + 1));
+    const material = materialName_(row.material || row.color, "Mixed Material");
+    const quantityKg = num(row.netWeight || row.quantityKg || row.grossWeight);
+
+    pushRebuiltLedgerRow_(ctx, "RM_Inward", sourceId, {
+      date: row.date,
+      module: "RM_INWARD",
+      movementType: "IN",
+      itemType: materialCategory_(material),
+      itemName: material,
+      sourceRef: row.supplier || sourceId,
+      targetRef: sourceId,
+      qtyIn: quantityKg,
+      qtyOut: 0,
+      unit: "Kg",
+      remarks: "Ledger rebuilt from RM_Inward",
+      createdBy: row.createdBy || "Ledger Rebuild",
+    });
+  });
+}
+
+function rebuildFromWashBatches_(ctx) {
+  const rows = getRowsAsObjects("Wash_Batches").filter((row) => !isDeleted_(row));
+  rows.forEach((row, index) => {
+    const sourceId = String(row.washBatchId || row.batchId || "WASH-" + (index + 1));
+    const inputMaterial = materialName_(row.inputMaterial, "Mixed Material");
+    const washedMaterial = inputMaterial.toUpperCase().indexOf("WHITE") !== -1 ? "Washed White Flakes" : "Washed Mixed";
+
+    pushRebuiltLedgerRow_(ctx, "Wash_Batches", sourceId, {
+      date: row.date,
+      module: "WASH",
+      movementType: "OUT",
+      itemType: materialCategory_(inputMaterial),
+      itemName: inputMaterial,
+      sourceRef: row.sourceRMId || row.sourceRmInwardId || "",
+      targetRef: sourceId,
+      qtyIn: 0,
+      qtyOut: num(row.inputWeightKg),
+      unit: "Kg",
+      remarks: "Wash input consumption rebuilt from Wash_Batches",
+      createdBy: row.createdBy || "Ledger Rebuild",
+    });
+
+    [
+      { itemName: washedMaterial, qty: num(row.washedOutputKg), itemType: materialCategory_(washedMaterial), remarks: "Washed material output" },
+      { itemName: "Sink Material", qty: num(row.sinkMaterialKg), itemType: "WASTE", remarks: "Wash sink material" },
+      { itemName: "Color Reject", qty: num(row.otherColorKg), itemType: "WASTE", remarks: "Wash color reject" },
+      { itemName: "Dust", qty: num(row.dustKg), itemType: "WASTE", remarks: "Wash dust" },
+      { itemName: "Raffia Reject", qty: num(row.raffiaKg), itemType: "WASTE", remarks: "Wash raffia reject" },
+      { itemName: "Wrapper Reject", qty: num(row.wrappersKg), itemType: "WASTE", remarks: "Wash wrapper reject" },
+      { itemName: "Micro Plastic", qty: num(row.microPlasticKg), itemType: "WASTE", remarks: "Wash micro plastic" },
+      { itemName: "Metal Reject", qty: num(row.ironScrapKg), itemType: "WASTE", remarks: "Wash metal reject" },
+      { itemName: "Sludge", qty: num(row.sludgeKg), itemType: "WASTE", remarks: "Wash sludge" },
+    ].forEach((output) => {
+      pushRebuiltLedgerRow_(ctx, "Wash_Batches", sourceId, {
+        date: row.date,
+        module: "WASH",
+        movementType: "IN",
+        itemType: output.itemType,
+        itemName: output.itemName,
+        sourceRef: sourceId,
+        targetRef: sourceId,
+        qtyIn: output.qty,
+        qtyOut: 0,
+        unit: "Kg",
+        remarks: output.remarks + " rebuilt from Wash_Batches",
+        createdBy: row.createdBy || "Ledger Rebuild",
+      });
+    });
+  });
+}
+
+function rebuildFromSortingBatches_(ctx) {
+  const rows = getRowsAsObjects("Sorting_Batches").filter((row) => !isDeleted_(row));
+  rows.forEach((row, index) => {
+    const sourceId = String(row.sortingBatchId || row.batchId || "SORT-" + (index + 1));
+    const inputMaterial = materialName_(row.inputMaterial, "Washed Mixed");
+
+    pushRebuiltLedgerRow_(ctx, "Sorting_Batches", sourceId, {
+      date: row.date,
+      module: "SORTING",
+      movementType: "OUT",
+      itemType: materialCategory_(inputMaterial),
+      itemName: inputMaterial,
+      sourceRef: row.sourceWashBatchId || "",
+      targetRef: sourceId,
+      qtyIn: 0,
+      qtyOut: num(row.inputWeightKg),
+      unit: "Kg",
+      remarks: "Sorting input consumption rebuilt from Sorting_Batches",
+      createdBy: row.createdBy || "Ledger Rebuild",
+    });
+
+    [
+      { itemName: "White Sorted", qty: num(row.whiteSortedKg || row.acceptedQtyKg), itemType: "WIP", remarks: "Sorting white sorted output" },
+      { itemName: "Commodity", qty: num(row.commodityKg), itemType: "WIP", remarks: "Sorting commodity output" },
+      { itemName: "Mixed Sorted", qty: num(row.allMixSortedKg), itemType: "WIP", remarks: "Sorting mixed output" },
+      { itemName: "White Grey", qty: num(row.whiteGreyKg), itemType: "WIP", remarks: "Sorting white grey output" },
+      { itemName: "Color Reject", qty: num(row.rejectedQtyKg), itemType: "WASTE", remarks: "Sorting rejected quantity" },
+      { itemName: "Rubber Reject", qty: num(row.rubberRejectKg), itemType: "WASTE", remarks: "Sorting rubber reject" },
+      { itemName: "Black Specs Reject", qty: num(row.blackSpecsRejectKg), itemType: "WASTE", remarks: "Sorting black specs reject" },
+      { itemName: "Raffia Reject", qty: num(row.raffiaRejectKg), itemType: "WASTE", remarks: "Sorting raffia reject" },
+      { itemName: "Rework Material", qty: num(row.recoverableRejectKg), itemType: "WIP", remarks: "Sorting recoverable reject" },
+      { itemName: "Sorting Waste", qty: num(row.unrecoverableRejectKg), itemType: "WASTE", remarks: "Sorting unrecoverable reject" },
+    ].forEach((output) => {
+      pushRebuiltLedgerRow_(ctx, "Sorting_Batches", sourceId, {
+        date: row.date,
+        module: "SORTING",
+        movementType: "IN",
+        itemType: output.itemType,
+        itemName: output.itemName,
+        sourceRef: sourceId,
+        targetRef: sourceId,
+        qtyIn: output.qty,
+        qtyOut: 0,
+        unit: "Kg",
+        remarks: output.remarks + " rebuilt from Sorting_Batches",
+        createdBy: row.createdBy || "Ledger Rebuild",
+      });
+    });
+  });
+}
+
+function rebuildFromExtrusionBatches_(ctx) {
+  const rows = getRowsAsObjects("Extrusion_Batches").filter((row) => !isDeleted_(row));
+  rows.forEach((row, index) => {
+    const sourceId = String(row.extrusionBatchId || row.batchId || "EXT-" + (index + 1));
+    const inputMaterial = materialName_(row.inputMaterial, "White Sorted");
+    const grade = normalizeFgMaterialName_(row.productionGrade || row.grade || "E1");
+
+    [
+      { itemName: inputMaterial, qty: num(row.inputWeightKg || row.totalInputKg), itemType: materialCategory_(inputMaterial), remarks: "Extrusion base input" },
+      { itemName: "Virgin Material", qty: num(row.virginMaterialKg), itemType: "RM", remarks: "Extrusion virgin input" },
+      { itemName: "Masterbatch", qty: num(row.masterBatchKg), itemType: "RM", remarks: "Extrusion masterbatch input" },
+      { itemName: "Battery Scrap", qty: num(row.batteryFlakesKg), itemType: "RM", remarks: "Extrusion battery input" },
+      { itemName: "Rework Material", qty: num(row.reworkGranulesKg), itemType: "WIP", remarks: "Extrusion rework input" },
+      { itemName: "Lumps", qty: num(row.lumpsReusedKg), itemType: "WASTE", remarks: "Extrusion lumps reused" },
+      { itemName: "Purging", qty: num(row.purgingReusedKg), itemType: "WASTE", remarks: "Extrusion purging reused" },
+      { itemName: "Anti Oxidant", qty: num(row.antiOxidantKg), itemType: "RM", remarks: "Extrusion anti oxidant input" },
+    ].forEach((input) => {
+      pushRebuiltLedgerRow_(ctx, "Extrusion_Batches", sourceId, {
+        date: row.date,
+        module: "EXTRUSION",
+        movementType: "OUT",
+        itemType: input.itemType,
+        itemName: input.itemName,
+        sourceRef: row.sourceBatchId || row.sourceSortingBatchId || row.sourceWashBatchId || "",
+        targetRef: sourceId,
+        qtyIn: 0,
+        qtyOut: input.qty,
+        unit: "Kg",
+        remarks: input.remarks + " rebuilt from Extrusion_Batches",
+        createdBy: row.createdBy || "Ledger Rebuild",
+      });
+    });
+
+    [
+      { itemName: grade, qty: num(row.fgOutputKg), itemType: "FG", remarks: "FG output" },
+      { itemName: "Lumps", qty: num(row.lumpsKg), itemType: "WASTE", remarks: "Extrusion lumps output" },
+      { itemName: "Purging", qty: num(row.purgingKg), itemType: "WASTE", remarks: "Extrusion purging output" },
+      { itemName: "Rework Material", qty: num(row.reworkGranulesKg || row.shadeVariationKg), itemType: "WIP", remarks: "Extrusion rework output" },
+      { itemName: "Dust", qty: num(row.dustKg), itemType: "WASTE", remarks: "Extrusion dust output" },
+      { itemName: "Extrusion Waste", qty: num(row.rejectKg) + num(row.vacuumRejectKg) + num(row.meshRejectKg || row.meshRejectionKg) + num(row.floorSpillageKg) + num(row.microPlasticKg), itemType: "WASTE", remarks: "Extrusion waste output" },
+    ].forEach((outputRow) => {
+      pushRebuiltLedgerRow_(ctx, "Extrusion_Batches", sourceId, {
+        date: row.date,
+        module: "EXTRUSION",
+        movementType: "IN",
+        itemType: outputRow.itemType,
+        itemName: outputRow.itemName,
+        sourceRef: sourceId,
+        targetRef: sourceId,
+        qtyIn: outputRow.qty,
+        qtyOut: 0,
+        unit: "Kg",
+        remarks: outputRow.remarks + " rebuilt from Extrusion_Batches",
+        createdBy: row.createdBy || "Ledger Rebuild",
+      });
+    });
+  });
+}
+
+function rebuildFromDispatches_(ctx) {
+  const rows = getRowsAsObjects("Dispatches").filter((row) => !isDeleted_(row));
+  rows.forEach((row, index) => {
+    const sourceId = String(row.dispatchId || "DISP-" + (index + 1));
+    const lines = parseDispatchLines_(row.dispatchLines);
+    const fallbackItems = parseFgDispatchItems_(row.grade || row.productionGrade, num(row.quantityKg));
+    const items = [];
+
+    if (lines.length) {
+      lines.forEach((line) => {
+        parseFgDispatchItems_(line.grade || row.grade || row.productionGrade, num(line.dispatchQtyKg || line.quantityKg)).forEach((item) => {
+          items.push({
+            itemName: item.itemName,
+            quantityKg: item.quantityKg,
+            sourceRef: line.sourceExtrusionBatchId || row.sourceExtrusionBatchId || row.linkedFgBatchId || sourceId,
+          });
+        });
+      });
+    } else {
+      fallbackItems.forEach((item) => {
+        items.push({
+          itemName: item.itemName,
+          quantityKg: item.quantityKg,
+          sourceRef: row.sourceExtrusionBatchId || row.linkedFgBatchId || sourceId,
+        });
+      });
+    }
+
+    if (!items.length && num(row.quantityKg) > 0) {
+      items.push({
+        itemName: normalizeFgMaterialName_(row.grade || row.productionGrade || "UNKNOWN"),
+        quantityKg: num(row.quantityKg),
+        sourceRef: row.sourceExtrusionBatchId || row.linkedFgBatchId || sourceId,
+      });
+    }
+
+    items.forEach((item) => {
+      pushRebuiltLedgerRow_(ctx, "Dispatches", sourceId, {
+        date: row.date,
+        module: "DISPATCH",
+        movementType: "OUT",
+        itemType: "FG",
+        itemName: item.itemName,
+        sourceRef: item.sourceRef,
+        targetRef: sourceId,
+        qtyIn: 0,
+        qtyOut: item.quantityKg,
+        unit: "Kg",
+        remarks: "Dispatch rebuilt from Dispatches",
+        createdBy: row.createdBy || "Ledger Rebuild",
+      });
+    });
+  });
+}
+
+function rebuildFromStoresInward_(ctx) {
+  const rows = getRowsAsObjects("Stores_Inward").filter((row) => !isDeleted_(row));
+  rows.forEach((row, index) => {
+    const sourceId = String(row.inwardId || row.storesInwardId || "SIN-" + (index + 1));
+    pushRebuiltLedgerRow_(ctx, "Stores_Inward", sourceId, {
+      date: row.date,
+      module: "STORES",
+      movementType: "IN",
+      itemType: "STORE",
+      itemName: row.itemName || "",
+      sourceRef: row.supplier || row.vendor || "",
+      targetRef: sourceId,
+      qtyIn: num(row.qty),
+      qtyOut: 0,
+      unit: row.unit || "Nos",
+      remarks: "Stores inward rebuilt from Stores_Inward",
+      createdBy: row.createdBy || "Ledger Rebuild",
+    });
+  });
+}
+
+function rebuildFromStoresIssue_(ctx) {
+  const rows = getRowsAsObjects("Stores_Issue").filter((row) => !isDeleted_(row));
+  rows.forEach((row, index) => {
+    const sourceId = String(row.issueId || "ISS-" + (index + 1));
+    pushRebuiltLedgerRow_(ctx, "Stores_Issue", sourceId, {
+      date: row.date,
+      module: "STORES",
+      movementType: "OUT",
+      itemType: "STORE",
+      itemName: row.itemName || "",
+      sourceRef: sourceId,
+      targetRef: row.department || row.issuedTo || "",
+      qtyIn: 0,
+      qtyOut: num(row.qty),
+      unit: row.unit || "Nos",
+      remarks: "Stores issue rebuilt from Stores_Issue",
+      createdBy: row.createdBy || "Ledger Rebuild",
+    });
+  });
+}
+
+function rebuildFromInventoryAdjustments_(ctx) {
+  const rows = getRowsAsObjects("Inventory_Adjustments")
+    .filter((row) => !isDeleted_(row))
+    .filter((row) => String(row.status || "").toUpperCase() === "APPROVED");
+
+  rows.forEach((row, index) => {
+    const sourceId = String(row.adjustmentId || "IA-" + (index + 1));
+    const quantityKg = num(row.quantityKg || row.quantity);
+    const itemName = String(row.itemCode || row.material || row.itemName || "").trim();
+    pushRebuiltLedgerRow_(ctx, "Inventory_Adjustments", sourceId, {
+      date: row.date,
+      module: "INVENTORY_ADJUSTMENT",
+      movementType: quantityKg >= 0 ? "IN" : "OUT",
+      itemType: row.itemType || materialCategory_(itemName),
+      itemName,
+      sourceRef: row.sourceRef || "",
+      targetRef: sourceId,
+      qtyIn: quantityKg > 0 ? quantityKg : 0,
+      qtyOut: quantityKg < 0 ? Math.abs(quantityKg) : 0,
+      unit: "Kg",
+      remarks: "Approved adjustment rebuilt from Inventory_Adjustments",
+      createdBy: row.approvedBy || row.createdBy || "Ledger Rebuild",
+    });
+  });
+}
+
+function normalizeFgMaterialName_(value) {
+  const raw = String(value || "").trim().toUpperCase();
+  const match = raw.match(/\bE[1-5]\b/);
+  return match ? match[0] : raw;
+}
+
+function parseFgDispatchItems_(label, fallbackQty) {
+  const text = String(label || "").trim();
+  const items = [];
+  const pattern = /\b(E[1-5])\b[^0-9]*([\d,]+(?:\.\d+)?)\s*(?:KG|KGS|KILOGRAMS)?/gi;
+  let match;
+
+  while ((match = pattern.exec(text)) !== null) {
+    items.push({
+      itemName: String(match[1] || "").toUpperCase(),
+      quantityKg: num(String(match[2] || "").replace(/,/g, "")),
+    });
+  }
+
+  if (items.length) {
+    return items.filter((item) => item.itemName && item.quantityKg > 0);
+  }
+
+  const itemName = normalizeFgMaterialName_(text);
+  if (!itemName || num(fallbackQty) <= 0) return [];
+  return [{ itemName, quantityKg: num(fallbackQty) }];
+}
+
+function ledgerBalancesForItems_(rows, itemNames) {
+  const wanted = {};
+  itemNames.forEach((item) => {
+    wanted[String(item || "").toUpperCase()] = {
+      itemName: String(item || "").toUpperCase(),
+      qtyIn: 0,
+      qtyOut: 0,
+      balance: 0,
+    };
+  });
+
+  rows.forEach((row) => {
+    const itemType = String(row.itemType || "").toUpperCase();
+    const itemName = normalizeFgMaterialName_(row.itemName);
+    if (itemType !== "FG" || !wanted[itemName]) return;
+    wanted[itemName].qtyIn += num(row.qtyIn);
+    wanted[itemName].qtyOut += num(row.qtyOut);
+    wanted[itemName].balance += num(row.qtyIn) - num(row.qtyOut);
+  });
+
+  return Object.keys(wanted).map((key) => ({
+    itemName: wanted[key].itemName,
+    qtyIn: round2(wanted[key].qtyIn),
+    qtyOut: round2(wanted[key].qtyOut),
+    balance: round2(wanted[key].balance),
+  }));
+}
+
 function auditInventoryLedger(data = {}) {
   const periodMonth = auditPeriodMonth_(data.periodMonth || data.month || "");
   const ledgerRows = getRowsAsObjects("Inventory_Ledger")
@@ -5085,9 +5613,15 @@ function auditFindPhysicalMovementDuplicates_(rows) {
         movementType === "FG_DISPATCH_OUT"
       )
     );
+  }).map((row) => {
+    const direction = num(row.qtyIn) >= num(row.qtyOut) ? "IN" : "OUT";
+    return {
+      ...row,
+      movementDirection: direction,
+    };
   });
 
-  return auditGroupRows_(relevantRows, ["itemType", "itemName", "sourceRef"]).filter((group) => {
+  return auditGroupRows_(relevantRows, ["itemType", "itemName", "sourceRef", "movementDirection"]).filter((group) => {
     const modules = {};
     group.examples.forEach((row) => {
       if (row.module) modules[row.module] = true;

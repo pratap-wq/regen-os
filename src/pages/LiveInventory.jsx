@@ -136,11 +136,11 @@ export default function LiveInventory() {
     rmRows.forEach((r) => {
       list.push({
         date: r.date,
-        stage: "RM Inward",
+        stage: "Material Receiving",
         material: r.material,
         qty: Number(r.netWeight || 0),
         reference: r.inwardId,
-        source: "RM",
+        source: "Material",
         status: r.status || "",
       });
     });
@@ -178,7 +178,7 @@ export default function LiveInventory() {
     extrusionRows.forEach((r) => {
       list.push({
         date: r.date,
-        stage: "FG Production",
+        stage: "Material Production",
         material: r.productionGrade || r.inputMaterial,
         qty: Number(r.fgOutputKg || 0),
         reference: r.extrusionBatchId,
@@ -231,9 +231,9 @@ export default function LiveInventory() {
       onSearchChange={setSearch}
       onRefresh={loadData}
       snapshots={[
-        { label: "RM Stock", value: `${metrics.rmStock.toFixed(0)} Kg` },
-        { label: "WIP Stock", value: `${(metrics.washStock + metrics.sortingStock).toFixed(0)} Kg` },
-        { label: "FG Stock", value: `${metrics.fgStock.toFixed(0)} Kg` },
+        { label: "Material Stock", value: `${metrics.rmStock.toFixed(0)} Kg` },
+        { label: "In-Process Material", value: `${(metrics.washStock + metrics.sortingStock).toFixed(0)} Kg` },
+        { label: "Dispatch Material", value: `${metrics.fgStock.toFixed(0)} Kg` },
         { label: "Overall Recovery", value: `${metrics.overallRecovery}%` },
       ]}
       entryTitle="Inventory Snapshot"
@@ -267,10 +267,10 @@ export default function LiveInventory() {
     >
       <div style={flowCard}>
         <div style={flowGrid}>
-          <FlowBox title="RM Inward" value={metrics.rmInward} />
+          <FlowBox title="Material Received" value={metrics.rmInward} />
           <FlowBox title="Wash Output" value={metrics.washOutput} />
           <FlowBox title="Sorting Accepted" value={metrics.sortingAccepted} />
-          <FlowBox title="FG Produced" value={metrics.fgProduced} />
+          <FlowBox title="Material Produced" value={metrics.fgProduced} />
           <FlowBox title="Dispatched" value={metrics.dispatched} />
         </div>
       </div>

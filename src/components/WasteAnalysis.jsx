@@ -32,14 +32,14 @@ export default function WasteAnalysis({ close }) {
 
       <div style={summaryGrid}>
         <Summary
-          title="RM Input"
+          title="Material Input"
           value={ton(flow.rmInputKg)}
           unit="T"
           color="#2563eb"
         />
 
         <Summary
-          title="Finished Goods"
+          title="Dispatch Material"
           value={ton(flow.fgKg)}
           unit="T"
           color="#16a34a"

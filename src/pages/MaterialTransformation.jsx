@@ -170,7 +170,7 @@ export default function MaterialTransformation() {
         { label: "Input", value: `${fmt(summary.totalInputKg)} Kg` },
         { label: "Output", value: `${fmt(summary.totalOutputKg)} Kg` },
         {
-          label: "Variance",
+          label: "Difference",
           value: `${fmt(summary.varianceKg)} Kg`,
           color: Math.abs(summary.varianceKg) <= 0.01 ? "#16a34a" : "#dc2626",
         },
@@ -191,7 +191,7 @@ export default function MaterialTransformation() {
             { key: "shift", label: "Shift" },
             { key: "totalInputKg", label: "Input Kg" },
             { key: "totalOutputKg", label: "Output Kg" },
-            { key: "varianceKg", label: "Variance" },
+            { key: "varianceKg", label: "Difference" },
             { key: "recoveryPercent", label: "Recovery %" },
             { key: "status", label: "Status" },
           ]}
@@ -317,7 +317,7 @@ export default function MaterialTransformation() {
             <Metric label="Total Input" value={`${fmt(summary.totalInputKg)} Kg`} />
             <Metric label="Total Output" value={`${fmt(summary.totalOutputKg)} Kg`} />
             <Metric
-              label="Variance"
+              label="Difference"
               value={`${fmt(summary.varianceKg)} Kg`}
               color={Math.abs(summary.varianceKg) <= 0.01 ? "#16a34a" : "#dc2626"}
             />

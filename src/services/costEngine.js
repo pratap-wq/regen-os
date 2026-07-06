@@ -258,7 +258,7 @@ export function calculateCostEngine({
     estimatedProfit,
 
     waterfall: [
-      { label: "RM Landed Cost", value: avgRmCostPerKg },
+      { label: "Material Landed Cost", value: avgRmCostPerKg },
       { label: "Recovery Loss", value: effectiveRmCostPerKg - avgRmCostPerKg },
       { label: "Stores / Consumables", value: storesCostPerKg },
       { label: "Factory Expenses", value: factoryCostPerKg },

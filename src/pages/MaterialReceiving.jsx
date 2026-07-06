@@ -96,7 +96,7 @@ export default function MaterialReceiving() {
       }
 
       setMessage(
-        `Material received. ${res.grns?.length || 0} GRNs created. Total ${fmt(
+        `Material received. ${res.grns?.length || 0} receiving references created. Total ${fmt(
           res.totalTruckWeightKg
         )} Kg.`
       );
@@ -112,7 +112,7 @@ export default function MaterialReceiving() {
     <OperationalWorkspace
       eyebrow="Operator Workflow"
       title="Material Receiving"
-      subtitle="Select supplier, truck, materials and weight. RegenOS creates GRNs and posts Material Inventory automatically."
+      subtitle="Select supplier, truck, materials and weight. RegenOS creates receiving references and posts Material Inventory automatically."
       month={month}
       year={year}
       search={search}
@@ -150,7 +150,7 @@ export default function MaterialReceiving() {
             },
             {
               key: "grn",
-              label: "GRNs",
+              label: "Receiving Refs",
               render: (r) => (r.lines || []).map((line) => line.grnId).join(", "),
               renderExport: (r) => (r.lines || []).map((line) => line.grnId).join(", "),
             },

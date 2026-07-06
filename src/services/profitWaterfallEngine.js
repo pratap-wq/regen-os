@@ -12,10 +12,10 @@ export function calculateProfitWaterfall(cost) {
 
   return [
     {
-      label: "RM Landed Cost",
+      label: "Material Landed Cost",
       type: "cost",
       value: round2(rmPurchase),
-      note: "RM purchase + Regen-paid transport",
+      note: "Material purchase + Regen-paid transport",
     },
     {
       label: "Recovery Loss",
@@ -27,13 +27,13 @@ export function calculateProfitWaterfall(cost) {
       label: "Stores / Consumables",
       type: "cost",
       value: round2(stores),
-      note: "Stores issue allocated per kg FG",
+      note: "Stores issue allocated per kg material",
     },
     {
       label: "Factory Expenses",
       type: "cost",
       value: round2(factory),
-      note: "Factory expenses allocated per kg FG",
+      note: "Factory expenses allocated per kg material",
     },
     {
       label: "Fixed Costs",

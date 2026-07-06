@@ -463,7 +463,7 @@ export default function Dashboard() {
       <div style={kpiGrid}>
         <KPI title="Wash Output MTD" value={`${ton(data.washOutput)} T`} />
         <KPI title="Sorting Output MTD" value={`${ton(data.sortingOutput)} T`} />
-        <KPI title="FG Production MTD" value={`${ton(data.fgProduced)} T`} />
+        <KPI title="Material Production MTD" value={`${ton(data.fgProduced)} T`} />
         <KPI title="Target" value={`${ton(monthlyTargetKg)} T`} />
         <KPI title="Achievement" value={`${data.achievement.toFixed(1)}%`} />
         <KPI title="900T Progress" value={`${data.phase2Achievement.toFixed(1)}%`} />
@@ -505,7 +505,7 @@ export default function Dashboard() {
         />
 
         <KPI
-          title="Effective RM Cost/Kg"
+          title="Effective Material Cost/Kg"
           value={`₹ ${data.costEngine.effectiveRmCostPerKg.toFixed(2)}`}
           color="#b45309"
         />
@@ -519,7 +519,7 @@ export default function Dashboard() {
       <div style={twoCol}>
         <Panel title="Monthly Target Tracking">
           <Progress percent={data.achievement} />
-          <Metric label="FG Achieved" value={`${ton(data.fgProduced)} T`} />
+          <Metric label="Material Achieved" value={`${ton(data.fgProduced)} T`} />
           <Metric label="Target Till Date" value={`${ton(data.targetTillDate)} T`} />
           <Metric
             label="Gap"
@@ -533,7 +533,7 @@ export default function Dashboard() {
 
         <Panel title="Profitability Snapshot">
           <Metric label="Revenue" value={`₹ ${lakh(data.revenue)} L`} color="#16a34a" />
-          <Metric label="Estimated RM Consumed" value={`₹ ${lakh(data.estimatedRmConsumedValue)} L`} />
+          <Metric label="Estimated Material Consumed" value={`₹ ${lakh(data.estimatedRmConsumedValue)} L`} />
           <Metric label="Stores Issue Value" value={`₹ ${lakh(data.storesIssueValue)} L`} color="#dc2626" />
           <Metric label="Factory Expenses" value={`₹ ${lakh(data.factoryExpenseValue)} L`} color="#7c3aed" />
           <Metric
@@ -557,9 +557,9 @@ export default function Dashboard() {
 
       <div style={twoCol}>
         <Panel title="Material Flow">
-          <FlowRow label="RM Purchased" value={`${ton(data.rmPurchased)} T`} />
-          <FlowRow label="RM Consumed in Wash" value={`${ton(data.washInput)} T`} />
-          <FlowRow label="RM Closing" value={`${ton(data.rmClosing)} T`} />
+          <FlowRow label="Material Received" value={`${ton(data.rmPurchased)} T`} />
+          <FlowRow label="Material Consumed in Wash" value={`${ton(data.washInput)} T`} />
+          <FlowRow label="Material Closing" value={`${ton(data.rmClosing)} T`} />
           <Divider />
           <FlowRow label="Washed Output" value={`${ton(data.washOutput)} T`} />
           <FlowRow label="Sorting Input" value={`${ton(data.sortingInput)} T`} />
@@ -569,17 +569,17 @@ export default function Dashboard() {
           <FlowRow label="Extrusion Input" value={`${ton(data.extrusionInput)} T`} />
           <FlowRow label="Sorted Closing" value={`${ton(data.sortedClosing)} T`} />
           <Divider />
-          <FlowRow label="FG Produced" value={`${ton(data.fgProduced)} T`} />
+          <FlowRow label="Material Produced" value={`${ton(data.fgProduced)} T`} />
           <FlowRow label="Dispatched" value={`${ton(data.dispatched)} T`} />
-          <FlowRow label="FG Closing" value={`${ton(data.fgClosing)} T`} />
+          <FlowRow label="Dispatch Material Closing" value={`${ton(data.fgClosing)} T`} />
         </Panel>
 
         <Panel title="Recovery & Cost Control">
           <Metric label="Wash Recovery" value={`${data.washRecovery.toFixed(1)}%`} color="#d97706" />
           <Metric label="Sorting Recovery" value={`${data.sortingRecovery.toFixed(1)}%`} color="#d97706" />
           <Metric label="Extrusion Recovery" value={`${data.extrusionRecovery.toFixed(1)}%`} color="#d97706" />
-          <Metric label="Wash-to-FG Recovery" value={`${data.overallRecovery.toFixed(1)}%`} color="#d97706" />
-          <Metric label="Average RM Rate" value={`₹ ${data.avgRmRate.toFixed(2)}/kg`} />
+          <Metric label="Wash-to-Dispatch Recovery" value={`${data.overallRecovery.toFixed(1)}%`} color="#d97706" />
+          <Metric label="Average Material Rate" value={`₹ ${data.avgRmRate.toFixed(2)}/kg`} />
           <Metric label="Average Sale Rate" value={`₹ ${data.avgSaleRate.toFixed(2)}/kg`} />
           <Metric label="Stores Cost / Kg" value={`₹ ${data.storesCostPerKg.toFixed(2)}`} color="#b45309" />
           <Metric label="Factory Cost / Kg" value={`₹ ${data.factoryCostPerKg.toFixed(2)}`} color="#7c3aed" />

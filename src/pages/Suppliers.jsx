@@ -203,7 +203,7 @@ export default function Suppliers() {
         <Field label="Supplier Type">
           <select name="supplierType" value={form.supplierType} onChange={onChange} style={inputStyle}>
             <option value="">Select Type</option>
-            <option>RM Supplier</option>
+            <option>Material Supplier</option>
             <option>Stores Supplier</option>
             <option>Transporter</option>
             <option>Service Vendor</option>

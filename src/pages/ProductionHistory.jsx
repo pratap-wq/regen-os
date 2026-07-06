@@ -197,7 +197,7 @@ export default function ProductionHistory() {
     if (row.process === "Wash") {
       return [
         {
-          title: "Batch Details",
+          title: "Material Details",
           fields: [
             ["date", "Date", "date"],
             ["shift", "Shift", "text"],
@@ -245,12 +245,12 @@ export default function ProductionHistory() {
     if (row.process === "Sorting") {
       return [
         {
-          title: "Batch Details",
+          title: "Material Details",
           fields: [
             ["date", "Date", "date"],
             ["shift", "Shift", "text"],
             ["machine", "Machine", "text"],
-            ["sourceWashBatchId", "Source Wash Batch", "text"],
+            ["sourceWashBatchId", "Source Washed Material", "text"],
             ["inputMaterial", "Input Material", "text"],
             ["inputWeightKg", "Input Kg", "number"],
           ],
@@ -291,15 +291,15 @@ export default function ProductionHistory() {
 
     return [
       {
-        title: "Batch Details",
+        title: "Material Details",
         fields: [
           ["date", "Date", "date"],
           ["periodMonth", "Period Month", "text"],
           ["shift", "Shift", "text"],
           ["machine", "Machine", "text"],
           ["sourceType", "Source Type", "text"],
-          ["sourceSortingBatchId", "Source Sorting Batch", "text"],
-          ["sourceWashBatchId", "Source Wash Batch", "text"],
+          ["sourceSortingBatchId", "Source Sorted Material", "text"],
+          ["sourceWashBatchId", "Source Washed Material", "text"],
           ["inputMaterial", "Input Material / Feed Summary", "textarea"],
           ["inputWeightKg", "Input Weight Kg", "number"],
           ["totalInputKg", "Total Input Kg", "number"],
@@ -313,7 +313,7 @@ export default function ProductionHistory() {
       {
         title: "Extrusion Outputs",
         fields: [
-          ["fgOutputKg", "FG Output Kg", "number"],
+          ["fgOutputKg", "Dispatch Material Kg", "number"],
           ["lumpsKg", "Lumps Kg", "number"],
           ["purgingKg", "Purging Kg", "number"],
           ["reworkGranulesKg", "Rework Granules Kg", "number"],
@@ -538,7 +538,7 @@ export default function ProductionHistory() {
             renderExport: (r) => dateForInput(r.date),
           },
           { key: "process", label: "Process" },
-          { key: "id", label: "Batch" },
+          { key: "id", label: "Material Ref" },
           { key: "shift", label: "Shift" },
           { key: "material", label: "Material" },
           { key: "machine", label: "Machine" },

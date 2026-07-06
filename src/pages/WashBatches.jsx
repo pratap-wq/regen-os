@@ -613,7 +613,7 @@ export default function WashBatches() {
           title="Material Input"
         >
 
-          <Field label="Source RM Batch">
+          <Field label="Source Material">
 
             <select
               name="sourceRMId"
@@ -629,7 +629,7 @@ export default function WashBatches() {
             >
 
               <option value="">
-                Select RM Batch
+                Select Material
               </option>
 
               {rmRows.map(
@@ -1112,8 +1112,8 @@ export default function WashBatches() {
           >
 
             {editing
-              ? "Update Batch"
-              : "Save Batch"}
+              ? "Update Material"
+              : "Save Material"}
 
           </button>
 
@@ -1153,7 +1153,7 @@ export default function WashBatches() {
           },
           {
             key: "washBatchId",
-            label: "Batch",
+            label: "Material Ref",
           },
           {
             key: "machine",

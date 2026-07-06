@@ -157,7 +157,7 @@ export default function SupplierScorecard() {
               {suppliers.length === 0 && (
                 <tr>
                   <td colSpan="10" style={empty}>
-                    No RM inward data for selected month.
+                    No material receiving data for selected month.
                   </td>
                 </tr>
               )}

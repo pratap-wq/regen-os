@@ -3,19 +3,19 @@ import LucideIcon from "../components/LucideIcon";
 import { getMode, regenTheme } from "../theme/regenTheme";
 
 const workflowStages = [
-  { label: "Raw Material", detail: "Receive, inspect, supplier trace", path: "/rm-inward", icon: "package" },
+  { label: "Material Receiving", detail: "Receive, inspect, supplier trace", path: "/material-receiving", icon: "package" },
   { label: "Wash", detail: "Record input, output, loss", path: "/production", icon: "activity" },
   { label: "Color Sorter", detail: "Optional sorting flow", path: "/color-sorter-batches", icon: "sparkles" },
-  { label: "Extrusion", detail: "FG output and wastage", path: "/extrusion-batches", icon: "factory" },
+  { label: "Extrusion", detail: "Material output and wastage", path: "/extrusion-batches", icon: "factory" },
   { label: "Dispatch", detail: "Ship finished goods", path: "/dispatch", icon: "truck" },
-  { label: "Month Close", detail: "Reconcile kg and rupees", path: "/monthly-close", icon: "lock" },
+  { label: "Month Close Control Room", detail: "Reconcile kg and rupees", path: "/monthly-close", icon: "lock" },
 ];
 
 const commandCards = [
   {
     title: "Production Flow",
-    subtitle: "One line view from RM inward to dispatch.",
-    path: "/production",
+    subtitle: "One line view from material receiving to dispatch.",
+    path: "/production-control-center",
     icon: "factory",
     accent: regenTheme.colors.green,
   },
@@ -43,7 +43,7 @@ const commandCards = [
 ];
 
 const focusTasks = [
-  { title: "Record current shift production", path: "/production", icon: "gauge" },
+  { title: "Record current shift production", path: "/production-control-center", icon: "gauge" },
   { title: "Issue stores item", path: "/stores-issue", icon: "boxes" },
   { title: "Check inventory position", path: "/live-inventory", icon: "package" },
   { title: "Review month close readiness", path: "/monthly-close", icon: "lock" },
@@ -71,8 +71,8 @@ export default function CommandCenter({ mode = "light", presentationMode = false
           </p>
 
           <div style={heroActions}>
-            <Link to="/production" style={primaryAction}>
-              Start Production Flow
+            <Link to="/production-control-center" style={primaryAction}>
+              Start Production Control
             </Link>
 
             <Link to="/dashboard" style={secondaryAction(m)}>
@@ -293,7 +293,7 @@ const stageIcon = (stage) => ({
   display: "grid",
   placeItems: "center",
   color: "white",
-  background: stage.label === "Month Close" ? regenTheme.colors.black : regenTheme.colors.deepGreen,
+  background: stage.label === "Month Close Control Room" ? regenTheme.colors.black : regenTheme.colors.deepGreen,
 });
 
 const kpiGrid = {

@@ -5,19 +5,19 @@ export default function InventoryReconciliation({ close }) {
 
   const rows = [
     {
-      label: "Raw Material Closing",
+      label: "Material Closing",
       value: close.inventory.rmClosingKg,
     },
     {
-      label: "Wash WIP",
+      label: "Washed Material",
       value: close.inventory.washClosingKg,
     },
     {
-      label: "Sorting WIP",
+      label: "Sorted Material",
       value: close.inventory.sortingClosingKg,
     },
     {
-      label: "Finished Goods Closing",
+      label: "Dispatch Material Closing",
       value: close.inventory.fgClosingKg,
     },
   ];

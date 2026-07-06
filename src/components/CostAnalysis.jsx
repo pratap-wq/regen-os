@@ -7,7 +7,7 @@ export default function CostAnalysis({ close }) {
 
   const rows = [
     {
-      title: "Raw Material Consumed",
+      title: "Material Consumed",
       value: c.estimatedRmConsumedValue,
       color: "#2563eb",
     },

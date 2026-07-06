@@ -179,7 +179,7 @@ export default function MonthlyAudit() {
     const baseLines = [
       {
         key: "RM|RM",
-        stage: "RM",
+        stage: "Material",
         module: "RM",
         itemType: "RM",
         itemCode: "RM",
@@ -188,7 +188,7 @@ export default function MonthlyAudit() {
       },
       {
         key: "WASHED|Washed Flakes",
-        stage: "Wash WIP",
+        stage: "Washed Material",
         module: "Wash",
         itemType: "WASHED",
         itemCode: "Washed Flakes",
@@ -197,7 +197,7 @@ export default function MonthlyAudit() {
       },
       {
         key: "SORTED|Sorted Material",
-        stage: "Sorting WIP",
+        stage: "Sorted Material",
         module: "Color Sorter",
         itemType: "SORTED",
         itemCode: "Sorted Material",
@@ -206,7 +206,7 @@ export default function MonthlyAudit() {
       },
       {
         key: "FG|E1",
-        stage: "Finished Goods",
+        stage: "Dispatch Material",
         module: "FG",
         itemType: "FG",
         itemCode: "E1",
@@ -282,11 +282,11 @@ export default function MonthlyAudit() {
     const list = [];
 
     if (close.rm.purchasedKg <= 0) {
-      list.push({ type: "danger", text: "No RM inward entries found." });
+      list.push({ type: "danger", text: "No material receiving entries found." });
     }
 
     if (close.production.fgProducedKg <= 0) {
-      list.push({ type: "danger", text: "No FG production found." });
+      list.push({ type: "danger", text: "No dispatch material production found." });
     }
 
     if (close.production.dispatchKg <= 0) {
@@ -375,7 +375,7 @@ export default function MonthlyAudit() {
         quantityKg: line.remainingKg * -1,
         adjustmentType: "Physical Count",
         reason: "Physical stock mismatch",
-        sourceRef: `Monthly Close ${month}`,
+        sourceRef: `Month Close Control Room ${month}`,
       },
     });
   }
@@ -435,10 +435,10 @@ export default function MonthlyAudit() {
         fgPhysicalKg: physical.fgPhysicalKg,
         storesPhysicalValue: physical.storesPhysicalValue,
 
-        rmVarianceKg: getLineVariance(materialLines, "RM"),
-        washVarianceKg: getLineVariance(materialLines, "Wash WIP"),
-        sortingVarianceKg: getLineVariance(materialLines, "Sorting WIP"),
-        fgVarianceKg: getLineVariance(materialLines, "Finished Goods"),
+        rmVarianceKg: getLineVariance(materialLines, "Material"),
+        washVarianceKg: getLineVariance(materialLines, "Washed Material"),
+        sortingVarianceKg: getLineVariance(materialLines, "Sorted Material"),
+        fgVarianceKg: getLineVariance(materialLines, "Dispatch Material"),
 
         factoryExpenses: close.costs.factoryExpenseValue,
         storesIssueQty: close.costs.storesIssueValue,
@@ -475,7 +475,7 @@ export default function MonthlyAudit() {
       <div style={header}>
         <div>
           <div style={eyebrow}>RegenOS Month-End Control</div>
-          <h1 style={title}>Monthly Close</h1>
+          <h1 style={title}>Month Close Control Room</h1>
           <div style={subtitle}>
             Review, reconcile, approve and close the month with full kg and rupee accountability.
           </div>
@@ -583,7 +583,7 @@ export default function MonthlyAudit() {
         </div>
 
         <div style={hintBox}>
-          Monthly Close only reviews differences. Corrections must be entered through Inventory Adjustments, then approved and posted to the inventory ledger. Physical count corrections are saved as new audit snapshots.
+          Month Close Control Room reviews differences. Corrections must be entered through Resolve Variance, then approved and posted to the inventory ledger. Physical count corrections are saved as new audit snapshots.
         </div>
       </Panel>
 
@@ -607,10 +607,10 @@ export default function MonthlyAudit() {
 
       <Panel title="Physical Stock & Sign-Off">
         <div style={approvalGrid}>
-          <InputBox label="Physical RM Kg" name="rmPhysicalKg" value={physical.rmPhysicalKg} onChange={onPhysicalChange} type="number" />
-          <InputBox label="Physical Wash WIP Kg" name="washPhysicalKg" value={physical.washPhysicalKg} onChange={onPhysicalChange} type="number" />
-          <InputBox label="Physical Sorting WIP Kg" name="sortingPhysicalKg" value={physical.sortingPhysicalKg} onChange={onPhysicalChange} type="number" />
-          <InputBox label="Physical FG Kg" name="fgPhysicalKg" value={physical.fgPhysicalKg} onChange={onPhysicalChange} type="number" />
+          <InputBox label="Physical Material Kg" name="rmPhysicalKg" value={physical.rmPhysicalKg} onChange={onPhysicalChange} type="number" />
+          <InputBox label="Physical Washed Material Kg" name="washPhysicalKg" value={physical.washPhysicalKg} onChange={onPhysicalChange} type="number" />
+          <InputBox label="Physical Sorted Material Kg" name="sortingPhysicalKg" value={physical.sortingPhysicalKg} onChange={onPhysicalChange} type="number" />
+          <InputBox label="Physical Dispatch Material Kg" name="fgPhysicalKg" value={physical.fgPhysicalKg} onChange={onPhysicalChange} type="number" />
           <InputBox label="Production Manager" name="productionSignoff" value={physical.productionSignoff} onChange={onPhysicalChange} />
           <InputBox label="Stores" name="storesSignoff" value={physical.storesSignoff} onChange={onPhysicalChange} />
           <InputBox label="Accounts" name="accountsSignoff" value={physical.accountsSignoff} onChange={onPhysicalChange} />
@@ -642,7 +642,7 @@ export default function MonthlyAudit() {
 
       <div style={closePanel}>
         <div>
-          <h2 style={{ margin: 0 }}>Close Month Snapshot</h2>
+          <h2 style={{ margin: 0 }}>Control Room Snapshot</h2>
           <div style={{ color: "#64748b", marginTop: 6 }}>
             Close is allowed only after material accountability is reconciled.
           </div>
@@ -713,7 +713,7 @@ function MonthCloseWorkflow({
       label: "Month Close",
       status: readyToClose ? "Ready" : "Not Ready",
       type: readyToClose ? "success" : "pending",
-      action: readyToClose ? "Close Month" : "Finish pending steps",
+      action: readyToClose ? "Lock Month" : "Finish pending steps",
     },
   ];
 

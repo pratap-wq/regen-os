@@ -45,7 +45,7 @@ export function calculateCeoDashboard({
   if (cost.overallRecoveryPercent > 0 && cost.overallRecoveryPercent < 88) {
     alerts.push({
       severity: "HIGH",
-      message: "Overall recovery is below 88%. Check RM quality and process losses.",
+      message: "Overall recovery is below 88%. Check material quality and process losses.",
     });
   }
 
@@ -67,7 +67,7 @@ export function calculateCeoDashboard({
 
   if (cost.effectiveRmCostPerKg > cost.avgRmCostPerKg + 5) {
     recommendations.push(
-      "Recovery loss is adding more than ₹5/kg. Prioritize better RM mix and reduce contamination."
+      "Recovery loss is adding more than ₹5/kg. Prioritize better material mix and reduce contamination."
     );
   }
 

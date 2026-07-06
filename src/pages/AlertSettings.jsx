@@ -306,8 +306,8 @@ export default function AlertSettings() {
               Stores
             </option>
 
-            <option>
-              RM
+            <option value="RM">
+              Material
             </option>
 
             <option>

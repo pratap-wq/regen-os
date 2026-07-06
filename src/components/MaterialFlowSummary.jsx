@@ -42,7 +42,7 @@ export default function MaterialFlowSummary({ data = {} }) {
 
   const rows = [
     {
-      label: "Finished Goods",
+      label: "Dispatch Material",
       qty: fgKg,
       percent: pct(fgKg, rmInputKg),
       value: salesValue,
@@ -143,7 +143,7 @@ export default function MaterialFlowSummary({ data = {} }) {
 
       <div style={flowBox}>
         <div style={inputNode}>
-          <div style={nodeLabel}>RM Input</div>
+          <div style={nodeLabel}>Material Input</div>
           <div style={nodeValue}>{formatTon(rmInputKg)}</div>
         </div>
 

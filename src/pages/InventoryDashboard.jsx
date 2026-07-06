@@ -211,7 +211,7 @@ export default function InventoryDashboard() {
           <div style={eyebrow}>Inventory Intelligence</div>
           <h1 style={title}>Inventory Dashboard</h1>
           <div style={subtitle}>
-            RM, washed stock, sorting stock, finished goods and stores control.
+            material receiving, washed stock, sorted stock, dispatch material and stores control.
           </div>
         </div>
 
@@ -248,27 +248,27 @@ export default function InventoryDashboard() {
       </div>
 
       <div style={kpiGrid}>
-        <KPI title="RM Stock" value={`${ton(data.rmStock)} T`} />
+        <KPI title="Material Stock" value={`${ton(data.rmStock)} T`} />
         <KPI title="Washed Stock" value={`${ton(data.washedStock)} T`} />
         <KPI title="Sorting Stock" value={`${ton(data.sortingStock)} T`} />
-        <KPI title="FG Stock" value={`${ton(data.fgStock)} T`} />
+        <KPI title="Dispatch Material Stock" value={`${ton(data.fgStock)} T`} />
         <KPI title="Critical Stores" value={data.criticalItems.length} color="#dc2626" />
         <KPI title="Inventory Value" value={`₹ ${cr(data.totalInventoryValue)} Cr`} />
       </div>
 
       <div style={twoCol}>
-        <Panel title="RM Flow">
+        <Panel title="Material Flow">
           <Metric label="Purchased" value={`${ton(data.rmPurchased)} T`} />
           <Metric label="Consumed" value={`${ton(data.rmConsumed)} T`} />
-          <Metric label="Closing RM" value={`${ton(data.rmStock)} T`} />
-          <Metric label="Avg RM Rate" value={`₹ ${data.avgRmRate.toFixed(2)}/kg`} />
+          <Metric label="Closing Material" value={`${ton(data.rmStock)} T`} />
+          <Metric label="Avg Material Rate" value={`₹ ${data.avgRmRate.toFixed(2)}/kg`} />
         </Panel>
 
-        <Panel title="FG Flow">
+        <Panel title="Dispatch Material Flow">
           <Metric label="Produced" value={`${ton(data.fgProduced)} T`} />
           <Metric label="Dispatched" value={`${ton(data.fgDispatched)} T`} />
-          <Metric label="Closing FG" value={`${ton(data.fgStock)} T`} />
-          <Metric label="Estimated FG Value" value={`₹ ${lakh(data.fgEstimatedValue)} L`} />
+          <Metric label="Closing Dispatch Material" value={`${ton(data.fgStock)} T`} />
+          <Metric label="Estimated Dispatch Value" value={`₹ ${lakh(data.fgEstimatedValue)} L`} />
         </Panel>
       </div>
 
@@ -281,8 +281,8 @@ export default function InventoryDashboard() {
         </Panel>
 
         <Panel title="Inventory Health">
-          <Status label="RM Stock" ok={data.rmStock > 0} />
-          <Status label="FG Stock" ok={data.fgStock >= 0} />
+          <Status label="Material Stock" ok={data.rmStock > 0} />
+          <Status label="Dispatch Material Stock" ok={data.fgStock >= 0} />
           <Status label="Stores" ok={data.criticalItems.length === 0} />
           <Status label="Working Capital Lock" ok={data.totalInventoryValue > 0} />
         </Panel>

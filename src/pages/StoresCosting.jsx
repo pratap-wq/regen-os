@@ -348,7 +348,7 @@ export default function StoresCosting() {
         <KPI title="Stores Inward Value" value={`₹ ${lakh(data.inwardValue)} L`} />
         <KPI title="Stores Issue Value" value={`₹ ${lakh(data.issueValue)} L`} color="#dc2626" />
         <KPI title="Closing Stock Value" value={`₹ ${lakh(data.closingStockValue)} L`} />
-        <KPI title="FG Production" value={`${ton(data.fgProduced)} T`} />
+        <KPI title="Material Production" value={`${ton(data.fgProduced)} T`} />
         <KPI title="Stores Cost / Kg" value={`₹ ${data.storesCostPerKg.toFixed(2)}`} color="#d97706" />
       </div>
 

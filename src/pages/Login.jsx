@@ -71,7 +71,7 @@ export default function Login() {
             marginBottom: 30,
           }}
         >
-          v1.0 RC1 · Factory ERP Access
+          v1.0 RC1 · Factory Super App Access
         </p>
 
         <button

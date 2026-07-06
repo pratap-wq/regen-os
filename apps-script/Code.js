@@ -1871,6 +1871,97 @@ function addMaterialBucket(data = {}) {
   return output({ ok: true, bucketId });
 }
 
+function seedStandardMaterialBuckets() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  let sh = ss.getSheetByName("Material_Buckets");
+  const headers = transformationSchemaHeaders_("Material_Buckets");
+
+  if (!sh) {
+    sh = ss.insertSheet("Material_Buckets");
+    sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+    freezeHeaderRow_(sh);
+  } else {
+    ensureHeaders_("Material_Buckets", headers);
+  }
+
+  const existingNames = {};
+
+  getRowsAsObjects("Material_Buckets").forEach((row) => {
+    const name = String(row.bucketName || "").trim().toLowerCase();
+    if (name) existingNames[name] = true;
+  });
+
+  const standardBuckets = [
+    ["White Flakes", "RM", "PP", "RECEIVING", "WASH"],
+    ["White Buckets", "RM", "PP", "RECEIVING", "WASH"],
+    ["Mixed Buckets", "RM", "PP", "RECEIVING", "WASH"],
+    ["Battery Scrap", "RM", "PP", "RECEIVING", "WASH"],
+    ["Jars", "RM", "PP", "RECEIVING", "WASH"],
+    ["Lids", "RM", "PP", "RECEIVING", "WASH"],
+    ["PP Mixed", "RM", "PP", "RECEIVING", "WASH"],
+
+    ["Washed White Flakes", "WIP", "PP", "WASH", "SORTING"],
+    ["Washed Mixed", "WIP", "PP", "WASH", "SORTING"],
+    ["White Sorted", "WIP", "PP", "SORTING", "EXTRUSION"],
+    ["Commodity", "WIP", "PP", "SORTING", "EXTRUSION"],
+    ["Mixed Sorted", "WIP", "PP", "SORTING", "EXTRUSION"],
+
+    ["E1", "FG", "PP", "EXTRUSION", "DISPATCH"],
+    ["E2", "FG", "PP", "EXTRUSION", "DISPATCH"],
+    ["E3", "FG", "PP", "EXTRUSION", "DISPATCH"],
+    ["E4", "FG", "PP", "EXTRUSION", "DISPATCH"],
+    ["E5", "FG", "PP", "EXTRUSION", "DISPATCH"],
+
+    ["Sink Material", "WASTE", "PP", "WASH", "REWORK"],
+    ["Color Reject", "WASTE", "PP", "SORTING", "REWORK"],
+    ["Dust", "WASTE", "PP", "ANY", "DISPOSAL"],
+    ["Metal Reject", "WASTE", "PP", "RECEIVING", "DISPOSAL"],
+    ["Extrusion Waste", "WASTE", "PP", "EXTRUSION", "REWORK"],
+    ["Lumps", "WASTE", "PP", "EXTRUSION", "REWORK"],
+    ["Purging", "WASTE", "PP", "EXTRUSION", "REWORK"],
+    ["Rework Material", "WASTE", "PP", "REWORK", "REWORK"],
+  ];
+
+  const inserted = [];
+  const skipped = [];
+
+  standardBuckets.forEach((bucket) => {
+    const bucketName = bucket[0];
+    const key = bucketName.toLowerCase();
+
+    if (existingNames[key]) {
+      skipped.push(bucketName);
+      return;
+    }
+
+    appendObjectRow(sh, {
+      bucketId: generateBatchId("BKT"),
+      bucketName,
+      bucketType: bucket[1],
+      materialFamily: bucket[2],
+      processStage: bucket[3],
+      defaultNextProcess: bucket[4],
+      status: "ACTIVE",
+      createdBy: "seedStandardMaterialBuckets",
+      createdAt: new Date(),
+    });
+
+    existingNames[key] = true;
+    inserted.push(bucketName);
+  });
+
+  const result = {
+    ok: true,
+    insertedCount: inserted.length,
+    skippedCount: skipped.length,
+    inserted,
+    skipped,
+  };
+
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
 function listTransformationRuns(data = {}) {
   const runs = getRowsAsObjects("Transformation_Runs").filter((r) => !isDeleted_(r));
   const inputs = getRowsAsObjects("Transformation_Inputs").filter((r) => !isDeleted_(r));

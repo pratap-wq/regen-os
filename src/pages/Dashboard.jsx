@@ -16,6 +16,10 @@ export default function Dashboard() {
   const [factoryExpenseRows, setFactoryExpenseRows] = useState([]);
   const [factoryCostMasterRows, setFactoryCostMasterRows] = useState([]);
   const [consumableRows, setConsumableRows] = useState([]);
+  const [costApiDebug, setCostApiDebug] = useState({
+    factoryExpenses: null,
+    factoryCostMaster: null,
+  });
 
   const [month, setMonth] = useState(
     String(now.getMonth() + 1).padStart(2, "0")
@@ -30,9 +34,46 @@ export default function Dashboard() {
   async function safeLoad(fn) {
     try {
       const res = await apiCall({ fn });
-      return res.rows || [];
+      const rows = Array.isArray(res.rows)
+        ? res.rows
+        : Array.isArray(res.data)
+          ? res.data
+          : [];
+
+      if (fn === "factoryExpenses.list" || fn === "factoryCostMaster.list") {
+        setCostApiDebug((prev) => ({
+          ...prev,
+          [fn === "factoryExpenses.list" ? "factoryExpenses" : "factoryCostMaster"]: {
+            fn,
+            ok: res.ok,
+            topLevelKeys: Object.keys(res || {}),
+            rowsKeyCount: Array.isArray(res.rows) ? res.rows.length : null,
+            dataKeyCount: Array.isArray(res.data) ? res.data.length : null,
+            normalizedRowsCount: rows.length,
+            first3Rows: rows.slice(0, 3),
+            error: res.error || "",
+          },
+        }));
+      }
+
+      return rows;
     } catch (err) {
       console.log(fn, err);
+      if (fn === "factoryExpenses.list" || fn === "factoryCostMaster.list") {
+        setCostApiDebug((prev) => ({
+          ...prev,
+          [fn === "factoryExpenses.list" ? "factoryExpenses" : "factoryCostMaster"]: {
+            fn,
+            ok: false,
+            topLevelKeys: [],
+            rowsKeyCount: null,
+            dataKeyCount: null,
+            normalizedRowsCount: 0,
+            first3Rows: [],
+            error: err.message || String(err),
+          },
+        }));
+      }
       return [];
     }
   }
@@ -174,6 +215,22 @@ export default function Dashboard() {
   function factoryCostInSelectedMonth(row) {
     const pm = periodMonthOnly(row.periodMonth || row.date || row.createdAt || "");
     return pm === `${year}-${month}`;
+  }
+
+  function debugRow(row = {}) {
+    return {
+      periodMonth: row.periodMonth || "",
+      date: row.date || "",
+      createdAt: row.createdAt || "",
+      normalizedPeriod: periodMonthOnly(
+        row.periodMonth || row.date || row.createdAt || ""
+      ),
+      amount: rowAmount(row),
+      category: row.category || row.costHead || "",
+      description: row.description || row.remarks || "",
+      status: row.status || "",
+      raw: row,
+    };
   }
 
   const data = useMemo(() => {
@@ -449,10 +506,28 @@ export default function Dashboard() {
         (s, r) => s + rowAmount(r),
         0
       ),
+      costEngineInputRows: {
+        factoryExpenseRows: factoryExpenseRows.length,
+        factoryCostMasterRows: factoryCostMasterRows.length,
+      },
+      costEngineOutputTotals: {
+        factoryExpenseValue: data.costEngine.factoryExpenseValue,
+        fixedCostValue: data.costEngine.fixedCostValue,
+      },
+      renderedKpiValues: {
+        factoryExpenses: data.factoryExpenseValue,
+        fixedCostTotal: data.costEngine.fixedCostValue,
+      },
+      browserApiResponses: costApiDebug,
       rawFirst3FactoryExpensesRows: factoryExpenseRows.slice(0, 3),
       rawFirst3FactoryCostMasterRows: factoryCostMasterRows.slice(0, 3),
+      normalizedFirst3FactoryExpensesRows: factoryExpenseRows.slice(0, 3).map(debugRow),
+      normalizedFirst3FactoryCostMasterRows:
+        factoryCostMasterRows.slice(0, 3).map(debugRow),
+      matchedFactoryExpenseRows: matchingFactoryExpenses.map(debugRow),
+      matchedFactoryCostMasterRows: matchingFactoryCostMaster.map(debugRow),
     };
-  }, [factoryExpenseRows, factoryCostMasterRows, month, year]);
+  }, [factoryExpenseRows, factoryCostMasterRows, month, year, data, costApiDebug]);
 
   return (
     <div style={page}>
@@ -692,6 +767,8 @@ export default function Dashboard() {
       <Panel title="Temporary Dashboard Cost Debug">
         <div style={debugGrid}>
           <DebugMetric label="selectedMonth" value={debugData.selectedMonth} />
+          <DebugMetric label="month state" value={month} />
+          <DebugMetric label="year state" value={year} />
           <DebugMetric
             label="factoryExpenses row count"
             value={debugData.factoryExpensesRowCount}
@@ -716,6 +793,22 @@ export default function Dashboard() {
             label="fixedCost total"
             value={`₹ ${debugData.fixedCostTotal.toFixed(2)}`}
           />
+          <DebugMetric
+            label="costEngine factoryExpenseValue"
+            value={debugData.costEngineOutputTotals.factoryExpenseValue.toFixed(2)}
+          />
+          <DebugMetric
+            label="costEngine fixedCostValue"
+            value={debugData.costEngineOutputTotals.fixedCostValue.toFixed(2)}
+          />
+          <DebugMetric
+            label="rendered Factory Expenses KPI"
+            value={debugData.renderedKpiValues.factoryExpenses.toFixed(2)}
+          />
+          <DebugMetric
+            label="rendered Fixed Cost KPI"
+            value={debugData.renderedKpiValues.fixedCostTotal.toFixed(2)}
+          />
         </div>
 
         <div style={debugTwoCol}>
@@ -730,6 +823,56 @@ export default function Dashboard() {
             <div style={debugLabel}>raw first 3 Factory_Cost_Master rows</div>
             <pre style={debugPre}>
               {JSON.stringify(debugData.rawFirst3FactoryCostMasterRows, null, 2)}
+            </pre>
+          </div>
+        </div>
+
+        <div style={debugLabel}>browser API responses</div>
+        <pre style={debugPre}>
+          {JSON.stringify(debugData.browserApiResponses, null, 2)}
+        </pre>
+
+        <div style={debugLabel}>calculateCostEngine input rows and output totals</div>
+        <pre style={debugPre}>
+          {JSON.stringify(
+            {
+              costEngineInputRows: debugData.costEngineInputRows,
+              costEngineOutputTotals: debugData.costEngineOutputTotals,
+              renderedKpiValues: debugData.renderedKpiValues,
+            },
+            null,
+            2
+          )}
+        </pre>
+
+        <div style={debugTwoCol}>
+          <div>
+            <div style={debugLabel}>normalized first 3 Factory_Expenses rows</div>
+            <pre style={debugPre}>
+              {JSON.stringify(debugData.normalizedFirst3FactoryExpensesRows, null, 2)}
+            </pre>
+          </div>
+
+          <div>
+            <div style={debugLabel}>normalized first 3 Factory_Cost_Master rows</div>
+            <pre style={debugPre}>
+              {JSON.stringify(debugData.normalizedFirst3FactoryCostMasterRows, null, 2)}
+            </pre>
+          </div>
+        </div>
+
+        <div style={debugTwoCol}>
+          <div>
+            <div style={debugLabel}>matched Factory_Expenses rows</div>
+            <pre style={debugPre}>
+              {JSON.stringify(debugData.matchedFactoryExpenseRows, null, 2)}
+            </pre>
+          </div>
+
+          <div>
+            <div style={debugLabel}>matched Factory_Cost_Master rows</div>
+            <pre style={debugPre}>
+              {JSON.stringify(debugData.matchedFactoryCostMasterRows, null, 2)}
             </pre>
           </div>
         </div>

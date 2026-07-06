@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 import DataTable from "../components/DataTable";
+import FactoryDropdown from "../components/FactoryDropdown";
 
 export default function RMInward() {
   const currentDate = new Date().toISOString().split("T")[0];
@@ -393,13 +394,15 @@ export default function RMInward() {
         </Field>
 
         <Field label="Supplier">
-          <select name="supplier" value={form.supplier} onChange={onChange} style={inputStyle} required>
-            <option value="">Select Supplier</option>
-            {suppliers.map((s, i) => {
-              const supplierName = s.supplierName || s.name || "";
-              return <option key={i} value={supplierName}>{supplierName}</option>;
-            })}
-          </select>
+          <FactoryDropdown
+            masterType="supplier"
+            name="supplier"
+            value={form.supplier}
+            onChange={onChange}
+            placeholder="Select Supplier"
+            style={inputStyle}
+            required
+          />
         </Field>
 
         <Field label="Location">
@@ -421,12 +424,20 @@ export default function RMInward() {
         </Field>
 
         <Field label="Material">
-          <select name="material" value={form.material} onChange={onChange} style={inputStyle} required>
-            <option value="">Select Material</option>
-            {categories.map((c, i) => (
-              <option key={i} value={c.categoryName}>{c.categoryName}</option>
-            ))}
-          </select>
+          <FactoryDropdown
+            masterType="material"
+            name="material"
+            value={form.material}
+            onChange={onChange}
+            placeholder="Select Material"
+            style={inputStyle}
+            required
+            filter={(item) =>
+              ["RM", "WIP", "REWORK"].includes(
+                String(item.category || item.materialType || "").toUpperCase()
+              )
+            }
+          />
         </Field>
 
         <Field label="Color">
@@ -614,13 +625,15 @@ export default function RMInward() {
               </Field>
 
               <Field label="Supplier">
-                <select name="supplier" value={editingRow.supplier || ""} onChange={onEditChange} style={inputStyle} required>
-                  <option value="">Select Supplier</option>
-                  {suppliers.map((s, i) => {
-                    const supplierName = s.supplierName || s.name || "";
-                    return <option key={i} value={supplierName}>{supplierName}</option>;
-                  })}
-                </select>
+                <FactoryDropdown
+                  masterType="supplier"
+                  name="supplier"
+                  value={editingRow.supplier || ""}
+                  onChange={onEditChange}
+                  placeholder="Select Supplier"
+                  style={inputStyle}
+                  required
+                />
               </Field>
 
               <Field label="Location">
@@ -642,12 +655,20 @@ export default function RMInward() {
               </Field>
 
               <Field label="Material">
-                <select name="material" value={editingRow.material || ""} onChange={onEditChange} style={inputStyle} required>
-                  <option value="">Select Material</option>
-                  {categories.map((c, i) => (
-                    <option key={i} value={c.categoryName}>{c.categoryName}</option>
-                  ))}
-                </select>
+                <FactoryDropdown
+                  masterType="material"
+                  name="material"
+                  value={editingRow.material || ""}
+                  onChange={onEditChange}
+                  placeholder="Select Material"
+                  style={inputStyle}
+                  required
+                  filter={(item) =>
+                    ["RM", "WIP", "REWORK"].includes(
+                      String(item.category || item.materialType || "").toUpperCase()
+                    )
+                  }
+                />
               </Field>
 
               <Field label="Color">

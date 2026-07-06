@@ -1,20 +1,6 @@
-export default function InventoryFeedTable({ rows, setRows }) {
-  const sourceTypes = [
-    "WHITE_FLAKES",
-    "SORTED_FLAKES",
-    "WASHED_FLAKES",
-    "RECOVERY_MATERIAL",
-    "REWORK_GRANULES",
-    "LUMPS",
-    "PURGING",
-    "VIRGIN_PP",
-    "BATTERY_REGRIND",
-    "MASTERBATCH",
-    "ANTIOXIDANT",
-    "ADDITIVE_PACKAGE",
-    "OTHER",
-  ];
+import FactoryDropdown from "./FactoryDropdown";
 
+export default function InventoryFeedTable({ rows, setRows }) {
   function updateRow(index, key, value) {
     setRows(
       rows.map((row, i) =>
@@ -66,18 +52,19 @@ export default function InventoryFeedTable({ rows, setRows }) {
           {(rows || []).map((r, i) => (
             <tr key={i}>
               <td style={td}>
-                <select
+                <FactoryDropdown
+                  masterType="material"
+                  name="sourceType"
                   value={r.sourceType || ""}
                   onChange={(e) => updateRow(i, "sourceType", e.target.value)}
+                  placeholder="Select Material"
                   style={input}
-                >
-                  <option value="">Select Source</option>
-                  {sourceTypes.map((x) => (
-                    <option key={x} value={x}>
-                      {x}
-                    </option>
-                  ))}
-                </select>
+                  filter={(item) =>
+                    ["RM", "WIP", "REWORK", "ADDITIVE", "WASTE"].includes(
+                      String(item.category || item.materialType || "").toUpperCase()
+                    )
+                  }
+                />
               </td>
 
               <td style={td}>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
 import FormSection from "../components/FormSection";
 import InventoryFeedTable from "../components/InventoryFeedTable";
+import FactoryDropdown from "../components/FactoryDropdown";
 import { generateExtrusionBatchId } from "../utils/idGenerator";
 import { buildInventoryLots } from "../utils/inventoryLots";
 
@@ -67,6 +68,7 @@ export default function Production() {
     sorterRejectKg: "",
 
     extrusionBatchId: "",
+    recipeName: "",
     fgOutputKg: "",
     lumpsKg: "",
     purgingKg: "",
@@ -580,20 +582,31 @@ Raw Material and Finished Goods quality testing is performed separately in the Q
             onChange={onChange}
           />
 
-          <SelectField
+          <FactorySelectField
             label="Machine"
+            masterType="machine"
             name="machineWash"
             value={form.machineWash}
             onChange={onChange}
-            options={machines.map((m) => m.machineName)}
+            placeholder="Select Machine"
+            filter={(item) => {
+              const process = String(item.processType || item.machineType || "").toUpperCase();
+              return !process || process.includes("WASH");
+            }}
           />
 
-          <SelectField
+          <FactorySelectField
             label="Material"
+            masterType="material"
             name="washInputMaterial"
             value={form.washInputMaterial}
             onChange={onChange}
-            options={washMaterialOptions}
+            placeholder="Select Material"
+            filter={(item) =>
+              ["RM", "WIP", "REWORK"].includes(
+                String(item.category || item.materialType || "").toUpperCase()
+              )
+            }
           />
 
           <Field label="Input Kg" name="washInputKg" value={form.washInputKg} onChange={onChange} />
@@ -612,20 +625,31 @@ Raw Material and Finished Goods quality testing is performed separately in the Q
           <Field label="Operator" name="sorterOperatorName" value={form.sorterOperatorName} onChange={onChange} />
           <Field label="Supervisor" name="sorterSupervisorName" value={form.sorterSupervisorName} onChange={onChange} />
 
-          <SelectField
+          <FactorySelectField
             label="Machine"
+            masterType="machine"
             name="machineSorter"
             value={form.machineSorter}
             onChange={onChange}
-            options={machines.map((m) => m.machineName)}
+            placeholder="Select Machine"
+            filter={(item) => {
+              const process = String(item.processType || item.machineType || "").toUpperCase();
+              return !process || process.includes("SORT");
+            }}
           />
 
-          <SelectField
+          <FactorySelectField
             label="Sorter Input Material"
+            masterType="material"
             name="sorterInputMaterial"
             value={form.sorterInputMaterial}
             onChange={onChange}
-            options={sortingMaterialOptions}
+            placeholder="Select Material"
+            filter={(item) =>
+              ["WIP", "REWORK"].includes(
+                String(item.category || item.materialType || "").toUpperCase()
+              )
+            }
           />
 
           <Field label="Input Kg" name="sorterInputKg" value={form.sorterInputKg} onChange={onChange} />
@@ -642,20 +666,38 @@ Raw Material and Finished Goods quality testing is performed separately in the Q
           <Field label="Operator" name="extruderOperatorName" value={form.extruderOperatorName} onChange={onChange} />
           <Field label="Supervisor" name="extruderSupervisorName" value={form.extruderSupervisorName} onChange={onChange} />
 
-          <SelectField
+          <FactorySelectField
             label="Machine"
+            masterType="machine"
             name="machineExtruder"
             value={form.machineExtruder}
             onChange={onChange}
-            options={machines.map((m) => m.machineName)}
+            placeholder="Select Machine"
+            filter={(item) => {
+              const process = String(item.processType || item.machineType || "").toUpperCase();
+              return !process || process.includes("EXTRUSION") || process.includes("EXTRUDER");
+            }}
           />
 
-          <SelectField
+          <FactorySelectField
+            label="Recipe"
+            masterType="recipe"
+            name="recipeName"
+            value={form.recipeName}
+            onChange={onChange}
+            placeholder="Select Recipe"
+          />
+
+          <FactorySelectField
             label="Production Grade"
+            masterType="material"
             name="productionGrade"
             value={form.productionGrade}
             onChange={onChange}
-            options={productionGrades}
+            placeholder="Select Grade"
+            filter={(item) =>
+              String(item.category || item.materialType || "").toUpperCase() === "FG"
+            }
           />
 
           <Field
@@ -786,6 +828,21 @@ function SelectField({ label, name, value, onChange, options }) {
         ))}
       </select>
     </div>
+  );
+}
+
+function FactorySelectField({ label, masterType, name, value, onChange, placeholder, filter }) {
+  return (
+    <FactoryDropdown
+      label={label}
+      masterType={masterType}
+      name={name}
+      value={value}
+      onChange={onChange}
+      placeholder={placeholder || "Select"}
+      style={selectStyle}
+      filter={filter}
+    />
   );
 }
 

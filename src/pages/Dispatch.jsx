@@ -4,6 +4,7 @@ import { formatDate } from "../utils/date";
 
 import DataTable from "../components/DataTable";
 import FormSection from "../components/FormSection";
+import FactoryDropdown from "../components/FactoryDropdown";
 import {
   materialInventoryFromLedgerBalances,
   normalizeInventoryMaterial,
@@ -616,20 +617,18 @@ export default function Dispatch() {
           </Field>
 
           <Field label="Material">
-            <select
+            <FactoryDropdown
+              masterType="material"
               name="material"
               value={form.material}
               onChange={onChange}
+              placeholder="Select Material"
               style={inputStyle}
               required
-            >
-              <option value="">Select Material</option>
-              {materialInventory.map((x) => (
-                <option key={x.material} value={x.material}>
-                  {x.material}
-                </option>
-              ))}
-            </select>
+              filter={(item) =>
+                String(item.category || item.materialType || "").toUpperCase() === "FG"
+              }
+            />
           </Field>
 
           <Field label="Available Quantity">
@@ -663,10 +662,12 @@ export default function Dispatch() {
         </FormSection>
         <FormSection title="Customer & Logistics">
           <Field label="Customer">
-            <input
+            <FactoryDropdown
+              masterType="customer"
               name="customerName"
               value={form.customerName}
               onChange={onChange}
+              placeholder="Select Customer"
               style={inputStyle}
             />
           </Field>

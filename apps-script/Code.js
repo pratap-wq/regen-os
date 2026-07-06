@@ -20,6 +20,11 @@ function doGet(e) {
     if (p.fn === "categories.list") return listMaster("Material_Categories");
     if (p.fn === "grades.list") return listMaster("Production_Grades");
     if (p.fn === "colors.list") return listMaster("Color_Master");
+    if (p.fn === "factoryMaster.list") return listFactoryMaster(p);
+    if (p.fn === "factoryMaster.add") return addFactoryMaster(p);
+    if (p.fn === "factoryMaster.update") return updateFactoryMaster(p);
+    if (p.fn === "factoryMaster.disable") return disableFactoryMaster(p);
+    if (p.fn === "factoryMaster.merge") return mergeFactoryMaster(p);
     if (p.fn === "productionMaterials.list") return listMaster("Production_Materials");
     if (p.fn === "productionMaterials.add") return addProductionMaterial(p);
     if (p.fn === "productionMaterials.update") return updateProductionMaterial(p);
@@ -626,6 +631,13 @@ const REGEN_DB_SCHEMA = {
     "createdBy",
     "createdAt",
     "updatedAt",
+    "updatedBy",
+    "disabledBy",
+    "disabledAt",
+    "mergedIntoId",
+    "mergedBy",
+    "mergedAt",
+    "favorite",
   ],
   Production_Recipes: [
     "recipeId",
@@ -639,6 +651,13 @@ const REGEN_DB_SCHEMA = {
     "createdBy",
     "createdAt",
     "updatedAt",
+    "updatedBy",
+    "disabledBy",
+    "disabledAt",
+    "mergedIntoId",
+    "mergedBy",
+    "mergedAt",
+    "favorite",
   ],
   Recipe_Components: [
     "componentId",
@@ -653,6 +672,72 @@ const REGEN_DB_SCHEMA = {
     "createdBy",
     "createdAt",
     "updatedAt",
+    "updatedBy",
+    "disabledBy",
+    "disabledAt",
+    "mergedIntoId",
+    "mergedBy",
+    "mergedAt",
+    "favorite",
+  ],
+  Customers: [
+    "customerId",
+    "customerName",
+    "customerCode",
+    "customerUnit",
+    "contactPerson",
+    "phone",
+    "email",
+    "gstNo",
+    "address",
+    "status",
+    "createdBy",
+    "createdAt",
+    "updatedBy",
+    "updatedAt",
+    "disabledBy",
+    "disabledAt",
+    "mergedIntoId",
+    "mergedBy",
+    "mergedAt",
+    "favorite",
+  ],
+  Quality_Test_Master: [
+    "testId",
+    "testName",
+    "testCode",
+    "materialCategory",
+    "unit",
+    "specMin",
+    "specMax",
+    "status",
+    "createdBy",
+    "createdAt",
+    "updatedBy",
+    "updatedAt",
+    "disabledBy",
+    "disabledAt",
+    "mergedIntoId",
+    "mergedBy",
+    "mergedAt",
+    "favorite",
+  ],
+  Expense_Category_Master: [
+    "categoryId",
+    "categoryName",
+    "categoryCode",
+    "expenseType",
+    "status",
+    "createdBy",
+    "createdAt",
+    "updatedBy",
+    "updatedAt",
+    "disabledBy",
+    "disabledAt",
+    "mergedIntoId",
+    "mergedBy",
+    "mergedAt",
+    "favorite",
   ],
   Production_Materials: [
     "materialId",
@@ -1919,6 +2004,240 @@ function archivedModelResponse_(sheetName, isWrite) {
     rows: [],
     error: isWrite ? sheetName + " is archived in RegenOS v1 architecture freeze" : "",
     message: "Experimental bucket/transformation model is archived. Data is retained in Sheets but not used for active operations.",
+  });
+}
+
+function factoryMasterConfigs_() {
+  return {
+    material: {
+      sheet: "Material_Master",
+      idField: "materialId",
+      nameField: "materialName",
+      codeField: "materialCode",
+      idPrefix: "MAT",
+      headers: materialMasterHeaders_(),
+      defaults: { category: "RM", unit: "Kg", defaultQualityRequired: "NO" },
+    },
+    supplier: {
+      sheet: "Suppliers",
+      idField: "supplierId",
+      nameField: "supplierName",
+      codeField: "",
+      idPrefix: "SUP",
+      headers: (REGEN_DB_SCHEMA.Suppliers || []).concat(["status", "updatedBy", "updatedAt", "disabledBy", "disabledAt", "mergedIntoId", "mergedBy", "mergedAt", "favorite"]),
+      defaults: { supplierType: "RAW_MATERIAL", isActive: "TRUE" },
+    },
+    customer: {
+      sheet: "Customers",
+      idField: "customerId",
+      nameField: "customerName",
+      codeField: "customerCode",
+      idPrefix: "CUS",
+      headers: REGEN_DB_SCHEMA.Customers,
+      defaults: {},
+    },
+    machine: {
+      sheet: "Machine_Master",
+      idField: "machineId",
+      nameField: "machineName",
+      codeField: "machineCode",
+      idPrefix: "MAC",
+      headers: ["machineId", "machineCode", "machineName", "machineType", "processType", "status", "createdBy", "createdAt", "updatedBy", "updatedAt", "disabledBy", "disabledAt", "mergedIntoId", "mergedBy", "mergedAt", "favorite"],
+      defaults: {},
+    },
+    recipe: {
+      sheet: "Production_Recipes",
+      idField: "recipeId",
+      nameField: "recipeName",
+      codeField: "recipeCode",
+      idPrefix: "RCP",
+      headers: recipeHeaders_(),
+      defaults: { processType: "EXTRUSION" },
+    },
+    storeItem: {
+      sheet: "Stores_Master",
+      idField: "itemId",
+      nameField: "itemName",
+      codeField: "",
+      idPrefix: "STI",
+      headers: (REGEN_DB_SCHEMA.Stores_Master || []).concat(["updatedBy", "updatedAt", "disabledBy", "disabledAt", "mergedIntoId", "mergedBy", "mergedAt", "favorite"]),
+      defaults: { unit: "Nos" },
+    },
+    qualityTest: {
+      sheet: "Quality_Test_Master",
+      idField: "testId",
+      nameField: "testName",
+      codeField: "testCode",
+      idPrefix: "QTM",
+      headers: REGEN_DB_SCHEMA.Quality_Test_Master,
+      defaults: {},
+    },
+    expenseCategory: {
+      sheet: "Expense_Category_Master",
+      idField: "categoryId",
+      nameField: "categoryName",
+      codeField: "categoryCode",
+      idPrefix: "EXC",
+      headers: REGEN_DB_SCHEMA.Expense_Category_Master,
+      defaults: {},
+    },
+  };
+}
+
+function factoryMasterConfig_(type) {
+  const key = String(type || "").trim();
+  const config = factoryMasterConfigs_()[key];
+  if (!config) throw new Error("Unsupported factory master type: " + key);
+  return config;
+}
+
+function uniqueHeaders_(headers) {
+  const seen = {};
+  return (headers || []).filter((header) => {
+    const key = String(header || "").trim();
+    if (!key || seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+}
+
+function ensureFactoryMasterSheet_(config) {
+  const headers = uniqueHeaders_(config.headers || []);
+  createSheetIfMissing_(config.sheet, headers);
+  ensureHeaders_(config.sheet, headers);
+}
+
+function normalizeFactoryMasterRow_(row, config) {
+  const status = row.status || (String(row.isActive || "").toUpperCase() === "FALSE" ? "DISABLED" : "ACTIVE");
+  return {
+    ...row,
+    id: row[config.idField] || "",
+    name: row[config.nameField] || row.name || "",
+    status,
+    favorite: String(row.favorite || "").toUpperCase() === "TRUE",
+  };
+}
+
+function listFactoryMaster(data = {}) {
+  const config = factoryMasterConfig_(data.masterType || data.type);
+  ensureFactoryMasterSheet_(config);
+
+  const search = String(data.search || "").trim().toLowerCase();
+  const includeDisabled = String(data.includeDisabled || "").toUpperCase() === "TRUE";
+
+  let rows = getRowsAsObjects(config.sheet)
+    .filter((row) => !isDeleted_(row))
+    .map((row) => normalizeFactoryMasterRow_(row, config));
+
+  if (!includeDisabled) {
+    rows = rows.filter((row) => ["DISABLED", "INACTIVE", "MERGED"].indexOf(String(row.status || "").toUpperCase()) === -1);
+  }
+
+  if (search) {
+    rows = rows.filter((row) => JSON.stringify(row).toLowerCase().indexOf(search) !== -1);
+  }
+
+  rows.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), undefined, { numeric: true }));
+
+  return output({ ok: true, masterType: data.masterType || data.type, rows });
+}
+
+function addFactoryMaster(data = {}) {
+  const config = factoryMasterConfig_(data.masterType || data.type);
+  ensureFactoryMasterSheet_(config);
+
+  const sh = getSheet(config.sheet);
+  const name = String(data.name || data[config.nameField] || "").trim();
+  if (!name) throw new Error("Name is required");
+
+  const duplicate = getRowsAsObjects(config.sheet)
+    .filter((row) => !isDeleted_(row))
+    .find((row) => String(row[config.nameField] || row.name || "").trim().toUpperCase() === name.toUpperCase());
+
+  if (duplicate) {
+    return output({ ok: true, alreadyExists: true, row: normalizeFactoryMasterRow_(duplicate, config) });
+  }
+
+  const headers = getHeaders(sh);
+  const payload = {};
+  headers.forEach((header) => {
+    if (data[header] !== undefined) payload[header] = data[header];
+  });
+
+  payload[config.idField] = data[config.idField] || generateBatchId(config.idPrefix);
+  payload[config.nameField] = name;
+  if (config.codeField && !payload[config.codeField]) payload[config.codeField] = materialCode_(name);
+  Object.keys(config.defaults || {}).forEach((key) => {
+    if (payload[key] === undefined || payload[key] === "") payload[key] = config.defaults[key];
+  });
+  payload.status = data.status || "PENDING_APPROVAL";
+  payload.createdBy = data.createdBy || "System";
+  payload.createdAt = new Date();
+  payload.updatedBy = data.updatedBy || data.createdBy || "System";
+  payload.updatedAt = new Date();
+  payload.favorite = data.favorite || "";
+
+  appendObjectRow(sh, payload);
+  return output({ ok: true, row: normalizeFactoryMasterRow_(payload, config) });
+}
+
+function updateFactoryMaster(data = {}) {
+  const config = factoryMasterConfig_(data.masterType || data.type);
+  ensureFactoryMasterSheet_(config);
+
+  const id = data.id || data[config.idField];
+  if (!id) return output({ ok: false, error: "Missing master item id" });
+
+  const headers = getHeaders(getSheet(config.sheet));
+  const patch = {};
+  headers.forEach((header) => {
+    if (data[header] !== undefined) patch[header] = data[header];
+  });
+  if (data.name !== undefined) patch[config.nameField] = data.name;
+  if (config.codeField && !patch[config.codeField] && patch[config.nameField]) {
+    patch[config.codeField] = materialCode_(patch[config.nameField]);
+  }
+  patch.updatedBy = data.updatedBy || data.createdBy || "System";
+  patch.updatedAt = new Date();
+
+  return updateById(config.sheet, config.idField, id, patch);
+}
+
+function disableFactoryMaster(data = {}) {
+  const config = factoryMasterConfig_(data.masterType || data.type);
+  ensureFactoryMasterSheet_(config);
+
+  const id = data.id || data[config.idField];
+  if (!id) return output({ ok: false, error: "Missing master item id" });
+
+  return updateById(config.sheet, config.idField, id, {
+    status: "DISABLED",
+    isActive: "FALSE",
+    disabledBy: data.disabledBy || data.updatedBy || data.createdBy || "System",
+    disabledAt: new Date(),
+    updatedBy: data.updatedBy || data.createdBy || "System",
+    updatedAt: new Date(),
+  });
+}
+
+function mergeFactoryMaster(data = {}) {
+  const config = factoryMasterConfig_(data.masterType || data.type);
+  ensureFactoryMasterSheet_(config);
+
+  const fromId = data.fromId || data.id || data[config.idField];
+  const intoId = data.intoId || data.mergedIntoId;
+
+  if (!fromId || !intoId) {
+    return output({ ok: false, error: "fromId and intoId are required for merge" });
+  }
+
+  return updateById(config.sheet, config.idField, fromId, {
+    status: "MERGED",
+    mergedIntoId: intoId,
+    mergedBy: data.mergedBy || data.updatedBy || data.createdBy || "System",
+    mergedAt: new Date(),
+    updatedBy: data.updatedBy || data.createdBy || "System",
+    updatedAt: new Date(),
   });
 }
 

@@ -1,15 +1,11 @@
 import { useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { onAuthStateChanged } from "firebase/auth";
 
 import { auth, logout } from "./firebase";
 import Sidebar from "./components/Sidebar";
-import LucideIcon from "./components/LucideIcon";
-import RegenGlobalStyles from "./components/RegenGlobalStyles";
-import { button, getMode, regenTheme } from "./theme/regenTheme";
 
 import Login from "./pages/Login";
-import CommandCenter from "./pages/CommandCenter";
 import Traceability from "./pages/Traceability";
 import MaterialTransformation from "./pages/MaterialTransformation";
 import MaterialReceiving from "./pages/MaterialReceiving";
@@ -48,11 +44,6 @@ import FactoryCostMaster from "./pages/FactoryCostMaster";
 export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [mode, setMode] = useState(
-    () => localStorage.getItem("regen-theme") || "light"
-  );
-  const [presentationMode, setPresentationMode] = useState(false);
-  const modeColors = getMode(mode);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -68,12 +59,8 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem("regen-theme", mode);
-  }, [mode]);
-
   if (loading) {
-    return <div style={loadingStyle}>Loading RegenOS...</div>;
+    return <div style={loadingStyle}>Loading Regen OS...</div>;
   }
 
   if (!user) {
@@ -82,77 +69,35 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <RegenGlobalStyles />
-
-      <div
-        className={presentationMode ? "regen-presentation" : ""}
-        data-theme={mode}
-        style={appShell(modeColors)}
-      >
+      <div style={appShell}>
         <aside style={sideWrap}>
-          <Sidebar mode={mode} />
+          <Sidebar />
         </aside>
 
         <main style={mainWrap}>
-          <div style={topBar(modeColors)}>
+          <div style={topBar}>
             <div>
-              <div style={brandTitle(modeColors)}>
-                <LucideIcon name="sparkles" size={20} />
-                RegenOS Command Surface
-              </div>
-
-              <div style={brandSub(modeColors)}>
-                RegenOS v1.0 RC1 · Premium manufacturing super app · <b>{user.email}</b>
+              <div style={brandTitle}>Regen OS</div>
+              <div style={brandSub}>
+                Logged in: <b>{user.email}</b>
               </div>
             </div>
 
-            <div style={topActions}>
-              <button
-                type="button"
-                onClick={() => setPresentationMode((value) => !value)}
-                style={toggleButton(modeColors, presentationMode)}
-              >
-                <LucideIcon name="sparkles" size={16} />
-                Investor Mode
-              </button>
-
-              <button
-                type="button"
-                onClick={() =>
-                  setMode((value) => (value === "dark" ? "light" : "dark"))
-                }
-                style={toggleButton(modeColors, mode === "dark")}
-              >
-                <LucideIcon name={mode === "dark" ? "sun" : "moon"} size={16} />
-                {mode === "dark" ? "Light" : "Dark"}
-              </button>
-
-              <button onClick={logout} style={logoutButton}>
-                Logout
-              </button>
-            </div>
+            <button onClick={logout} style={logoutButton}>
+              Logout
+            </button>
           </div>
 
-          <div style={pageWrap(modeColors)}>
+          <div style={pageWrap}>
             <Routes>
-              <Route
-                path="/"
-                element={
-                  <CommandCenter
-                    mode={mode}
-                    presentationMode={presentationMode}
-                  />
-                }
-              />
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/dashboard" element={<Dashboard />} />
               <Route
                 path="/command-center"
-                element={
-                  <CommandCenter
-                    mode={mode}
-                    presentationMode={presentationMode}
-                  />
-                }
+                element={<Navigate to="/dashboard" replace />}
               />
+
+              <Route path="/material-receiving" element={<MaterialReceiving />} />
               <Route
                 path="/production-control-center"
                 element={<MaterialTransformation />}
@@ -161,20 +106,16 @@ export default function App() {
                 path="/material-transformation"
                 element={<Navigate to="/production-control-center" replace />}
               />
-              <Route path="/material-receiving" element={<MaterialReceiving />} />
-
-              <Route path="/dashboard" element={<Dashboard />} />
-
               <Route path="/material-inventory" element={<LiveInventory />} />
-              <Route path="/live-inventory" element={<Navigate to="/material-inventory" replace />} />
+              <Route
+                path="/live-inventory"
+                element={<Navigate to="/material-inventory" replace />}
+              />
+
               <Route path="/suppliers" element={<Suppliers />} />
               <Route path="/supplier-entry" element={<SupplierEntry />} />
-
               <Route path="/dispatch" element={<Dispatch />} />
-              <Route
-                path="/production-materials"
-                element={<ProductionMaterials />}
-              />
+              <Route path="/production-materials" element={<ProductionMaterials />} />
               <Route path="/consumables" element={<Consumables />} />
               <Route path="/stores-inward" element={<StoresInward />} />
               <Route path="/stores-issue" element={<StoresIssue />} />
@@ -185,28 +126,34 @@ export default function App() {
               <Route path="/stores-costing" element={<StoresCosting />} />
 
               <Route path="/monthly-close" element={<MonthlyAudit />} />
+              <Route path="/inventory-adjustments" element={<InventoryAdjustments />} />
               <Route path="/fg-rates" element={<FGRates />} />
               <Route path="/factory-expenses" element={<FactoryExpenses />} />
-              <Route
-                path="/factory-cost-master"
-                element={<FactoryCostMaster />}
-              />
+              <Route path="/factory-cost-master" element={<FactoryCostMaster />} />
               <Route path="/alert-center" element={<AlertCenter />} />
               <Route path="/alert-settings" element={<AlertSettings />} />
 
               <Route path="/production" element={<Production />} />
               <Route path="/production-history" element={<ProductionHistory />} />
-              <Route path="/factory-pulse" element={<Navigate to="/command-center" replace />} />
-              <Route path="/procurement-dashboard" element={<Navigate to="/material-receiving" replace />} />
-              <Route path="/inventory-dashboard" element={<Navigate to="/material-inventory" replace />} />
+              <Route
+                path="/factory-pulse"
+                element={<Navigate to="/dashboard" replace />}
+              />
+              <Route
+                path="/procurement-dashboard"
+                element={<Navigate to="/material-receiving" replace />}
+              />
+              <Route
+                path="/inventory-dashboard"
+                element={<Navigate to="/material-inventory" replace />}
+              />
               <Route path="/rm-inward" element={<RMInward />} />
               <Route path="/rm-list" element={<RMList />} />
               <Route path="/wash-batches" element={<WashBatches />} />
               <Route path="/extrusion-batches" element={<ExtrusionBatches />} />
               <Route path="/color-sorter-batches" element={<ColorSorterBatches />} />
-              <Route path="/inventory-adjustments" element={<InventoryAdjustments />} />
 
-              <Route path="*" element={<Navigate to="/command-center" />} />
+              <Route path="*" element={<Navigate to="/dashboard" />} />
             </Routes>
           </div>
         </main>
@@ -218,27 +165,22 @@ export default function App() {
 const loadingStyle = {
   padding: 40,
   fontSize: 18,
-  color: regenTheme.colors.deepGreen,
-  fontFamily: regenTheme.fonts.body,
 };
 
-const appShell = (m) => ({
+const appShell = {
   display: "flex",
   width: "100%",
   height: "100vh",
   margin: 0,
   padding: 0,
-  background:
-    `radial-gradient(circle at 18% 0%, ${m.glow}, transparent 30%), radial-gradient(circle at 100% 10%, rgba(0,178,107,0.12), transparent 26%), ${m.page}`,
+  background: "#f8fafc",
   overflow: "hidden",
-  fontFamily: regenTheme.fonts.body,
-  color: m.text,
-});
+};
 
 const sideWrap = {
-  width: 270,
-  minWidth: 270,
-  maxWidth: 270,
+  width: 250,
+  minWidth: 250,
+  maxWidth: 250,
   flexShrink: 0,
   height: "100vh",
   overflow: "hidden",
@@ -248,6 +190,7 @@ const sideWrap = {
   position: "sticky",
   top: 0,
   alignSelf: "flex-start",
+  background: "#005d34",
 };
 
 const mainWrap = {
@@ -261,72 +204,48 @@ const mainWrap = {
   padding: 0,
 };
 
-const topBar = (m) => ({
-  background: m.shell,
-  padding: "14px 24px",
+const topBar = {
+  background: "white",
+  padding: "12px 22px",
   display: "flex",
   justifyContent: "space-between",
   alignItems: "center",
-  gap: 16,
-  borderBottom: `1px solid ${m.border}`,
-  boxShadow: regenTheme.shadow.soft,
+  borderBottom: "1px solid #e5e7eb",
+  boxShadow: "0 2px 10px rgba(15,23,42,0.04)",
   flexShrink: 0,
   position: "sticky",
   top: 0,
   zIndex: 150,
-  backdropFilter: "blur(22px)",
-});
-
-const brandTitle = (m) => ({
-  display: "flex",
-  alignItems: "center",
-  gap: 9,
-  fontWeight: 900,
-  fontSize: 20,
-  color: m.text,
-  fontFamily: regenTheme.fonts.heading,
-});
-
-const brandSub = (m) => ({
-  fontSize: 13,
-  color: m.subtleText,
-  marginTop: 3,
-});
-
-const topActions = {
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  flexWrap: "wrap",
-  justifyContent: "flex-end",
 };
 
-const toggleButton = (m, active) => ({
-  ...button.secondary,
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 8,
-  minHeight: 38,
-  padding: "8px 12px",
-  background: active ? regenTheme.colors.deepGreen : m.elevated,
-  color: active ? "white" : m.text,
-  border: `1px solid ${active ? regenTheme.colors.green : m.border}`,
-  boxShadow: active ? "0 12px 26px rgba(0, 93, 52, 0.22)" : "none",
-});
+const brandTitle = {
+  fontWeight: 800,
+  fontSize: 18,
+  color: "#0f766e",
+};
+
+const brandSub = {
+  fontSize: 13,
+  color: "#64748b",
+  marginTop: 3,
+};
 
 const logoutButton = {
-  ...button.danger,
-  minHeight: 38,
-  background: "#fff1f2",
+  background: "#dc2626",
+  color: "white",
+  border: "none",
+  padding: "10px 16px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
 };
 
-const pageWrap = (m) => ({
+const pageWrap = {
   flex: 1,
   overflowX: "hidden",
   overflowY: "auto",
-  padding: "18px 22px",
+  padding: "16px 20px",
   width: "100%",
   boxSizing: "border-box",
-  background: "transparent",
-  color: m.text,
-});
+  background: "#f8fafc",
+};

@@ -1,4 +1,3 @@
-import { button, card, input, regenTheme } from "../theme/regenTheme";
 import MonthYearFilter from "./MonthYearFilter";
 
 export default function OperationalWorkspace({
@@ -20,11 +19,11 @@ export default function OperationalWorkspace({
 }) {
   return (
     <div style={page}>
-      <section style={hero}>
+      <div style={header}>
         <div>
           <div style={eyebrowStyle}>{eyebrow}</div>
           <h1 style={titleStyle}>{title}</h1>
-          {subtitle && <div style={subtitleStyle}>{subtitle}</div>}
+          {subtitle && <p style={subtitleStyle}>{subtitle}</p>}
         </div>
 
         <div style={toolbar}>
@@ -38,7 +37,7 @@ export default function OperationalWorkspace({
           <input
             value={search}
             onChange={(e) => onSearchChange?.(e.target.value)}
-            placeholder="Search or scan..."
+            placeholder="Search"
             style={searchInput}
           />
 
@@ -46,67 +45,68 @@ export default function OperationalWorkspace({
             Refresh
           </button>
         </div>
-      </section>
+      </div>
 
       {snapshots.length > 0 && (
-        <section style={snapshotGrid}>
+        <div style={snapshotGrid}>
           {snapshots.map((item) => (
             <div key={item.label} style={snapshotCard}>
               <div style={snapshotLabel}>{item.label}</div>
-              <div style={{ ...snapshotValue, color: item.color || regenTheme.colors.deepGreen }}>
+              <div style={{ ...snapshotValue, color: item.color || "#0f766e" }}>
                 {item.value}
               </div>
             </div>
           ))}
-        </section>
+        </div>
       )}
 
-      <section style={entryCard}>
+      <div style={card}>
         <h2 style={sectionTitle}>{entryTitle}</h2>
         {children}
-      </section>
+      </div>
 
-      <section style={historyCard}>
+      <div style={historyCard}>
         <h2 style={sectionTitle}>{historyTitle}</h2>
         {history}
-      </section>
+      </div>
     </div>
   );
 }
 
-const page = { display: "grid", gap: 18 };
+const page = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 16,
+};
 
-const hero = {
-  ...card,
-  padding: 18,
+const header = {
   display: "flex",
   justifyContent: "space-between",
+  gap: 16,
   alignItems: "flex-start",
-  gap: 14,
   flexWrap: "wrap",
-  background:
-    "linear-gradient(135deg, rgba(0,93,52,0.96), rgba(0,178,107,0.9))",
-  color: "white",
 };
 
 const eyebrowStyle = {
+  color: "#64748b",
   fontSize: 12,
-  fontWeight: 900,
-  letterSpacing: 1,
+  fontWeight: 800,
   textTransform: "uppercase",
-  opacity: 0.86,
+  letterSpacing: 0.6,
 };
 
 const titleStyle = {
   margin: "4px 0",
-  fontSize: 32,
-  fontWeight: 950,
-  fontFamily: regenTheme.fonts.heading,
+  color: "#0f172a",
+  fontSize: 28,
+  fontWeight: 900,
 };
 
 const subtitleStyle = {
-  maxWidth: 760,
-  opacity: 0.92,
+  margin: "4px 0 0",
+  color: "#64748b",
+  fontSize: 14,
+  maxWidth: 780,
 };
 
 const toolbar = {
@@ -118,15 +118,23 @@ const toolbar = {
 };
 
 const searchInput = {
-  ...input,
-  width: 220,
   height: 40,
+  border: "1px solid #cbd5e1",
+  borderRadius: 9,
+  padding: "0 10px",
+  fontSize: 14,
+  width: 220,
 };
 
 const refreshButton = {
-  ...button.secondary,
+  height: 40,
+  border: "1px solid #cbd5e1",
+  borderRadius: 9,
   background: "white",
-  borderColor: "rgba(255,255,255,0.6)",
+  color: "#0f172a",
+  padding: "0 14px",
+  fontWeight: 800,
+  cursor: "pointer",
 };
 
 const snapshotGrid = {
@@ -136,14 +144,17 @@ const snapshotGrid = {
 };
 
 const snapshotCard = {
-  ...card,
+  background: "white",
+  border: "1px solid #e5e7eb",
+  borderRadius: 14,
   padding: 16,
+  boxShadow: "0 6px 18px rgba(15,23,42,0.04)",
 };
 
 const snapshotLabel = {
-  color: regenTheme.colors.slate,
+  color: "#64748b",
   fontSize: 12,
-  fontWeight: 850,
+  fontWeight: 800,
   textTransform: "uppercase",
   letterSpacing: 0.5,
 };
@@ -151,12 +162,15 @@ const snapshotLabel = {
 const snapshotValue = {
   marginTop: 6,
   fontSize: 24,
-  fontWeight: 950,
+  fontWeight: 900,
 };
 
-const entryCard = {
-  ...card,
+const card = {
+  background: "white",
+  border: "1px solid #e5e7eb",
+  borderRadius: 14,
   padding: 18,
+  boxShadow: "0 6px 18px rgba(15,23,42,0.04)",
 };
 
 const historyCard = {
@@ -167,6 +181,7 @@ const historyCard = {
 
 const sectionTitle = {
   margin: "0 0 14px",
-  color: regenTheme.colors.ink,
-  fontWeight: 950,
+  color: "#0f172a",
+  fontSize: 18,
+  fontWeight: 900,
 };

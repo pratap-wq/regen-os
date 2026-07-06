@@ -1,83 +1,98 @@
 import { NavLink } from "react-router-dom";
-import LucideIcon from "./LucideIcon";
-import { getMode, regenTheme } from "../theme/regenTheme";
 
-export default function Sidebar({ mode = "light" }) {
-  const m = getMode(mode);
+export default function Sidebar() {
   const menu = [
     {
-      section: "Primary Workspaces",
-      icon: "command",
+      section: "Dashboards",
       items: [
-        { label: "Material Receiving", path: "/material-receiving", icon: "package" },
-        { label: "Production Control", path: "/production-control-center", icon: "factory" },
-        { label: "Material Inventory", path: "/material-inventory", icon: "activity" },
-        { label: "Dispatch", path: "/dispatch", icon: "truck" },
-        { label: "Stores", path: "/stores-dashboard", icon: "boxes" },
-        { label: "Month Close Control Room", path: "/monthly-close", icon: "lock" },
-        { label: "CEO Cockpit", path: "/dashboard", icon: "chart" },
+        { label: "CEO Dashboard", path: "/dashboard" },
+        { label: "Factory Dashboard", path: "/production-control-center" },
+        { label: "Material Inventory", path: "/material-inventory" },
+        { label: "Stores Dashboard", path: "/stores-dashboard" },
+        { label: "Live Stores", path: "/live-stores" },
       ],
     },
     {
-      section: "Settings → Advanced",
-      icon: "settings",
+      section: "Operations",
       items: [
-        { label: "Command Center", path: "/command-center", icon: "sparkles" },
-        { label: "Quality", path: "/quality", icon: "sparkles" },
-        { label: "Traceability", path: "/traceability", icon: "activity" },
-        { label: "Suppliers", path: "/suppliers", icon: "boxes" },
-        { label: "Material Master", path: "/production-materials", icon: "factory" },
-        { label: "Material Rates", path: "/fg-rates", icon: "chart" },
-        { label: "Cost Control", path: "/factory-cost-master", icon: "chart" },
-        { label: "Factory Expenses", path: "/factory-expenses", icon: "package" },
-        { label: "Stores Inward", path: "/stores-inward", icon: "package" },
-        { label: "Stores Issue", path: "/stores-issue", icon: "truck" },
-        { label: "Stores Inventory", path: "/live-stores", icon: "boxes" },
-        { label: "Old Material Receiving", path: "/rm-inward", icon: "package" },
-        { label: "Old Material List", path: "/rm-list", icon: "package" },
-        { label: "Legacy Production Flow", path: "/production", icon: "activity" },
-        { label: "Legacy Production History", path: "/production-history", icon: "activity" },
-        { label: "Legacy Wash", path: "/wash-batches", icon: "factory" },
-        { label: "Legacy Color Sorter", path: "/color-sorter-batches", icon: "sparkles" },
-        { label: "Legacy Extrusion", path: "/extrusion-batches", icon: "factory" },
-        { label: "Resolve Variance", path: "/inventory-adjustments", icon: "alert" },
-        { label: "Alerts", path: "/alert-center", icon: "alert" },
-        { label: "Alert Settings", path: "/alert-settings", icon: "settings" },
+        { label: "Material Receiving", path: "/material-receiving" },
+        { label: "Production Control", path: "/production-control-center" },
+        { label: "Dispatch", path: "/dispatch" },
+        { label: "Traceability", path: "/traceability" },
+        { label: "Quality", path: "/quality" },
+      ],
+    },
+    {
+      section: "Stores",
+      items: [
+        { label: "Consumables", path: "/consumables" },
+        { label: "Stores Inward", path: "/stores-inward" },
+        { label: "Stores Issue", path: "/stores-issue" },
+      ],
+    },
+    {
+      section: "RM / Procurement",
+      items: [
+        { label: "Suppliers", path: "/suppliers" },
+        { label: "Old Material Receiving", path: "/rm-inward" },
+        { label: "Old Material List", path: "/rm-list" },
+      ],
+    },
+    {
+      section: "Management",
+      items: [
+        { label: "Month Close Control Room", path: "/monthly-close" },
+        { label: "Resolve Variance", path: "/inventory-adjustments" },
+        { label: "Factory Expenses", path: "/factory-expenses" },
+        { label: "Material Rates", path: "/fg-rates" },
+        { label: "Material Master", path: "/production-materials" },
+        { label: "Factory Cost Master", path: "/factory-cost-master" },
+      ],
+    },
+    {
+      section: "Advanced",
+      items: [
+        { label: "Legacy Production Flow", path: "/production" },
+        { label: "Legacy Production History", path: "/production-history" },
+        { label: "Legacy Wash", path: "/wash-batches" },
+        { label: "Legacy Color Sorter", path: "/color-sorter-batches" },
+        { label: "Legacy Extrusion", path: "/extrusion-batches" },
+      ],
+    },
+    {
+      section: "Administration",
+      items: [
+        { label: "Alert Center", path: "/alert-center" },
+        { label: "Alert Settings", path: "/alert-settings" },
       ],
     },
   ];
 
   return (
-    <nav style={sidebar(m)}>
+    <nav style={sidebar}>
       <div style={logoBlock}>
         <img src="/assets/regen-logo.png" alt="Regen" style={logo} />
 
         <div>
-          <div style={brand(m)}>RegenOS</div>
-          <div style={tagline}>Super App</div>
+          <div style={brand}>Regen OS</div>
+          <div style={tagline}>Manufacturing Intelligence</div>
         </div>
       </div>
 
       {menu.map((section) => (
         <div key={section.section} style={sectionBlock}>
-          <div style={sectionTitle(m)}>
-            <LucideIcon name={section.icon} size={13} />
-            {section.section}
-          </div>
+          <div style={sectionTitle}>{section.section}</div>
 
           {section.items.map((item) => (
             <NavLink
               key={item.path}
               to={item.path}
               style={({ isActive }) => ({
-                ...navItem(m),
-                background: isActive ? m.elevated : "transparent",
-                color: isActive ? regenTheme.colors.green : m.text,
+                ...navItem,
+                background: isActive ? "rgba(255,255,255,0.2)" : "transparent",
                 fontWeight: isActive ? 900 : 650,
-                boxShadow: isActive ? regenTheme.shadow.soft : "none",
               })}
             >
-              <LucideIcon name={item.icon} size={16} />
               {item.label}
             </NavLink>
           ))}
@@ -87,27 +102,23 @@ export default function Sidebar({ mode = "light" }) {
       <div style={footer}>
         RegenOS v1.0 RC1
         <br />
-        Factory testing build
+        Recycling Operations Platform
       </div>
     </nav>
   );
 }
 
-const sidebar = (m) => ({
+const sidebar = {
   height: "100vh",
   width: "100%",
   overflowY: "auto",
-  background:
-    `linear-gradient(180deg, ${m.shell}, ${m.surface}), radial-gradient(circle at top, ${m.glow}, transparent 32%)`,
-  color: m.text,
-  padding: "18px 12px",
+  background: "#005d34",
+  color: "white",
+  padding: "16px 12px",
   boxSizing: "border-box",
   position: "relative",
   zIndex: 999,
-  fontFamily: regenTheme.fonts.body,
-  borderRight: `1px solid ${m.border}`,
-  backdropFilter: "blur(24px)",
-});
+};
 
 const logoBlock = {
   display: "flex",
@@ -115,7 +126,7 @@ const logoBlock = {
   gap: 10,
   marginBottom: 22,
   paddingBottom: 16,
-  borderBottom: "1px solid rgba(0, 178, 107, 0.16)",
+  borderBottom: "1px solid rgba(255,255,255,0.14)",
 };
 
 const logo = {
@@ -123,57 +134,46 @@ const logo = {
   height: 46,
   objectFit: "contain",
   background: "white",
-  borderRadius: 14,
+  borderRadius: 10,
   padding: 4,
-  boxShadow: "0 10px 24px rgba(0,0,0,0.18)",
 };
 
-const brand = (m) => ({
+const brand = {
   fontSize: 21,
   fontWeight: 900,
   lineHeight: 1,
-  fontFamily: regenTheme.fonts.heading,
-  color: m.text,
-});
+};
 
 const tagline = {
   fontSize: 11,
   opacity: 0.8,
   marginTop: 4,
-  color: "#d9f99d",
 };
 
 const sectionBlock = {
   marginBottom: 20,
 };
 
-const sectionTitle = (m) => ({
-  display: "flex",
-  alignItems: "center",
-  gap: 7,
+const sectionTitle = {
   fontSize: 11,
   textTransform: "uppercase",
   letterSpacing: 1,
-  color: m.subtleText,
+  opacity: 0.65,
   marginBottom: 8,
   paddingLeft: 10,
-  fontWeight: 900,
-});
+};
 
-const navItem = (m) => ({
-  display: "flex",
-  alignItems: "center",
-  gap: 9,
+const navItem = {
+  display: "block",
   textDecoration: "none",
-  color: m.text,
-  padding: "10px 12px",
-  borderRadius: 12,
+  color: "white",
+  padding: "11px 12px",
+  borderRadius: 9,
   fontSize: 14,
   cursor: "pointer",
   pointerEvents: "auto",
   marginBottom: 4,
-  transition: "background 120ms ease, color 120ms ease, transform 120ms ease",
-});
+};
 
 const footer = {
   marginTop: 28,

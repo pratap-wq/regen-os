@@ -33,6 +33,7 @@ function doGet(e) {
     if (p.fn === "materialMaster.add") return addMaterialMaster(p);
     if (p.fn === "materialMaster.update") return updateMaterialMaster(p);
     if (p.fn === "materialMaster.seedDefaults") return seedMaterialMasterDefaults(p);
+    if (p.fn === "materialMaster.buildFromExisting") return buildMaterialMasterFromExisting(p);
     if (p.fn === "productionRecipes.list") return listProductionRecipes(p);
     if (p.fn === "productionRecipes.add") return addProductionRecipe(p);
     if (p.fn === "productionRecipes.update") return updateProductionRecipe(p);
@@ -1808,6 +1809,421 @@ function updateMaterialMaster(data = {}) {
     defaultStorageLocation: data.defaultStorageLocation || "",
     updatedAt: new Date(),
   });
+}
+
+function buildMaterialMasterFromExisting(data = {}) {
+  createSheetIfMissing_("Material_Master", materialMasterHeaders_());
+  ensureHeaders_("Material_Master", materialMasterHeaders_());
+
+  const dryRun = String(data.dryRun || "").toUpperCase() === "TRUE";
+  const materialSheet = getSheet("Material_Master");
+  const existingRows = getMaterialMasterRows_();
+  const existingKeys = {};
+
+  existingRows.forEach((row) => {
+    const key = materialBuilderKey_(row.materialName || row.materialCode || row.name);
+    if (key) existingKeys[key] = true;
+  });
+
+  const collected = collectExistingMaterialNames_();
+  const grouped = {};
+  const reviewRows = [];
+
+  collected.forEach((entry) => {
+    const normalized = normalizeMaterialBuilderName_(entry.originalName);
+    if (!normalized.name) return;
+
+    const key = materialBuilderKey_(normalized.name);
+    if (!key) return;
+
+    const category = categorizeMaterialBuilderName_(normalized.name, entry);
+    const isDuplicate = !!grouped[key];
+    const alreadyExists = !!existingKeys[key];
+
+    if (!grouped[key]) {
+      grouped[key] = {
+        key,
+        normalizedName: normalized.name,
+        category: category.category,
+        confidence: category.confidence,
+        reason: category.reason,
+        sources: {},
+        originals: [],
+        alreadyExists,
+      };
+    }
+
+    grouped[key].sources[entry.sourceSheet] = true;
+    grouped[key].originals.push(entry.originalName);
+    grouped[key].alreadyExists = grouped[key].alreadyExists || alreadyExists;
+    if (category.confidence > grouped[key].confidence) {
+      grouped[key].category = category.category;
+      grouped[key].confidence = category.confidence;
+      grouped[key].reason = category.reason;
+    }
+
+    reviewRows.push({
+      originalName: entry.originalName,
+      normalizedName: normalized.name,
+      category: category.category,
+      confidence: category.confidence,
+      sourceSheet: entry.sourceSheet,
+      sourceField: entry.sourceField,
+      sourceId: entry.sourceId || "",
+      action: alreadyExists ? "EXISTS" : isDuplicate ? "DUPLICATE" : "CANDIDATE",
+      reason: normalized.reason || category.reason,
+    });
+  });
+
+  const candidates = Object.values(grouped).sort((a, b) =>
+    String(a.normalizedName).localeCompare(String(b.normalizedName), undefined, { numeric: true })
+  );
+
+  let added = 0;
+  const now = new Date();
+
+  if (!dryRun) {
+    const materialHeaders = getHeaders(materialSheet);
+    const materialValues = [];
+
+    candidates.forEach((candidate) => {
+      if (candidate.alreadyExists) return;
+
+      const category = candidate.category === "Needs Review" ? "Needs Review" : candidate.category;
+      const payload = {
+        materialId: generateBatchId("MAT"),
+        materialCode: materialCode_(candidate.normalizedName),
+        materialName: candidate.normalizedName,
+        category,
+        unit: "Kg",
+        status: category === "Needs Review" ? "NEEDS_REVIEW" : "ACTIVE",
+        defaultQualityRequired: defaultQualityRequiredForMaterial_(category),
+        defaultStorageLocation: "",
+        createdBy: "Material Master Builder",
+        createdAt: now,
+        updatedBy: "Material Master Builder",
+        updatedAt: now,
+      };
+
+      materialValues.push(materialHeaders.map((header) => payload[header] !== undefined ? payload[header] : ""));
+
+      existingKeys[candidate.key] = true;
+      added += 1;
+    });
+
+    if (materialValues.length) {
+      materialSheet
+        .getRange(materialSheet.getLastRow() + 1, 1, materialValues.length, materialHeaders.length)
+        .setValues(materialValues);
+    }
+  }
+
+  const report = writeMaterialMasterBuilderReport_(reviewRows, candidates, dryRun);
+  const unknown = candidates.filter((row) => row.category === "Needs Review");
+  const duplicatesRemoved = Math.max(collected.length - candidates.length, 0);
+  const finalCount = dryRun
+    ? existingRows.length
+    : getRowsAsObjects("Material_Master").filter((row) => !isDeleted_(row)).length;
+
+  return output({
+    ok: true,
+    dryRun,
+    materialsFound: collected.length,
+    normalizedMaterials: candidates.length,
+    duplicatesRemoved,
+    existingMaterialsSkipped: candidates.filter((row) => row.alreadyExists).length,
+    materialsAdded: added,
+    finalMaterialMasterCount: finalCount,
+    unknownMaterialsRequiringReview: unknown.length,
+    unknownMaterials: unknown.map((row) => row.normalizedName),
+    reportSheet: report.sheetName,
+    reportRows: report.rows,
+    message: dryRun
+      ? "Material Master Builder dry run complete. Material_Master was not changed."
+      : "Material_Master populated from existing operational material names.",
+  });
+}
+
+function collectExistingMaterialNames_() {
+  const entries = [];
+
+  collectMaterialFields_(entries, "RM_Inward", ["material"], "inwardId");
+  collectMaterialFields_(entries, "Wash_Batches", ["inputMaterial"], "washBatchId");
+  collectMaterialFields_(entries, "Sorting_Batches", ["inputMaterial", "acceptedMaterial", "rejectedMaterialAction"], "sortingBatchId");
+  collectMaterialFields_(entries, "Extrusion_Batches", [
+    "inputMaterial",
+    "productionGrade",
+    "sourceType",
+    "feedComposition",
+    "dosingRecipe",
+  ], "extrusionBatchId");
+  collectMaterialFields_(entries, "Dispatches", ["material", "grade", "dispatchLines"], "dispatchId");
+  collectMaterialFields_(entries, "Inventory_Ledger", ["itemName"], "ledgerId");
+  collectMaterialFields_(entries, "Stores_Master", ["itemName"], "itemId");
+  collectMaterialFields_(entries, "Stores_Inward", ["itemName"], "inwardId");
+  collectMaterialFields_(entries, "Stores_Issue", ["itemName"], "issueId");
+  collectMaterialFields_(entries, "Production_Materials", ["materialName"], "materialId");
+
+  addKnownOutputMaterials_(entries);
+
+  return entries;
+}
+
+function collectMaterialFields_(entries, sheetName, fields, idField) {
+  let rows = [];
+  try {
+    rows = getRowsAsObjects(sheetName).filter((row) => !isDeleted_(row));
+  } catch (err) {
+    return;
+  }
+
+  rows.forEach((row) => {
+    const sourceId = row[idField] || row.id || "";
+    fields.forEach((field) => {
+      const value = row[field];
+      if (!value) return;
+
+      if (field === "feedComposition" || field === "dispatchLines") {
+        extractMaterialNamesFromJsonText_(entries, sheetName, field, sourceId, value);
+        return;
+      }
+
+      splitMaterialBuilderText_(value).forEach((name) => {
+        entries.push({
+          originalName: name,
+          sourceSheet: sheetName,
+          sourceField: field,
+          sourceId,
+          row,
+        });
+      });
+    });
+  });
+}
+
+function extractMaterialNamesFromJsonText_(entries, sheetName, field, sourceId, value) {
+  const text = String(value || "").trim();
+  if (!text) return;
+
+  try {
+    const parsed = JSON.parse(text);
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    rows.forEach((row) => {
+      ["material", "materialName", "materialType", "sourceType", "grade", "itemName"].forEach((key) => {
+        if (!row || !row[key]) return;
+        entries.push({
+          originalName: row[key],
+          sourceSheet: sheetName,
+          sourceField: field + "." + key,
+          sourceId,
+          row,
+        });
+      });
+    });
+  } catch (err) {
+    splitMaterialBuilderText_(text).forEach((name) => {
+      entries.push({
+        originalName: name,
+        sourceSheet: sheetName,
+        sourceField: field,
+        sourceId,
+        row: {},
+      });
+    });
+  }
+}
+
+function addKnownOutputMaterials_(entries) {
+  const outputRules = [
+    ["Wash_Batches", "washedOutputKg", "Washed Material", "WIP"],
+    ["Wash_Batches", "sinkMaterialKg", "Sink Material", "WASTE"],
+    ["Wash_Batches", "dustKg", "Dust", "WASTE"],
+    ["Wash_Batches", "sludgeKg", "Sludge", "WASTE"],
+    ["Wash_Batches", "raffiaKg", "Raffia Reject", "WASTE"],
+    ["Wash_Batches", "wrappersKg", "Wrappers", "WASTE"],
+    ["Sorting_Batches", "acceptedQtyKg", "Sorted Material", "WIP"],
+    ["Sorting_Batches", "rejectedQtyKg", "Sorting Reject", "WASTE"],
+    ["Extrusion_Batches", "lumpsKg", "Lumps", "REWORK"],
+    ["Extrusion_Batches", "purgingKg", "Purging", "REWORK"],
+    ["Extrusion_Batches", "reworkGranulesKg", "Rework Granules", "REWORK"],
+    ["Extrusion_Batches", "rejectKg", "Extrusion Reject", "WASTE"],
+    ["Extrusion_Batches", "vacuumRejectKg", "Vacuum Reject", "WASTE"],
+    ["Extrusion_Batches", "meshRejectKg", "Mesh Reject", "WASTE"],
+    ["Extrusion_Batches", "floorSpillageKg", "Floor Spillage", "WASTE"],
+    ["Extrusion_Batches", "virginMaterialKg", "Virgin PP", "ADDITIVE"],
+    ["Extrusion_Batches", "masterBatchKg", "Masterbatch", "ADDITIVE"],
+    ["Extrusion_Batches", "antiOxidantKg", "Antioxidant", "ADDITIVE"],
+    ["Extrusion_Batches", "batteryFlakesKg", "Battery Flakes", "RM"],
+  ];
+
+  outputRules.forEach(([sheetName, qtyField, materialName]) => {
+    let rows = [];
+    try {
+      rows = getRowsAsObjects(sheetName).filter((row) => !isDeleted_(row));
+    } catch (err) {
+      return;
+    }
+
+    rows.forEach((row) => {
+      if (Number(row[qtyField] || 0) <= 0) return;
+      entries.push({
+        originalName: materialName,
+        sourceSheet: sheetName,
+        sourceField: qtyField,
+        sourceId: row.washBatchId || row.sortingBatchId || row.extrusionBatchId || "",
+        row,
+      });
+    });
+  });
+}
+
+function splitMaterialBuilderText_(value) {
+  const text = String(value || "").trim();
+  if (!text) return [];
+
+  return text
+    .split(/\s*(?:\+|\||,|;|\n)\s*/g)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function normalizeMaterialBuilderName_(value) {
+  let text = String(value || "").trim();
+  const original = text;
+  let reason = "";
+
+  text = text.replace(/\s+/g, " ");
+  text = text.replace(/\b\d+(?:\.\d+)?\s*(?:kg|kgs|kilogram|kilograms|mt|tons?|tonnes?)\b/gi, " ");
+  text = text.replace(/:\s*\d+(?:\.\d+)?\s*(?:kg|kgs|mt|tons?|tonnes?)?\b/gi, "");
+  text = text.replace(/\bqty\s*[:=]?\s*\d+(?:\.\d+)?\b/gi, " ");
+  text = text.replace(/\b(rate|amount|value)\s*[:=]?\s*\d+(?:\.\d+)?\b/gi, " ");
+  text = text.replace(/\([^)]*\d+(?:\.\d+)?\s*(?:kg|kgs|mt|tons?|tonnes?)[^)]*\)/gi, " ");
+  text = text.replace(/\{.*\}|\[.*\]/g, " ");
+  text = text.replace(/\b(input|output|feed|composition|recipe|grade|material)\s*[:=]\s*/gi, " ");
+  text = text.replace(/\s*[-–—]\s*$/g, "");
+  text = text.replace(/\s{2,}/g, " ").trim();
+
+  const gradeMatch = text.match(/\bE\s*([1-9])\b/i);
+  if (gradeMatch) {
+    text = "E" + gradeMatch[1];
+    reason = "FG grade normalized";
+  }
+
+  if (/^E[1-9]\s*:/i.test(original)) {
+    text = original.replace(/^(\s*E[1-9]).*$/i, "$1").toUpperCase();
+    reason = "Removed dispatch quantity from FG grade";
+  }
+
+  text = titleCaseMaterialName_(text);
+  if (!reason && original !== text) reason = "Cleaned spacing, quantities, or recipe text";
+
+  return {
+    name: text,
+    reason,
+  };
+}
+
+function titleCaseMaterialName_(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/^E[1-9]$/i.test(text)) return text.toUpperCase();
+
+  const upperKeep = ["PP", "PPCP", "HDPE", "PET", "LDPE", "PVC", "ABS", "FG", "RM", "WIP", "DFC", "KBM", "AMD"];
+
+  return text
+    .split(" ")
+    .map((word) => {
+      const clean = word.replace(/[^a-z0-9]/gi, "");
+      if (upperKeep.indexOf(clean.toUpperCase()) !== -1) return word.toUpperCase();
+      if (word === word.toUpperCase() && word.length <= 4) return word;
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join(" ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function materialBuilderKey_(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\bKGS?\b/g, "KG")
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function categorizeMaterialBuilderName_(name, entry = {}) {
+  const text = String(name || "").toUpperCase();
+  const itemType = String(entry.row && entry.row.itemType || "").toUpperCase();
+  const sourceSheet = String(entry.sourceSheet || "").toUpperCase();
+  const sourceField = String(entry.sourceField || "").toUpperCase();
+
+  if (["RM", "WIP", "FG", "WASTE", "STORE", "ADDITIVE", "REWORK"].indexOf(itemType) !== -1) {
+    return { category: itemType, confidence: 95, reason: "Inventory Ledger itemType" };
+  }
+
+  if (/^E[1-9]$/.test(text)) return { category: "FG", confidence: 99, reason: "Finished goods grade" };
+  if (sourceSheet.indexOf("STORES") !== -1) return { category: "STORE", confidence: 98, reason: "Stores sheet" };
+  if (sourceSheet === "RM_INWARD") return { category: "RM", confidence: 95, reason: "RM inward source" };
+  if (sourceField.indexOf("PRODUCTIONGRADE") !== -1 || sourceField.indexOf("GRADE") !== -1) return { category: "FG", confidence: 92, reason: "Grade field" };
+  if (/VIRGIN|MASTERBATCH|ANTIOXIDANT|ADDITIVE|MB\b/.test(text)) return { category: "ADDITIVE", confidence: 92, reason: "Additive keyword" };
+  if (/REWORK|LUMP|PURGING|REGRIND/.test(text)) return { category: "REWORK", confidence: 88, reason: "Rework keyword" };
+  if (/WASTE|REJECT|DUST|SINK|SLUDGE|RAFFIA|WRAPPER|SPILLAGE|VACUUM|MESH/.test(text)) return { category: "WASTE", confidence: 90, reason: "Waste keyword" };
+  if (/WASHED|SORTED|COMMODITY|FLAKES - WASHED|FLAKES - SEMI/.test(text)) return { category: "WIP", confidence: 82, reason: "WIP keyword" };
+  if (/FLAKE|BUCKET|BATTERY|JAR|LID|PPCP|SCRAP|GRANULE/.test(text)) return { category: "RM", confidence: 78, reason: "RM keyword" };
+
+  return { category: "Needs Review", confidence: 20, reason: "No reliable category rule matched" };
+}
+
+function defaultQualityRequiredForMaterial_(category) {
+  if (category === "RM" || category === "FG") return "YES";
+  return "NO";
+}
+
+function writeMaterialMasterBuilderReport_(reviewRows, candidates, dryRun) {
+  const sheetName = "Material_Master_Builder_Report";
+  const headers = [
+    "runId",
+    "runAt",
+    "dryRun",
+    "originalName",
+    "normalizedName",
+    "category",
+    "confidence",
+    "sourceSheet",
+    "sourceField",
+    "sourceId",
+    "action",
+    "reason",
+  ];
+
+  createSheetIfMissing_(sheetName, headers);
+  ensureHeaders_(sheetName, headers);
+  const sh = getSheet(sheetName);
+  const sheetHeaders = getHeaders(sh);
+  const runId = generateBatchId("MMB");
+  const runAt = new Date();
+
+  const values = reviewRows.map((row) => {
+    const payload = {
+      runId,
+      runAt,
+      dryRun: dryRun ? "TRUE" : "FALSE",
+      ...row,
+    };
+
+    return sheetHeaders.map((header) => payload[header] !== undefined ? payload[header] : "");
+  });
+
+  if (values.length) {
+    sh.getRange(sh.getLastRow() + 1, 1, values.length, sheetHeaders.length).setValues(values);
+  }
+
+  return {
+    sheetName,
+    rows: reviewRows.length,
+    candidateRows: candidates.length,
+  };
 }
 
 function seedMaterialMasterDefaults() {

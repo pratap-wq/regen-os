@@ -4,6 +4,10 @@ import { formatDate } from "../utils/date";
 
 import DataTable from "../components/DataTable";
 import FormSection from "../components/FormSection";
+import {
+  materialInventoryFromLedgerBalances,
+  normalizeInventoryMaterial,
+} from "../services/inventoryEngine";
 
 export default function Dispatch() {
   const today = new Date().toISOString().split("T")[0];
@@ -190,21 +194,12 @@ export default function Dispatch() {
   }, [extrusionRows, rows, editingRow]);
 
   const materialInventory = useMemo(() => {
-    const ledgerFg = ledgerBalanceRows
-      .filter((row) => String(row.itemType || "").toUpperCase() === "FG")
-      .map((row) => ({
-        material: normalizeMaterial(row.itemName),
-        availableKg: Number(row.qty || 0),
-        source: "Inventory Ledger",
-      }))
-      .filter((row) => row.material && row.availableKg > 0);
+    const ledgerFg = materialInventoryFromLedgerBalances(ledgerBalanceRows, {
+      itemType: "FG",
+    });
 
     if (ledgerFg.length > 0) {
-      return ledgerFg.sort((a, b) =>
-        String(a.material).localeCompare(String(b.material), undefined, {
-          numeric: true,
-        })
-      );
+      return ledgerFg;
     }
 
     const map = {};
@@ -921,7 +916,7 @@ function KPI({ title, value }) {
 }
 
 function normalizeMaterial(value) {
-  return String(value || "").trim().toUpperCase();
+  return normalizeInventoryMaterial(value).toUpperCase();
 }
 
 const pageStyle = { padding: 20 };

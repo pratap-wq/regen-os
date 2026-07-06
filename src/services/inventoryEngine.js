@@ -161,3 +161,35 @@ export function calculateInventoryEngine({
       storesValue,
   };
 }
+
+export function normalizeInventoryMaterial(value) {
+  const text = String(value || "").trim();
+  const fgMatch = text.toUpperCase().match(/\bE[1-5]\b/);
+  return fgMatch ? fgMatch[0] : text;
+}
+
+export function materialInventoryFromLedgerBalances(
+  ledgerBalanceRows = [],
+  { itemType = "" } = {}
+) {
+  const expectedType = String(itemType || "").trim().toUpperCase();
+
+  return ledgerBalanceRows
+    .filter((row) => {
+      if (!expectedType) return true;
+      return String(row.itemType || "").toUpperCase() === expectedType;
+    })
+    .map((row) => ({
+      materialId: row.materialId || "",
+      material: normalizeInventoryMaterial(row.itemName),
+      itemType: row.itemType || "",
+      availableKg: Number(row.qty || row.balance || 0),
+      source: "Inventory Ledger",
+    }))
+    .filter((row) => row.material && row.availableKg > 0)
+    .sort((a, b) =>
+      String(a.material).localeCompare(String(b.material), undefined, {
+        numeric: true,
+      })
+    );
+}

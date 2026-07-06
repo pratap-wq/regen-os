@@ -24,14 +24,22 @@ function doGet(e) {
     if (p.fn === "productionMaterials.add") return addProductionMaterial(p);
     if (p.fn === "productionMaterials.update") return updateProductionMaterial(p);
     if (p.fn === "productionMaterials.seedDefaults") return seedProductionMaterials();
-    if (p.fn === "materialBuckets.list") return listMaster("Material_Buckets");
-    if (p.fn === "materialBuckets.add") return addMaterialBucket(p);
-    if (p.fn === "materialMaster.list") return listMaster("Material_Buckets");
-    if (p.fn === "materialMaster.add") return addMaterialBucket(p);
-    if (p.fn === "materialReceiving.list") return listMaterialReceiving(p);
-    if (p.fn === "materialReceiving.add") return addMaterialReceiving(p);
-    if (p.fn === "transformationRuns.list") return listTransformationRuns(p);
-    if (p.fn === "transformationRuns.add") return addTransformationRun(p);
+    if (p.fn === "materialMaster.list") return listMaterialMaster(p);
+    if (p.fn === "materialMaster.add") return addMaterialMaster(p);
+    if (p.fn === "materialMaster.update") return updateMaterialMaster(p);
+    if (p.fn === "materialMaster.seedDefaults") return seedMaterialMasterDefaults(p);
+    if (p.fn === "productionRecipes.list") return listProductionRecipes(p);
+    if (p.fn === "productionRecipes.add") return addProductionRecipe(p);
+    if (p.fn === "productionRecipes.update") return updateProductionRecipe(p);
+    if (p.fn === "recipeComponents.list") return listRecipeComponents(p);
+    if (p.fn === "recipeComponents.add") return addRecipeComponent(p);
+    if (p.fn === "recipeComponents.update") return updateRecipeComponent(p);
+    if (p.fn === "materialBuckets.list") return archivedModelResponse_("Material_Buckets");
+    if (p.fn === "materialBuckets.add") return archivedModelResponse_("Material_Buckets", true);
+    if (p.fn === "materialReceiving.list") return archivedModelResponse_("Material_Receiving");
+    if (p.fn === "materialReceiving.add") return archivedModelResponse_("Material_Receiving", true);
+    if (p.fn === "transformationRuns.list") return archivedModelResponse_("Transformation_Runs");
+    if (p.fn === "transformationRuns.add") return archivedModelResponse_("Transformation_Runs", true);
     if (p.fn === "manufacturingCutover.migrateReceiving") return migrateLegacyReceiving(p);
     if (p.fn === "manufacturingCutover.migrateWash") return migrateLegacyWash(p);
     if (p.fn === "manufacturingCutover.migrateSorting") return migrateLegacySorting(p);
@@ -606,6 +614,46 @@ const REGEN_DB_SCHEMA = {
     "paidBy",
     "status",
   ],
+  Material_Master: [
+    "materialId",
+    "materialCode",
+    "materialName",
+    "category",
+    "unit",
+    "status",
+    "defaultQualityRequired",
+    "defaultStorageLocation",
+    "createdBy",
+    "createdAt",
+    "updatedAt",
+  ],
+  Production_Recipes: [
+    "recipeId",
+    "recipeCode",
+    "recipeName",
+    "outputMaterialId",
+    "outputMaterialCode",
+    "processType",
+    "status",
+    "remarks",
+    "createdBy",
+    "createdAt",
+    "updatedAt",
+  ],
+  Recipe_Components: [
+    "componentId",
+    "recipeId",
+    "inputMaterialId",
+    "inputMaterialCode",
+    "componentType",
+    "standardPercent",
+    "standardKg",
+    "tolerancePercent",
+    "status",
+    "createdBy",
+    "createdAt",
+    "updatedAt",
+  ],
   Production_Materials: [
     "materialId",
     "materialName",
@@ -940,6 +988,7 @@ const REGEN_DB_SCHEMA = {
     "module",
     "movementType",
     "itemType",
+    "materialId",
     "itemName",
     "sourceRef",
     "targetRef",
@@ -1569,6 +1618,316 @@ function seedProductionMaterials() {
     message: "Default production materials created",
     count: defaults.length,
   });
+}
+
+const MATERIAL_MASTER_CATEGORIES = ["RM", "WIP", "FG", "REWORK", "WASTE", "STORE", "ADDITIVE"];
+
+function materialMasterHeaders_() {
+  return REGEN_DB_SCHEMA.Material_Master;
+}
+
+function recipeHeaders_() {
+  return REGEN_DB_SCHEMA.Production_Recipes;
+}
+
+function recipeComponentHeaders_() {
+  return REGEN_DB_SCHEMA.Recipe_Components;
+}
+
+function materialCode_(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40);
+}
+
+function normalizeMaterialCategory_(value) {
+  const category = String(value || "").trim().toUpperCase();
+  if (category === "STORES") return "STORE";
+  if (MATERIAL_MASTER_CATEGORIES.indexOf(category) !== -1) return category;
+  throw new Error("Material category must be RM, WIP, FG, REWORK, WASTE, STORE, or ADDITIVE");
+}
+
+function listMaterialMaster() {
+  createSheetIfMissing_("Material_Master", materialMasterHeaders_());
+  return output({
+    ok: true,
+    rows: getMaterialMasterRows_(),
+  });
+}
+
+function addMaterialMaster(data = {}) {
+  createSheetIfMissing_("Material_Master", materialMasterHeaders_());
+  const sh = getSheet("Material_Master");
+  ensureHeaders_("Material_Master", materialMasterHeaders_());
+
+  const materialName = String(data.materialName || data.name || "").trim();
+  if (!materialName) throw new Error("Material name is required");
+
+  const category = normalizeMaterialCategory_(data.category || data.materialType);
+  const materialCode = materialCode_(data.materialCode || materialName);
+  const existing = getMaterialMasterRows_();
+  const duplicate = existing.find((row) =>
+    materialCode_(row.materialCode || row.materialName) === materialCode ||
+    String(row.materialName || "").trim().toUpperCase() === materialName.toUpperCase()
+  );
+
+  if (duplicate) {
+    return output({
+      ok: true,
+      alreadyExists: true,
+      materialId: duplicate.materialId,
+      materialCode: duplicate.materialCode || materialCode,
+    });
+  }
+
+  const materialId = data.materialId || generateBatchId("MAT");
+
+  appendObjectRow(sh, {
+    materialId,
+    materialCode,
+    materialName,
+    category,
+    unit: data.unit || "Kg",
+    status: data.status || "ACTIVE",
+    defaultQualityRequired: data.defaultQualityRequired || "NO",
+    defaultStorageLocation: data.defaultStorageLocation || "",
+    createdBy: data.createdBy || "System",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  return output({ ok: true, materialId, materialCode });
+}
+
+function updateMaterialMaster(data = {}) {
+  createSheetIfMissing_("Material_Master", materialMasterHeaders_());
+  ensureHeaders_("Material_Master", materialMasterHeaders_());
+
+  if (!data.materialId) {
+    return output({ ok: false, error: "Missing materialId" });
+  }
+
+  const materialName = String(data.materialName || data.name || "").trim();
+  if (!materialName) throw new Error("Material name is required");
+
+  return updateById("Material_Master", "materialId", data.materialId, {
+    materialCode: materialCode_(data.materialCode || materialName),
+    materialName,
+    category: normalizeMaterialCategory_(data.category || data.materialType),
+    unit: data.unit || "Kg",
+    status: data.status || "ACTIVE",
+    defaultQualityRequired: data.defaultQualityRequired || "NO",
+    defaultStorageLocation: data.defaultStorageLocation || "",
+    updatedAt: new Date(),
+  });
+}
+
+function seedMaterialMasterDefaults() {
+  createSheetIfMissing_("Material_Master", materialMasterHeaders_());
+  const sh = getSheet("Material_Master");
+  ensureHeaders_("Material_Master", materialMasterHeaders_());
+
+  const defaults = [
+    ["WHITE_FLAKES", "White Flakes", "RM"],
+    ["WHITE_BUCKETS", "White Buckets", "RM"],
+    ["MIXED_BUCKETS", "Mixed Buckets", "RM"],
+    ["BATTERY_SCRAP", "Battery Scrap", "RM"],
+    ["BATTERY_REGRIND", "Battery Regrind", "RM"],
+    ["JARS", "Jars", "RM"],
+    ["LIDS", "Lids", "RM"],
+    ["PP_MIXED", "PP Mixed", "RM"],
+    ["WASHED_WHITE_FLAKES", "Washed White Flakes", "WIP"],
+    ["WASHED_MIXED", "Washed Mixed", "WIP"],
+    ["WHITE_SORTED", "White Sorted", "WIP"],
+    ["COMMODITY", "Commodity", "WIP"],
+    ["MIXED_SORTED", "Mixed Sorted", "WIP"],
+    ["REWORK_MATERIAL", "Rework Material", "REWORK"],
+    ["E1", "E1", "FG"],
+    ["E2", "E2", "FG"],
+    ["E3", "E3", "FG"],
+    ["E4", "E4", "FG"],
+    ["E5", "E5", "FG"],
+    ["VIRGIN_PP", "Virgin PP", "ADDITIVE"],
+    ["MASTERBATCH", "Masterbatch", "ADDITIVE"],
+    ["ANTIOXIDANT", "Antioxidant", "ADDITIVE"],
+    ["SINK_MATERIAL", "Sink Material", "WASTE"],
+    ["COLOR_REJECT", "Color Reject", "WASTE"],
+    ["DUST", "Dust", "WASTE"],
+    ["METAL_REJECT", "Metal Reject", "WASTE"],
+    ["EXTRUSION_WASTE", "Extrusion Waste", "WASTE"],
+    ["LUMPS", "Lumps", "REWORK"],
+    ["PURGING", "Purging", "REWORK"],
+  ];
+
+  const existing = {};
+  getMaterialMasterRows_().forEach((row) => {
+    existing[materialCode_(row.materialCode || row.materialName)] = true;
+  });
+
+  let inserted = 0;
+  defaults.forEach((row) => {
+    const code = row[0];
+    if (existing[code]) return;
+
+    appendObjectRow(sh, {
+      materialId: generateBatchId("MAT"),
+      materialCode: code,
+      materialName: row[1],
+      category: row[2],
+      unit: "Kg",
+      status: "ACTIVE",
+      defaultQualityRequired: "NO",
+      defaultStorageLocation: "",
+      createdBy: "seedMaterialMasterDefaults",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    existing[code] = true;
+    inserted += 1;
+  });
+
+  return output({
+    ok: true,
+    inserted,
+    message: "Material Master default seed completed",
+  });
+}
+
+function listProductionRecipes() {
+  createSheetIfMissing_("Production_Recipes", recipeHeaders_());
+  createSheetIfMissing_("Recipe_Components", recipeComponentHeaders_());
+  ensureHeaders_("Production_Recipes", recipeHeaders_());
+  ensureHeaders_("Recipe_Components", recipeComponentHeaders_());
+  const recipes = getRowsAsObjects("Production_Recipes").filter((row) => !isDeleted_(row));
+  const components = getRowsAsObjects("Recipe_Components").filter((row) => !isDeleted_(row));
+  return output({
+    ok: true,
+    rows: recipes.map((recipe) => ({
+      ...recipe,
+      components: components.filter((component) => String(component.recipeId) === String(recipe.recipeId)),
+    })),
+  });
+}
+
+function addProductionRecipe(data = {}) {
+  createSheetIfMissing_("Production_Recipes", recipeHeaders_());
+  const sh = getSheet("Production_Recipes");
+  ensureHeaders_("Production_Recipes", recipeHeaders_());
+
+  const outputMaterial = resolveMaterialMaster_(data.outputMaterialId, data.outputMaterialCode || data.outputMaterialName);
+  const recipeId = data.recipeId || generateBatchId("RCP");
+  const recipeName = String(data.recipeName || "").trim();
+  if (!recipeName) throw new Error("Recipe name is required");
+
+  appendObjectRow(sh, {
+    recipeId,
+    recipeCode: materialCode_(data.recipeCode || recipeName),
+    recipeName,
+    outputMaterialId: outputMaterial.materialId,
+    outputMaterialCode: outputMaterial.materialCode,
+    processType: String(data.processType || "").trim().toUpperCase(),
+    status: data.status || "ACTIVE",
+    remarks: data.remarks || "",
+    createdBy: data.createdBy || "System",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  return output({ ok: true, recipeId });
+}
+
+function updateProductionRecipe(data = {}) {
+  createSheetIfMissing_("Production_Recipes", recipeHeaders_());
+  ensureHeaders_("Production_Recipes", recipeHeaders_());
+  if (!data.recipeId) return output({ ok: false, error: "Missing recipeId" });
+  const outputMaterial = resolveMaterialMaster_(data.outputMaterialId, data.outputMaterialCode || data.outputMaterialName);
+
+  return updateById("Production_Recipes", "recipeId", data.recipeId, {
+    recipeCode: materialCode_(data.recipeCode || data.recipeName),
+    recipeName: data.recipeName || "",
+    outputMaterialId: outputMaterial.materialId,
+    outputMaterialCode: outputMaterial.materialCode,
+    processType: String(data.processType || "").trim().toUpperCase(),
+    status: data.status || "ACTIVE",
+    remarks: data.remarks || "",
+    updatedAt: new Date(),
+  });
+}
+
+function listRecipeComponents(data = {}) {
+  createSheetIfMissing_("Recipe_Components", recipeComponentHeaders_());
+  ensureHeaders_("Recipe_Components", recipeComponentHeaders_());
+  let rows = getRowsAsObjects("Recipe_Components").filter((row) => !isDeleted_(row));
+  if (data.recipeId) rows = rows.filter((row) => String(row.recipeId) === String(data.recipeId));
+  return output({ ok: true, rows });
+}
+
+function addRecipeComponent(data = {}) {
+  createSheetIfMissing_("Recipe_Components", recipeComponentHeaders_());
+  const sh = getSheet("Recipe_Components");
+  ensureHeaders_("Recipe_Components", recipeComponentHeaders_());
+  if (!data.recipeId) throw new Error("recipeId is required");
+
+  const material = resolveMaterialMaster_(data.inputMaterialId, data.inputMaterialCode || data.inputMaterialName);
+  const componentId = data.componentId || generateBatchId("RC");
+
+  appendObjectRow(sh, {
+    componentId,
+    recipeId: data.recipeId,
+    inputMaterialId: material.materialId,
+    inputMaterialCode: material.materialCode,
+    componentType: material.category,
+    standardPercent: num(data.standardPercent),
+    standardKg: num(data.standardKg),
+    tolerancePercent: num(data.tolerancePercent),
+    status: data.status || "ACTIVE",
+    createdBy: data.createdBy || "System",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  return output({ ok: true, componentId });
+}
+
+function updateRecipeComponent(data = {}) {
+  createSheetIfMissing_("Recipe_Components", recipeComponentHeaders_());
+  ensureHeaders_("Recipe_Components", recipeComponentHeaders_());
+  if (!data.componentId) return output({ ok: false, error: "Missing componentId" });
+  const material = resolveMaterialMaster_(data.inputMaterialId, data.inputMaterialCode || data.inputMaterialName);
+
+  return updateById("Recipe_Components", "componentId", data.componentId, {
+    recipeId: data.recipeId || "",
+    inputMaterialId: material.materialId,
+    inputMaterialCode: material.materialCode,
+    componentType: material.category,
+    standardPercent: num(data.standardPercent),
+    standardKg: num(data.standardKg),
+    tolerancePercent: num(data.tolerancePercent),
+    status: data.status || "ACTIVE",
+    updatedAt: new Date(),
+  });
+}
+
+function archivedModelResponse_(sheetName, isWrite) {
+  return output({
+    ok: !isWrite,
+    archived: true,
+    sheet: sheetName,
+    rows: [],
+    error: isWrite ? sheetName + " is archived in RegenOS v1 architecture freeze" : "",
+    message: "Experimental bucket/transformation model is archived. Data is retained in Sheets but not used for active operations.",
+  });
+}
+
+function getMaterialMasterRows_() {
+  try {
+    return getRowsAsObjects("Material_Master").filter((row) => !isDeleted_(row));
+  } catch (err) {
+    return [];
+  }
 }
 function num(v) {
   if (v === undefined || v === null || v === "") return 0;
@@ -4848,7 +5207,7 @@ function addInventoryLedger(data={}){
   ensureHeaders_("Inventory_Ledger",[
       "ledgerId","date",
       "module","movementType",
-      "itemType","itemName",
+      "itemType","materialId","itemName",
       "sourceRef","targetRef",
       "qtyIn","qtyOut",
       "unit","remarks",
@@ -4861,6 +5220,8 @@ function addInventoryLedger(data={}){
       "migratedAt"
   ]);
 
+  const material = validateInventoryLedgerMaterial_(data);
+
   appendObjectRow(sh,{
 
       ledgerId:data.ledgerId||generateBatchId("LED"),
@@ -4870,8 +5231,9 @@ function addInventoryLedger(data={}){
       module:data.module||"",
       movementType:data.movementType||"",
 
-      itemType:data.itemType||"",
-      itemName:data.itemName||"",
+      itemType:material.category,
+      materialId:material.materialId,
+      itemName:material.materialName,
 
       sourceRef:data.sourceRef||"",
       targetRef:data.targetRef||"",
@@ -4896,6 +5258,94 @@ function addInventoryLedger(data={}){
 
 }
 
+function validateInventoryLedgerMaterial_(data = {}) {
+  const itemType = String(data.itemType || "").trim().toUpperCase();
+  const itemName = String(data.itemName || "").trim();
+
+  if (itemType === "MATERIAL_BUCKET") {
+    throw new Error("Inventory Ledger rejected MATERIAL_BUCKET itemType. Use Material_Master.");
+  }
+
+  if (!itemName && !data.materialId && !data.materialCode) {
+    throw new Error("Inventory Ledger requires a Material Master material");
+  }
+
+  if (isInvalidInventoryItemName_(itemName)) {
+    throw new Error("Inventory Ledger itemName must be a single Material Master item, not recipe text or combined material description: " + itemName);
+  }
+
+  const material = resolveMaterialMaster_(data.materialId, data.materialCode || itemName);
+  const expectedCategory = normalizeMaterialCategoryForLedger_(itemType || material.category);
+
+  if (expectedCategory && expectedCategory !== material.category) {
+    throw new Error(
+      "Inventory Ledger material category mismatch for " +
+        material.materialName +
+        ". Expected " +
+        material.category +
+        ", received " +
+        expectedCategory
+    );
+  }
+
+  return material;
+}
+
+function normalizeMaterialCategoryForLedger_(value) {
+  const category = String(value || "").trim().toUpperCase();
+  if (!category) return "";
+  if (category === "STORES") return "STORE";
+  if (category === "LUMPS" || category === "PURGING") return "REWORK";
+  if (category === "SORTING" || category === "WASH" || category === "WASHED") return "WIP";
+  if (category === "PRODUCTION_SHIFT") return "WIP";
+  if (MATERIAL_MASTER_CATEGORIES.indexOf(category) !== -1) return category;
+  return "";
+}
+
+function isInvalidInventoryItemName_(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  if (/\bE[1-5]\b\s*:\s*[\d,]+(?:\.\d+)?\s*(KG|KGS|KILOGRAMS)?/i.test(text)) return true;
+  if (/[{}[\]]/.test(text)) return true;
+  if (/\d+\s*%/.test(text)) return true;
+  if (/\s\+\s|\s\/\s|,\s*\bE[1-5]\b/i.test(text)) return true;
+  if (/FEED\s*COMPOSITION|RECIPE|DOSING/i.test(text)) return true;
+  return false;
+}
+
+function resolveMaterialMaster_(materialId, materialCodeOrName) {
+  const rows = getMaterialMasterRows_();
+
+  if (!rows.length) {
+    throw new Error("Material_Master is empty. Run db.runMigrations and materialMaster.seedDefaults before posting inventory.");
+  }
+
+  const id = String(materialId || "").trim();
+  const key = materialCode_(materialCodeOrName);
+  const name = String(materialCodeOrName || "").trim().toUpperCase();
+
+  const material = rows.find((row) => {
+    const rowId = String(row.materialId || "").trim();
+    const rowCode = materialCode_(row.materialCode || row.materialName);
+    const rowName = String(row.materialName || "").trim().toUpperCase();
+    return (id && rowId === id) || (key && rowCode === key) || (name && rowName === name);
+  });
+
+  if (!material) {
+    throw new Error("Material not found in Material_Master: " + (materialCodeOrName || materialId || ""));
+  }
+
+  const category = normalizeMaterialCategory_(material.category || material.materialType);
+
+  return {
+    materialId: material.materialId,
+    materialCode: material.materialCode || materialCode_(material.materialName),
+    materialName: material.materialName,
+    category,
+    unit: material.unit || "Kg",
+  };
+}
+
 function getInventoryLedgerBalance(){
 
     const rows=getRowsAsObjects("Inventory_Ledger")
@@ -4905,12 +5355,13 @@ function getInventoryLedgerBalance(){
 
     rows.forEach(r=>{
 
-        const key=r.itemType+"|"+r.itemName;
+        const key=(r.materialId || "")+"|"+r.itemType+"|"+r.itemName;
 
         if(!balance[key]){
 
             balance[key]={
                 itemType:r.itemType,
+                materialId:r.materialId || "",
                 itemName:r.itemName,
                 qty:0
             };
@@ -4983,6 +5434,7 @@ function inventoryLedgerHeaders_() {
     "module",
     "movementType",
     "itemType",
+    "materialId",
     "itemName",
     "sourceRef",
     "targetRef",
@@ -5066,13 +5518,16 @@ function pushRebuiltLedgerRow_(ctx, sourceSheet, sourceId, payload) {
   if (qtyIn <= 0 && qtyOut <= 0) return false;
 
   const index = ctx.rows.length + 1;
+  const material = resolveMaterialForRebuild_(payload);
+
   ctx.rows.push({
     ledgerId: payload.ledgerId || "RBL-" + sourceSheet.replace(/[^A-Za-z0-9]/g, "") + "-" + String(sourceId || index).replace(/[^A-Za-z0-9]/g, "").slice(0, 28) + "-" + index,
     date: normalizeDateOnly_(payload.date || todayYmd()),
     module: payload.module || "",
     movementType: payload.movementType || "",
-    itemType: payload.itemType || "",
-    itemName: payload.itemName || "",
+    itemType: material.category || payload.itemType || "",
+    materialId: material.materialId || "",
+    itemName: material.materialName || payload.itemName || "",
     sourceRef: payload.sourceRef || sourceId || "",
     targetRef: payload.targetRef || "",
     qtyIn,
@@ -5090,6 +5545,20 @@ function pushRebuiltLedgerRow_(ctx, sourceSheet, sourceId, payload) {
 
   ctx.sourceCounts[sourceSheet] = (ctx.sourceCounts[sourceSheet] || 0) + 1;
   return true;
+}
+
+function resolveMaterialForRebuild_(payload = {}) {
+  try {
+    return resolveMaterialMaster_(payload.materialId, payload.materialCode || payload.itemName);
+  } catch (err) {
+    return {
+      materialId: "",
+      materialCode: "",
+      materialName: payload.itemName || "",
+      category: normalizeMaterialCategoryForLedger_(payload.itemType) || payload.itemType || "",
+      unit: payload.unit || "Kg",
+    };
+  }
 }
 
 function rebuildFromRmInward_(ctx) {
@@ -6481,6 +6950,7 @@ function setupRegenOSBackend() {
       "module",
       "movementType",
       "itemType",
+      "materialId",
       "itemName",
       "sourceRef",
       "targetRef",
@@ -6491,6 +6961,46 @@ function setupRegenOSBackend() {
       "status",
       "createdBy",
       "createdAt",
+    ],
+    Material_Master: [
+      "materialId",
+      "materialCode",
+      "materialName",
+      "category",
+      "unit",
+      "status",
+      "defaultQualityRequired",
+      "defaultStorageLocation",
+      "createdBy",
+      "createdAt",
+      "updatedAt",
+    ],
+    Production_Recipes: [
+      "recipeId",
+      "recipeCode",
+      "recipeName",
+      "outputMaterialId",
+      "outputMaterialCode",
+      "processType",
+      "status",
+      "remarks",
+      "createdBy",
+      "createdAt",
+      "updatedAt",
+    ],
+    Recipe_Components: [
+      "componentId",
+      "recipeId",
+      "inputMaterialId",
+      "inputMaterialCode",
+      "componentType",
+      "standardPercent",
+      "standardKg",
+      "tolerancePercent",
+      "status",
+      "createdBy",
+      "createdAt",
+      "updatedAt",
     ],
     RM_Quality: [
       "qualityId",

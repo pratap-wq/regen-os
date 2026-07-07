@@ -391,6 +391,9 @@ function updateFactoryCostMaster(data = {}) {
     if (p.fn === "quality.fg.update") return updateFgQuality(p);
 
     if (p.fn === "quality.syncOldData") return syncOldQualityData();
+    if (p.fn === "quality.migrateLegacyCleanup") {
+      return output(migrateQualityLegacyCleanup(p.dryRun === true || String(p.dryRun || "").toLowerCase() === "true"));
+    }
 
     // Alerts
     if (p.fn === "alerts.settings.add") return addAlertSetting(p);
@@ -1219,9 +1222,15 @@ const REGEN_DB_SCHEMA = {
   ],
   RM_Quality: [
     "qualityId",
+    "qualityRef",
     "date",
+    "sourceType",
+    "sourceRef",
     "rmInwardId",
     "legacyQualityRef",
+    "rubberLevel",
+    "metalContaminationPercent",
+    "dustPercent",
     "rubberPercent",
     "ppPercent",
     "sinkMaterialPercent",
@@ -1243,16 +1252,27 @@ const REGEN_DB_SCHEMA = {
     "sinkMaterialPercent",
     "acceptGm",
     "remarks",
+    "decision",
+    "qcStatus",
     "status",
+    "testedBy",
+    "migrationStatus",
     "createdBy",
     "createdAt",
   ],
   FG_Quality: [
     "qualityId",
+    "qualityRef",
     "date",
+    "sourceType",
+    "sourceRef",
     "extrusionBatchId",
     "fgBatchCode",
     "legacyQualityRef",
+    "grade",
+    "machine",
+    "shift",
+    "quantity",
     "moisturePercent",
     "mfi",
     "izod",
@@ -1266,7 +1286,11 @@ const REGEN_DB_SCHEMA = {
     "bagWeight4Kg",
     "avgBagWeightKg",
     "remarks",
+    "decision",
+    "qcStatus",
     "status",
+    "testedBy",
+    "migrationStatus",
     "createdBy",
     "createdAt",
   ],
@@ -7241,14 +7265,18 @@ function auditLegacyDispatchFg_(rows) {
 }
 // QUALITY
 
-function addRmQuality(data = {}) {
-  const sh = getSheet("RM_Quality");
-
-  ensureHeaders_("RM_Quality", [
+function rmQualityHeaders_() {
+  return [
     "qualityId",
+    "qualityRef",
     "date",
+    "sourceType",
+    "sourceRef",
     "rmInwardId",
     "legacyQualityRef",
+    "rubberLevel",
+    "metalContaminationPercent",
+    "dustPercent",
     "rubberPercent",
     "ppPercent",
     "sinkMaterialPercent",
@@ -7266,27 +7294,81 @@ function addRmQuality(data = {}) {
     "sinkMaterialGm",
     "dryDustPercent",
     "colouredFlakesPercent",
-    "ppPercent",
-    "sinkMaterialPercent",
     "acceptGm",
     "remarks",
+    "decision",
+    "qcStatus",
     "status",
+    "testedBy",
+    "migrationStatus",
     "createdBy",
     "createdAt",
-  ]);
+  ];
+}
+
+function fgQualityHeaders_() {
+  return [
+    "qualityId",
+    "qualityRef",
+    "date",
+    "sourceType",
+    "sourceRef",
+    "extrusionBatchId",
+    "fgBatchCode",
+    "legacyQualityRef",
+    "grade",
+    "machine",
+    "shift",
+    "quantity",
+    "moisturePercent",
+    "mfi",
+    "izod",
+    "ashPercent",
+    "colour",
+    "blackDots",
+    "appearance",
+    "bagWeight1Kg",
+    "bagWeight2Kg",
+    "bagWeight3Kg",
+    "bagWeight4Kg",
+    "avgBagWeightKg",
+    "remarks",
+    "decision",
+    "qcStatus",
+    "status",
+    "testedBy",
+    "migrationStatus",
+    "createdBy",
+    "createdAt",
+  ];
+}
+
+function addRmQuality(data = {}) {
+  const sh = getSheet("RM_Quality");
+
+  ensureHeaders_("RM_Quality", rmQualityHeaders_());
 
   const qualityId = data.qualityId || generateBatchId("RMQ");
   const date = normalizeDateOnly_(data.date || todayYmd());
+  const sourceRef = data.sourceRef || data.rmInwardId || data.inwardId || "";
+  const qualityRef = data.qualityRef || sourceRef || qualityId;
+  const decision = String(data.decision || data.qcStatus || data.status || "APPROVED").toUpperCase();
 
   appendObjectRow(sh, {
     qualityId,
+    qualityRef,
     date,
-    rmInwardId: data.rmInwardId || data.inwardId || "",
+    sourceType: data.sourceType || "INCOMING_MATERIAL",
+    sourceRef,
+    rmInwardId: sourceRef,
     legacyQualityRef: data.legacyQualityRef || "",
-    rubberPercent: num(data.rubberPercent),
+    rubberLevel: data.rubberLevel || "",
+    metalContaminationPercent: num(data.metalContaminationPercent),
+    dustPercent: num(data.dustPercent || data.moisturePercent),
+    rubberPercent: "",
     ppPercent: num(data.ppPercent),
     sinkMaterialPercent: num(data.sinkMaterialPercent),
-    moisturePercent: num(data.moisturePercent),
+    moisturePercent: num(data.dustPercent || data.moisturePercent),
     contaminationPercent: num(data.contaminationPercent),
     mfi: num(data.mfi),
     visualRating: data.visualRating || "",
@@ -7302,13 +7384,16 @@ function addRmQuality(data = {}) {
     colouredFlakesPercent: num(data.colouredFlakesPercent),
     acceptGm: num(data.acceptGm),
     remarks: data.remarks || "",
-    status: data.status || "APPROVED",
+    decision,
+    qcStatus: decision,
+    status: decision,
+    testedBy: data.testedBy || data.createdBy || "Quality",
+    migrationStatus: data.migrationStatus || "",
     createdBy: data.createdBy || "System",
     createdAt: new Date(),
   });
 
-  const rmInwardId = data.rmInwardId || data.inwardId || "";
-  const decision = String(data.status || "APPROVED").toUpperCase();
+  const rmInwardId = sourceRef;
   let receivingUpdate = { updated: false };
   let ledger = { posted: false, reason: "NOT_APPROVED" };
 
@@ -7345,13 +7430,23 @@ function addRmQuality(data = {}) {
 }
 
 function updateRmQuality(data = {}) {
+  ensureHeaders_("RM_Quality", rmQualityHeaders_());
+  const sourceRef = data.sourceRef || data.rmInwardId || data.inwardId || "";
+  const decision = String(data.decision || data.qcStatus || data.status || "").toUpperCase();
   const result = updateById("RM_Quality", "qualityId", data.qualityId, {
+    qualityRef: data.qualityRef || "",
     date: normalizeDateOnly_(data.date || todayYmd()),
-    rmInwardId: data.rmInwardId || data.inwardId || "",
-    rubberPercent: num(data.rubberPercent),
+    sourceType: data.sourceType || "INCOMING_MATERIAL",
+    sourceRef,
+    rmInwardId: sourceRef,
+    legacyQualityRef: data.legacyQualityRef || "",
+    rubberLevel: data.rubberLevel || "",
+    metalContaminationPercent: num(data.metalContaminationPercent),
+    dustPercent: num(data.dustPercent || data.moisturePercent),
+    rubberPercent: data.rubberPercent ? num(data.rubberPercent) : "",
     ppPercent: num(data.ppPercent),
     sinkMaterialPercent: num(data.sinkMaterialPercent),
-    moisturePercent: num(data.moisturePercent),
+    moisturePercent: num(data.dustPercent || data.moisturePercent),
     contaminationPercent: num(data.contaminationPercent),
     mfi: num(data.mfi),
     visualRating: data.visualRating || "",
@@ -7367,11 +7462,14 @@ function updateRmQuality(data = {}) {
     colouredFlakesPercent: num(data.colouredFlakesPercent),
     acceptGm: num(data.acceptGm),
     remarks: data.remarks || "",
-    status: data.status || "",
+    decision,
+    qcStatus: decision,
+    status: decision,
+    testedBy: data.testedBy || "",
+    migrationStatus: data.migrationStatus || "",
   });
 
-  const rmInwardId = data.rmInwardId || data.inwardId || "";
-  const decision = String(data.status || "").toUpperCase();
+  const rmInwardId = sourceRef;
 
   if (rmInwardId && decision) {
     const rmRow = getRowById_("RM_Inward", "inwardId", rmInwardId);
@@ -7406,39 +7504,27 @@ function updateRmQuality(data = {}) {
 function addFgQuality(data = {}) {
   const sh = getSheet("FG_Quality");
 
-  ensureHeaders_("FG_Quality", [
-    "qualityId",
-    "date",
-    "extrusionBatchId",
-    "fgBatchCode",
-    "legacyQualityRef",
-    "moisturePercent",
-    "mfi",
-    "izod",
-    "ashPercent",
-    "colour",
-    "blackDots",
-    "appearance",
-    "bagWeight1Kg",
-    "bagWeight2Kg",
-    "bagWeight3Kg",
-    "bagWeight4Kg",
-    "avgBagWeightKg",
-    "remarks",
-    "status",
-    "createdBy",
-    "createdAt",
-  ]);
+  ensureHeaders_("FG_Quality", fgQualityHeaders_());
 
   const qualityId = data.qualityId || generateBatchId("FGQ");
   const date = normalizeDateOnly_(data.date || todayYmd());
+  const sourceRef = data.sourceRef || data.extrusionBatchId || data.fgBatchCode || "";
+  const qualityRef = data.qualityRef || data.fgBatchCode || sourceRef || qualityId;
+  const decision = String(data.decision || data.qcStatus || data.status || "APPROVED").toUpperCase();
 
   appendObjectRow(sh, {
     qualityId,
+    qualityRef,
     date,
-    extrusionBatchId: data.extrusionBatchId || data.fgBatchCode || "",
-    fgBatchCode: data.fgBatchCode || data.extrusionBatchId || "",
+    sourceType: data.sourceType || "FG_PRODUCTION",
+    sourceRef,
+    extrusionBatchId: sourceRef,
+    fgBatchCode: qualityRef,
     legacyQualityRef: data.legacyQualityRef || "",
+    grade: data.grade || "",
+    machine: data.machine || "",
+    shift: data.shift || "",
+    quantity: num(data.quantity),
     moisturePercent: num(data.moisturePercent),
     mfi: num(data.mfi),
     izod: num(data.izod),
@@ -7452,7 +7538,11 @@ function addFgQuality(data = {}) {
     bagWeight4Kg: num(data.bagWeight4Kg),
     avgBagWeightKg: num(data.avgBagWeightKg),
     remarks: data.remarks || "",
-    status: data.status || "APPROVED",
+    decision,
+    qcStatus: decision,
+    status: decision,
+    testedBy: data.testedBy || data.createdBy || "Quality",
+    migrationStatus: data.migrationStatus || "",
     createdBy: data.createdBy || "System",
     createdAt: new Date(),
   });
@@ -7461,10 +7551,22 @@ function addFgQuality(data = {}) {
 }
 
 function updateFgQuality(data = {}) {
+  ensureHeaders_("FG_Quality", fgQualityHeaders_());
+  const sourceRef = data.sourceRef || data.extrusionBatchId || data.fgBatchCode || "";
+  const qualityRef = data.qualityRef || data.fgBatchCode || sourceRef || "";
+  const decision = String(data.decision || data.qcStatus || data.status || "").toUpperCase();
   return updateById("FG_Quality", "qualityId", data.qualityId, {
+    qualityRef,
     date: normalizeDateOnly_(data.date || todayYmd()),
-    extrusionBatchId: data.extrusionBatchId || data.fgBatchCode || "",
-    fgBatchCode: data.fgBatchCode || data.extrusionBatchId || "",
+    sourceType: data.sourceType || "FG_PRODUCTION",
+    sourceRef,
+    extrusionBatchId: sourceRef,
+    fgBatchCode: qualityRef,
+    legacyQualityRef: data.legacyQualityRef || "",
+    grade: data.grade || "",
+    machine: data.machine || "",
+    shift: data.shift || "",
+    quantity: num(data.quantity),
     moisturePercent: num(data.moisturePercent),
     mfi: num(data.mfi),
     izod: num(data.izod),
@@ -7478,7 +7580,11 @@ function updateFgQuality(data = {}) {
     bagWeight4Kg: num(data.bagWeight4Kg),
     avgBagWeightKg: num(data.avgBagWeightKg),
     remarks: data.remarks || "",
-    status: data.status || "",
+    decision,
+    qcStatus: decision,
+    status: decision,
+    testedBy: data.testedBy || "",
+    migrationStatus: data.migrationStatus || "",
   });
 }
 
@@ -7730,6 +7836,151 @@ function migrateQualityReferences(dryRun) {
 
   Logger.log(JSON.stringify(summary, null, 2));
   return summary;
+}
+
+function migrateQualityLegacyCleanup(dryRun) {
+  const isDryRun = dryRun === true || String(dryRun || "").toLowerCase() === "true";
+  const cutoff = "2026-06-01";
+
+  ensureHeaders_("RM_Quality", rmQualityHeaders_());
+  ensureHeaders_("FG_Quality", fgQualityHeaders_());
+
+  const rmData = qualityRowsWithIndex_("RM_Quality");
+  const fgData = qualityRowsWithIndex_("FG_Quality");
+  const rmInwardRows = getRowsAsObjects("RM_Inward");
+  const extrusionRows = getRowsAsObjects("Extrusion_Batches");
+  const rmIndex = qualityIndexRowsByRefs_(rmInwardRows, [
+    "inwardId",
+    "receivingRef",
+    "batchId",
+    "legacyQualityRef",
+    "legacySourceId",
+  ]);
+  const fgIndex = qualityIndexRowsByRefs_(extrusionRows, [
+    "extrusionBatchId",
+    "fgBatchCode",
+    "batchId",
+    "lotNo",
+    "legacyQualityRef",
+    "legacySourceId",
+  ]);
+
+  const result = {
+    ok: true,
+    dryRun: isDryRun,
+    migrationFunction: "migrateQualityLegacyCleanup",
+    cutoffDate: cutoff,
+    scanned: {
+      rmQuality: rmData.rows.length,
+      fgQuality: fgData.rows.length,
+    },
+    oldRecordsFound: 0,
+    convertible: 0,
+    needsReview: 0,
+    skippedCurrent: 0,
+    skippedAlreadyMigrated: 0,
+    updates: [],
+  };
+
+  function col(headers, name) {
+    return headers.indexOf(name) + 1;
+  }
+
+  function setCell(data, rowNumber, field, value) {
+    const index = col(data.headers, field);
+    if (index > 0) data.sheet.getRange(rowNumber, index).setValue(value);
+  }
+
+  function oldDate(row) {
+    const date = qualityDateOnly_(row.date || row.createdAt);
+    return date && date < cutoff;
+  }
+
+  rmData.rows.forEach((row, index) => {
+    if (!oldDate(row)) {
+      result.skippedCurrent++;
+      return;
+    }
+    if (String(row.migrationStatus || "").toUpperCase() === "LEGACY_AUTO_COMPLETED") {
+      result.skippedAlreadyMigrated++;
+      return;
+    }
+
+    result.oldRecordsFound++;
+    const oldRef = String(row.rmInwardId || row.sourceRef || row.qualityRef || row.legacyQualityRef || row.qualityId || "").trim();
+    const rmMatch = oldRef ? rmIndex[oldRef] : null;
+    const newRef = rmMatch ? qualityRmReferenceFromRow_(oldRef, rmMatch) : "";
+    const displayRef = newRef || row.qualityRef || oldRef || "RMQ-" + String(index + 1).padStart(3, "0");
+    const migrationStatus = newRef ? "LEGACY_AUTO_COMPLETED" : "NEEDS_REVIEW";
+
+    if (newRef) result.convertible++;
+    else result.needsReview++;
+
+    result.updates.push({
+      sheet: "RM_Quality",
+      rowNumber: row.__rowNumber,
+      qualityId: row.qualityId || "",
+      oldRef,
+      qualityRef: displayRef,
+      migrationStatus,
+    });
+
+    if (!isDryRun) {
+      setCell(rmData, row.__rowNumber, "legacyQualityRef", row.legacyQualityRef || oldRef);
+      setCell(rmData, row.__rowNumber, "qualityRef", displayRef);
+      setCell(rmData, row.__rowNumber, "sourceType", "INCOMING_MATERIAL");
+      setCell(rmData, row.__rowNumber, "sourceRef", oldRef);
+      setCell(rmData, row.__rowNumber, "qcStatus", "COMPLETED");
+      setCell(rmData, row.__rowNumber, "decision", "LEGACY_COMPLETED");
+      setCell(rmData, row.__rowNumber, "status", row.status || "APPROVED");
+      setCell(rmData, row.__rowNumber, "migrationStatus", migrationStatus);
+      setCell(rmData, row.__rowNumber, "dustPercent", row.dustPercent || row.moisturePercent || "");
+    }
+  });
+
+  fgData.rows.forEach((row, index) => {
+    if (!oldDate(row)) {
+      result.skippedCurrent++;
+      return;
+    }
+    if (String(row.migrationStatus || "").toUpperCase() === "LEGACY_AUTO_COMPLETED") {
+      result.skippedAlreadyMigrated++;
+      return;
+    }
+
+    result.oldRecordsFound++;
+    const oldRef = String(row.extrusionBatchId || row.fgBatchCode || row.sourceRef || row.qualityRef || row.legacyQualityRef || row.qualityId || "").trim();
+    const fgMatch = oldRef ? fgIndex[oldRef] : null;
+    const newRef = fgMatch ? qualityFgReferenceFromRow_(oldRef, fgMatch, row) : "";
+    const displayRef = newRef || row.qualityRef || oldRef || "FGQ-" + String(index + 1).padStart(3, "0");
+    const migrationStatus = newRef ? "LEGACY_AUTO_COMPLETED" : "NEEDS_REVIEW";
+
+    if (newRef) result.convertible++;
+    else result.needsReview++;
+
+    result.updates.push({
+      sheet: "FG_Quality",
+      rowNumber: row.__rowNumber,
+      qualityId: row.qualityId || "",
+      oldRef,
+      qualityRef: displayRef,
+      migrationStatus,
+    });
+
+    if (!isDryRun) {
+      setCell(fgData, row.__rowNumber, "legacyQualityRef", row.legacyQualityRef || oldRef);
+      setCell(fgData, row.__rowNumber, "qualityRef", displayRef);
+      setCell(fgData, row.__rowNumber, "sourceType", "FG_PRODUCTION");
+      setCell(fgData, row.__rowNumber, "sourceRef", oldRef);
+      setCell(fgData, row.__rowNumber, "qcStatus", "COMPLETED");
+      setCell(fgData, row.__rowNumber, "decision", "LEGACY_COMPLETED");
+      setCell(fgData, row.__rowNumber, "status", row.status || "APPROVED");
+      setCell(fgData, row.__rowNumber, "migrationStatus", migrationStatus);
+    }
+  });
+
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
 }
 
 function syncOldQualityData() {
@@ -8405,49 +8656,8 @@ function setupRegenOSBackend() {
       "createdAt",
       "updatedAt",
     ],
-    RM_Quality: [
-      "qualityId",
-      "date",
-      "rmInwardId",
-      "legacyQualityRef",
-      "formOfMaterial",
-      "conditionOfMaterial",
-      "sampleQtyGm",
-      "dryDustGm",
-      "colouredFlakesGm",
-      "rubberContaminationNo",
-      "ppGm",
-      "sinkMaterialGm",
-      "dryDustPercent",
-      "colouredFlakesPercent",
-      "ppPercent",
-      "sinkMaterialPercent",
-      "acceptGm",
-      "remarks",
-      "status",
-      "createdBy",
-      "createdAt",
-    ],
-    FG_Quality: [
-      "qualityId",
-      "date",
-      "extrusionBatchId",
-      "fgBatchCode",
-      "legacyQualityRef",
-      "moisturePercent",
-      "mfi",
-      "colour",
-      "appearance",
-      "bagWeight1Kg",
-      "bagWeight2Kg",
-      "bagWeight3Kg",
-      "bagWeight4Kg",
-      "avgBagWeightKg",
-      "remarks",
-      "status",
-      "createdBy",
-      "createdAt",
-    ],
+    RM_Quality: rmQualityHeaders_(),
+    FG_Quality: fgQualityHeaders_(),
     Factory_Expenses: [
       "expenseId",
       "date",

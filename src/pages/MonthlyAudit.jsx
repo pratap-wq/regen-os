@@ -1,22 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
-import MonthlySummary from "../components/MonthlySummary";
-import InventoryReconciliation from "../components/InventoryReconciliation";
-import MaterialFlowSummary from "../components/MaterialFlowSummary";
-import WasteAnalysis from "../components/WasteAnalysis";
-import CostAnalysis from "../components/CostAnalysis";
-import ProfitabilitySummary from "../components/ProfitabilitySummary";
-import CloseChecklist from "../components/CloseChecklist";
 import { calculateMonthClose } from "../services/monthCloseEngine";
 import { getPhysicalCount, savePhysicalCount } from "../services/physicalCountService";
 
+const MANUFACTURING_GROUPS = ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"];
+
 export default function MonthlyAudit() {
   const now = new Date();
-
   const [month, setMonth] = useState(
     `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
   );
-
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("");
   const [rows, setRows] = useState({
     rm: [],
     wash: [],
@@ -27,18 +22,12 @@ export default function MonthlyAudit() {
     storesIssue: [],
     factoryExpenses: [],
     storesMaster: [],
+    adjustments: [],
+    closeRows: [],
+    materials: [],
   });
-
-  const [adjustments, setAdjustments] = useState([]);
-  const [adjustmentReasons, setAdjustmentReasons] = useState({});
   const [materialGroupView, setMaterialGroupView] = useState(null);
-  const [materialRepairResult, setMaterialRepairResult] = useState(null);
-
   const [physical, setPhysical] = useState({
-    rmPhysicalKg: "",
-    washPhysicalKg: "",
-    sortingPhysicalKg: "",
-    fgPhysicalKg: "",
     storesPhysicalValue: "",
     productionSignoff: "",
     storesSignoff: "",
@@ -48,19 +37,16 @@ export default function MonthlyAudit() {
     remarks: "",
   });
   const [physicalMaterialLines, setPhysicalMaterialLines] = useState({});
-
-  const [status, setStatus] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [adjustmentReasons, setAdjustmentReasons] = useState({});
 
   useEffect(() => {
-    loadData();
-    loadPhysicalCount();
+    loadAll();
   }, [month]);
 
   async function safeLoad(fn, extra = {}) {
     try {
       const res = await apiCall({ fn, ...extra });
-      return res.rows || [];
+      return res?.rows || [];
     } catch (err) {
       console.log(fn, err);
       return [];
@@ -76,82 +62,7 @@ export default function MonthlyAudit() {
     }
   }
 
-  async function loadPhysicalCount() {
-    try {
-      const res = await getPhysicalCount(month);
-
-      if (res?.ok && res.row) {
-        setPhysical((prev) => ({
-          ...prev,
-          rmPhysicalKg: res.row.rmPhysicalKg ?? "",
-          washPhysicalKg: res.row.washPhysicalKg ?? "",
-          sortingPhysicalKg: res.row.sortingPhysicalKg ?? "",
-          fgPhysicalKg: res.row.fgPhysicalKg ?? "",
-          storesPhysicalValue: res.row.storesPhysicalValue ?? "",
-          productionSignoff: res.row.productionSignoff ?? "",
-          storesSignoff: res.row.storesSignoff ?? "",
-          accountsSignoff: res.row.accountsSignoff ?? "",
-          qcSignoff: res.row.qcSignoff ?? "",
-          ceoSignoff: res.row.ceoSignoff || "Pratap",
-          remarks: res.row.remarks ?? "",
-        }));
-        setPhysicalMaterialLines(parsePhysicalMaterialLines(res.row.materialPhysicalLinesJson));
-      }
-    } catch (err) {
-      console.log("physicalCounts.get", err);
-    }
-  }
-
-  async function savePhysicalStockSnapshot({ silent = false } = {}) {
-    const materialPhysicalRows = materialLines.map((line) => ({
-      materialId: line.materialId || "",
-      materialCode: line.materialCode || "",
-      materialName: line.materialName || line.itemCode || "",
-      category: line.category || line.itemType || "",
-      systemKg: num(line.systemKg),
-      physicalKg: physicalMaterialLines[line.key] === "" ? "" : num(physicalMaterialLines[line.key]),
-    }));
-    const physicalTotals = materialPhysicalRows.reduce(
-      (totals, row) => {
-        const qty = row.physicalKg === "" ? 0 : num(row.physicalKg);
-        if (row.category === "RM") totals.rmPhysicalKg += qty;
-        if (row.category === "WIP") totals.washPhysicalKg += qty;
-        if (row.category === "FG") totals.fgPhysicalKg += qty;
-        return totals;
-      },
-      { rmPhysicalKg: 0, washPhysicalKg: 0, sortingPhysicalKg: 0, fgPhysicalKg: 0 }
-    );
-
-    const res = await savePhysicalCount(month, {
-      ...physical,
-      ...physicalTotals,
-      materialPhysicalLinesJson: JSON.stringify(materialPhysicalRows),
-      savedBy: physical.ceoSignoff || "System",
-    });
-
-    if (!res?.ok) {
-      throw new Error(res?.error || "Failed to save physical stock.");
-    }
-
-    if (!silent) {
-      setStatus("Physical stock saved successfully.");
-    }
-
-    await loadPhysicalCount();
-    await loadData();
-    return res;
-  }
-
-  async function savePhysicalStock() {
-    try {
-      setStatus("Saving physical stock count...");
-      await savePhysicalStockSnapshot();
-    } catch (err) {
-      setStatus(err.message || "Failed to save physical stock.");
-    }
-  }
-
-  async function loadData() {
+  async function loadAll() {
     setLoading(true);
     setStatus("");
 
@@ -165,8 +76,11 @@ export default function MonthlyAudit() {
       storesIssue,
       factoryExpenses,
       storesMaster,
-      adjustmentRows,
+      adjustments,
+      closeRows,
+      materials,
       materialGroups,
+      physicalCount,
     ] = await Promise.all([
       safeLoad("rm.list"),
       safeLoad("wash.list"),
@@ -178,7 +92,10 @@ export default function MonthlyAudit() {
       safeLoad("factoryExpenses.list"),
       safeLoad("storesMaster.list"),
       safeLoad("inventoryAdjustments.list", { periodMonth: month }),
+      safeLoad("monthClose.list"),
+      safeLoad("materialMaster.list"),
       safeCall("monthClose.materialGroups", { periodMonth: month }),
+      safeCall("physicalCounts.get", { periodMonth: month }),
     ]);
 
     setRows({
@@ -191,937 +108,546 @@ export default function MonthlyAudit() {
       storesIssue,
       factoryExpenses,
       storesMaster,
+      adjustments,
+      closeRows,
+      materials,
     });
-
-    setAdjustments(adjustmentRows);
     setMaterialGroupView(materialGroups?.ok ? materialGroups : null);
+
+    if (physicalCount?.ok && physicalCount.row) {
+      setPhysical((prev) => ({
+        ...prev,
+        storesPhysicalValue: physicalCount.row.storesPhysicalValue ?? "",
+        productionSignoff: physicalCount.row.productionSignoff ?? "",
+        storesSignoff: physicalCount.row.storesSignoff ?? "",
+        accountsSignoff: physicalCount.row.accountsSignoff ?? "",
+        qcSignoff: physicalCount.row.qcSignoff ?? "",
+        ceoSignoff: physicalCount.row.ceoSignoff || "Pratap",
+        remarks: physicalCount.row.remarks ?? "",
+      }));
+      setPhysicalMaterialLines(parsePhysicalMaterialLines(physicalCount.row.materialPhysicalLinesJson));
+    } else {
+      setPhysicalMaterialLines({});
+    }
+
     setLoading(false);
   }
 
-  const close = useMemo(() => {
-    return calculateMonthClose({
-      rmRows: rows.rm,
-      washRows: rows.wash,
-      sortingRows: rows.sorting,
-      extrusionRows: rows.extrusion,
-      dispatchRows: rows.dispatch,
-      storesIssueRows: rows.storesIssue,
-      factoryExpenseRows: rows.factoryExpenses,
-      storesMasterRows: rows.storesMaster,
-      periodMonth: month,
-    });
-  }, [rows, month]);
+  const close = useMemo(
+    () =>
+      calculateMonthClose({
+        rmRows: rows.rm,
+        washRows: rows.wash,
+        sortingRows: rows.sorting,
+        extrusionRows: rows.extrusion,
+        dispatchRows: rows.dispatch,
+        storesIssueRows: rows.storesIssue,
+        factoryExpenseRows: rows.factoryExpenses,
+        storesMasterRows: rows.storesMaster,
+        periodMonth: month,
+      }),
+    [rows, month]
+  );
 
   const materialLines = useMemo(() => {
-    const groups = materialGroupView?.groups || {};
-    const categoryOrder = ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"];
-    const baseLines = categoryOrder.flatMap((category) =>
+    const groups = hasMaterialGroupRows(materialGroupView?.groups)
+      ? materialGroupView.groups
+      : buildMaterialGroupsFromMaster(rows.materials);
+
+    return MANUFACTURING_GROUPS.flatMap((category) =>
       (groups[category] || []).map((material) => {
         const key = `${category}|${material.materialId || material.materialCode || material.materialName}`;
+        const physicalValue = physicalMaterialLines[key] ?? "";
+        const related = rows.adjustments.filter((a) => {
+          const sameMonth = String(a.periodMonth || "") === String(month);
+          const sameSource = String(a.sourceRef || "") === `MONTH_CLOSE:${month}:${key}`;
+          const sameMaterial =
+            String(a.materialId || "") === String(material.materialId || "") ||
+            String(a.itemCode || a.material || "").toUpperCase() ===
+              String(material.materialName || material.materialCode || "").toUpperCase();
+          return sameMonth && (sameSource || sameMaterial);
+        });
+        const approvedAdjustmentKg = related
+          .filter((a) => String(a.status || "").toUpperCase() === "APPROVED")
+          .reduce((sum, a) => sum + num(a.quantityKg), 0);
+        const pendingAdjustmentKg = related
+          .filter((a) => ["DRAFT", "SUBMITTED", "PENDING"].includes(String(a.status || "").toUpperCase()))
+          .reduce((sum, a) => sum + num(a.quantityKg), 0);
+        const systemClosing = num(material.balance);
+        const hasPhysical = Math.abs(systemClosing) <= 0.01 || physicalValue !== "";
+        const physicalKg = hasPhysical ? num(physicalValue) : 0;
+        const differenceKg = hasPhysical ? physicalKg - systemClosing : 0;
+        const remainingKg = differenceKg - approvedAdjustmentKg;
+
+        let rowStatus = "Physical Pending";
+        let statusType = "pending";
+        if (hasPhysical && Math.abs(differenceKg) <= 0.01) {
+          rowStatus = "Reconciled";
+          statusType = "success";
+        } else if (hasPhysical && Math.abs(remainingKg) <= 0.01 && Math.abs(approvedAdjustmentKg) > 0.01) {
+          rowStatus = "Reconciled";
+          statusType = "success";
+        } else if (hasPhysical && Math.abs(pendingAdjustmentKg) > 0.01) {
+          rowStatus = "Adjustment Pending";
+          statusType = "warning";
+        } else if (hasPhysical) {
+          rowStatus = "Investigation Required";
+          statusType = "danger";
+        }
+
         return {
           key,
-          stage: categoryLabel(category),
-          module: "MONTH_CLOSE",
-          itemType: category,
-          category,
           materialId: material.materialId || "",
           materialCode: material.materialCode || "",
-          materialName: material.materialName || "",
-          itemCode: material.materialName || material.materialCode || "",
-          sourceNote: "Material Master",
-          systemKg: material.balance,
-          physicalKg: physicalMaterialLines[key] ?? "",
+          materialName: material.materialName || material.name || "",
+          group: category,
+          opening: num(material.opening),
+          inward: num(material.inward),
+          consumed: num(material.consumed),
+          produced: num(material.produced),
+          dispatched: num(material.dispatched),
+          approvedAdjustments: num(material.approvedAdjustments) + approvedAdjustmentKg,
+          systemClosing,
+          physicalKg,
+          physicalValue,
+          hasPhysical,
+          differenceKg,
+          remainingKg,
+          pendingAdjustmentKg,
+          status: rowStatus,
+          statusType,
         };
       })
     );
+  }, [materialGroupView, rows.materials, rows.adjustments, physicalMaterialLines, month]);
 
-    if (!baseLines.length) {
-      return [];
-    }
+  const readiness = useMemo(() => {
+    const closed = rows.closeRows.some(
+      (r) => String(r.periodMonth || "") === String(month) && String(r.status || "").toUpperCase() === "CLOSED"
+    );
+    const physicalPending = materialLines.filter((line) => !line.hasPhysical).length;
+    const investigation = materialLines.filter((line) => line.statusType === "danger").length;
+    const adjustmentPending = materialLines.filter((line) => line.statusType === "warning").length;
+    const signoffsComplete = [
+      physical.productionSignoff,
+      physical.storesSignoff,
+      physical.accountsSignoff,
+      physical.ceoSignoff,
+    ].every((value) => String(value || "").trim());
 
-    return baseLines.map((line) => {
-      const lineSourceRef = `MONTH_CLOSE:${month}:${line.key}`;
-      const related = adjustments.filter((a) => {
-        const sameMonth = String(a.periodMonth || "") === String(month);
-        const sameType =
-          String(a.itemType || "").toUpperCase() ===
-          String(line.itemType || "").toUpperCase();
-        const sameSource = String(a.sourceRef || "") === lineSourceRef;
-        const sameItem =
-          String(a.itemCode || a.material || "").toUpperCase() ===
-          String(line.itemCode || "").toUpperCase();
+    return [
+      {
+        title: "Production Complete",
+        ok: close.production.fgProducedKg > 0,
+        next: close.production.fgProducedKg > 0 ? "Production data loaded" : "Complete production entries",
+      },
+      {
+        title: "Dispatch Complete",
+        ok: close.production.dispatchKg > 0,
+        next: close.production.dispatchKg > 0 ? "Dispatch data loaded" : "Complete dispatch entries",
+      },
+      {
+        title: "Expenses Complete",
+        ok: rows.factoryExpenses.length > 0 || close.costs.factoryExpenseValue > 0,
+        next: rows.factoryExpenses.length > 0 ? "Expenses loaded" : "Enter factory expenses if applicable",
+      },
+      {
+        title: "Physical Stock Pending",
+        ok: physicalPending === 0,
+        next: physicalPending === 0 ? "Physical stock entered" : `${physicalPending} material(s) need physical stock`,
+      },
+      {
+        title: "Inventory Adjustment Pending",
+        ok: adjustmentPending === 0 && investigation === 0,
+        next:
+          adjustmentPending > 0
+            ? `${adjustmentPending} adjustment(s) pending`
+            : investigation > 0
+            ? `${investigation} material(s) need reason/approval`
+            : "No pending adjustments",
+      },
+      {
+        title: "Ready To Close",
+        ok: physicalPending === 0 && investigation === 0 && adjustmentPending === 0 && signoffsComplete,
+        next: signoffsComplete ? "Ready when all variances reconcile" : "Complete sign-off",
+      },
+      {
+        title: "Closed",
+        ok: closed,
+        next: closed ? "Month is closed" : "Not closed yet",
+      },
+    ];
+  }, [rows.closeRows, rows.factoryExpenses, close, materialLines, physical, month]);
 
-        return sameMonth && sameType && (sameSource || sameItem);
-      });
+  const readyToClose = readiness.find((card) => card.title === "Ready To Close")?.ok;
 
-      const approvedAdjustmentKg = related
-        .filter((a) => String(a.status || "").toUpperCase() === "APPROVED")
-        .reduce((s, a) => s + num(a.quantityKg), 0);
-
-      const pendingAdjustmentKg = related
-        .filter((a) =>
-          ["DRAFT", "SUBMITTED", "PENDING"].includes(
-            String(a.status || "").toUpperCase()
-          )
-        )
-        .reduce((s, a) => s + num(a.quantityKg), 0);
-
-      const hasPhysical =
-        Math.abs(num(line.systemKg)) <= 0.01 ||
-        (line.physicalKg !== "" &&
-          line.physicalKg !== null &&
-          line.physicalKg !== undefined);
-      const physicalKg = num(line.physicalKg);
-      const varianceKg = hasPhysical ? physicalKg - num(line.systemKg) : 0;
-      const remainingKg = varianceKg - approvedAdjustmentKg;
-      const hasDifference = hasPhysical && Math.abs(varianceKg) > 0.01;
-      const adjustmentApproved =
-        hasDifference &&
-        Math.abs(approvedAdjustmentKg) > 0.01 &&
-        Math.abs(remainingKg) <= 0.01;
-
-      let statusText = "Physical Pending";
-      let statusType = "pending";
-
-      if (hasPhysical) {
-        if (!hasDifference) {
-          statusText = "No Difference";
-          statusType = "success";
-        } else if (adjustmentApproved) {
-          statusText = "Adjustment Approved";
-          statusType = "success";
-        } else if (Math.abs(pendingAdjustmentKg) > 0.01) {
-          statusText = "Difference Pending Approval";
-          statusType = "warning";
-        } else {
-          statusText = "Difference Pending Approval";
-          statusType = "danger";
-        }
-      }
-
-      return {
-        ...line,
-        related,
-        hasPhysical,
-        hasDifference,
-        adjustmentApproved,
-        physicalKg,
-        varianceKg,
-        approvedAdjustmentKg,
-        pendingAdjustmentKg,
-        remainingKg,
-        statusText,
-        statusType,
-      };
-    });
-  }, [adjustments, month, materialGroupView, physicalMaterialLines]);
-
-  const materialReady = materialLines.every(
-    (x) => x.statusType === "success"
-  );
-
-  const exceptions = useMemo(() => {
-    const list = [];
-
-    if (!materialGroupView?.ok) {
-      list.push({
-        type: "danger",
-        text: "Material Master based Month Close groups did not load.",
-      });
-    }
-
-    if (materialGroupView?.ok && materialLines.length === 0) {
-      list.push({
-        type: "danger",
-        text: "No active manufacturing materials found in Material Master.",
-      });
-    }
-
-    if (materialGroupView?.unmappedLedgerRows?.length) {
-      list.push({
-        type: "warning",
-        text: `${materialGroupView.unmappedLedgerRows.length} ledger material example(s) are not mapped to Material Master and are excluded from Month Close.`,
-      });
-    }
-
-    if (close.rm.purchasedKg <= 0) {
-      list.push({ type: "danger", text: "No material receiving entries found." });
-    }
-
-    if (close.production.fgProducedKg <= 0) {
-      list.push({ type: "danger", text: "No dispatch material production found." });
-    }
-
-    if (close.production.dispatchKg <= 0) {
-      list.push({ type: "warning", text: "No dispatch records found." });
-    }
-
-    if (
-      close.production.overallRecovery > 0 &&
-      close.production.overallRecovery < 85
-    ) {
-      list.push({
-        type: "danger",
-        text: `Overall recovery is low at ${formatPercent(
-          close.production.overallRecovery
-        )}.`,
-      });
-    }
-
-    materialLines.forEach((line) => {
-      if (line.statusType === "danger") {
-        list.push({
-          type: "warning",
-          text: `${line.stage} variance is ${formatKg(
-            line.remainingKg
-          )}. Approve the adjustment inside Month Close.`,
-        });
-      }
-
-      if (line.statusType === "warning") {
-        list.push({
-          type: "warning",
-          text: `${line.stage} difference approval is pending.`,
-        });
-      }
-    });
-
-    if (close.profitability.manufacturingProfit < 0) {
-      list.push({
-        type: "danger",
-        text: "Manufacturing profit is negative.",
-      });
-    }
-
-    if (list.length === 0) {
-      list.push({
-        type: "success",
-        text: "No major exceptions detected. Month appears ready for close.",
-      });
-    }
-
-    return list;
-  }, [close, materialLines, materialGroupView]);
-
-  const hasPhysicalStock = materialLines.every((x) => x.hasPhysical);
-  const hasStoresPhysical =
-    physical.storesPhysicalValue !== "" &&
-    physical.storesPhysicalValue !== null &&
-    physical.storesPhysicalValue !== undefined;
-  const signoffsComplete = [
-    physical.productionSignoff,
-    physical.storesSignoff,
-    physical.accountsSignoff,
-    physical.qcSignoff,
-    physical.ceoSignoff,
-  ].every((value) => String(value || "").trim());
-
-  const readyToClose =
-    exceptions.filter((e) => e.type === "danger").length === 0 &&
-    hasPhysicalStock &&
-    hasStoresPhysical &&
-    materialReady &&
-    signoffsComplete;
-
-  function onPhysicalChange(e) {
-    const { name, value } = e.target;
-    setPhysical((p) => ({ ...p, [name]: value }));
-  }
-
-  function onMaterialPhysicalChange(lineKey, value) {
+  function onPhysicalChange(lineKey, value) {
     setPhysicalMaterialLines((prev) => ({ ...prev, [lineKey]: value }));
   }
 
-  async function savePhysicalFromRow() {
-    try {
-      setStatus("Saving physical closing stock...");
-      await savePhysicalStockSnapshot();
-    } catch (err) {
-      setStatus(err.message || "Failed to save physical closing stock.");
-    }
+  function onSignoffChange(e) {
+    const { name, value } = e.target;
+    setPhysical((prev) => ({ ...prev, [name]: value }));
   }
 
-  function onAdjustmentReasonChange(lineKey, value) {
+  function onReasonChange(lineKey, value) {
     setAdjustmentReasons((prev) => ({ ...prev, [lineKey]: value }));
   }
 
-  async function approveMonthCloseAdjustment(line) {
-    if (!line.hasPhysical) {
-      setStatus("Enter physical closing stock before approving an adjustment.");
-      return;
-    }
-
-    if (!line.hasDifference || Math.abs(line.remainingKg) <= 0.01) {
-      setStatus(`${line.stage} has no pending difference to approve.`);
-      return;
-    }
-
-    const reason =
-      String(adjustmentReasons[line.key] || "").trim() ||
-      `Month Close physical stock variance for ${line.stage}`;
-
-    const ok = window.confirm(
-      `Approve ${line.stage} adjustment of ${formatKg(line.remainingKg)} for ${monthLabel(month)}?`
+  async function savePhysicalSnapshot({ silent = false } = {}) {
+    const physicalRows = materialLines.map((line) => ({
+      materialId: line.materialId,
+      materialCode: line.materialCode,
+      materialName: line.materialName,
+      category: line.group,
+      systemKg: line.systemClosing,
+      physicalKg: physicalMaterialLines[line.key] === "" ? "" : num(physicalMaterialLines[line.key]),
+    }));
+    const totals = physicalRows.reduce(
+      (acc, row) => {
+        const qty = row.physicalKg === "" ? 0 : num(row.physicalKg);
+        if (row.category === "RM") acc.rmPhysicalKg += qty;
+        if (row.category === "WIP") acc.washPhysicalKg += qty;
+        if (row.category === "FG") acc.fgPhysicalKg += qty;
+        return acc;
+      },
+      { rmPhysicalKg: 0, washPhysicalKg: 0, sortingPhysicalKg: 0, fgPhysicalKg: 0 }
     );
 
-    if (!ok) return;
+    const res = await savePhysicalCount(month, {
+      ...physical,
+      ...totals,
+      materialPhysicalLinesJson: JSON.stringify(physicalRows),
+      savedBy: physical.ceoSignoff || physical.accountsSignoff || "Month Close",
+    });
+    if (!res?.ok) throw new Error(res?.error || "Failed to save physical stock.");
+    if (!silent) setStatus("Physical stock saved.");
+    return res;
+  }
 
+  async function approveAdjustment(line) {
+    if (!line.hasPhysical) {
+      setStatus("Enter physical closing stock first.");
+      return;
+    }
+    if (Math.abs(line.remainingKg) <= 0.01) {
+      setStatus("This material is already reconciled.");
+      return;
+    }
+    const reason = String(adjustmentReasons[line.key] || "").trim();
+    if (!reason) {
+      setStatus("Enter a reason before approving the adjustment.");
+      return;
+    }
+    if (!window.confirm(`Approve ${formatKg(line.remainingKg)} adjustment for ${line.materialName}?`)) return;
+
+    await savePhysicalSnapshot({ silent: true });
+    const res = await apiCall({
+      fn: "inventoryAdjustments.approveMonthClose",
+      periodMonth: month,
+      closeMonth: month,
+      date: `${month}-01`,
+      module: "MONTH_CLOSE",
+      itemType: line.group,
+      materialId: line.materialId,
+      materialCode: line.materialCode,
+      itemCode: line.materialName,
+      material: line.materialName,
+      stage: line.group,
+      systemQty: line.systemClosing,
+      physicalQty: line.physicalKg,
+      differenceQty: line.remainingKg,
+      value: getDifferenceValue(line, close),
+      reason,
+      remarks: physical.remarks || "",
+      sourceRef: `MONTH_CLOSE:${month}:${line.key}`,
+      approvedBy: physical.accountsSignoff || physical.ceoSignoff || "Month Close",
+    });
+    if (!res?.ok) {
+      setStatus(res?.error || "Adjustment approval failed.");
+      return;
+    }
+    setStatus("Adjustment approved and posted.");
+    await loadAll();
+  }
+
+  async function saveSignoffs() {
     try {
-      setStatus("Saving physical stock and approving adjustment...");
-      await savePhysicalStockSnapshot({ silent: true });
-
-      const res = await apiCall({
-        fn: "inventoryAdjustments.approveMonthClose",
-        periodMonth: month,
-        closeMonth: month,
-        date: `${month}-01`,
-        module: line.module,
-        itemType: line.itemType,
-        materialId: line.materialId || "",
-        materialCode: line.materialCode || "",
-        itemCode: line.itemCode,
-        material: line.materialName || line.itemCode,
-        stage: line.stage,
-        systemQty: line.systemKg,
-        physicalQty: line.physicalKg,
-        differenceQty: line.remainingKg,
-        value: getDifferenceValue(line, close),
-        reason,
-        remarks: physical.remarks || "",
-        sourceRef: `MONTH_CLOSE:${month}:${line.key}`,
-        approvedBy:
-          physical.accountsSignoff ||
-          physical.ceoSignoff ||
-          physical.productionSignoff ||
-          "Month Close",
-      });
-
-      if (!res?.ok) {
-        setStatus(res?.error || "Failed to approve Month Close adjustment.");
-        return;
-      }
-
-      setAdjustmentReasons((prev) => ({ ...prev, [line.key]: reason }));
-      setStatus(res.message || "Month Close adjustment approved and posted.");
-      await loadData();
-      await loadPhysicalCount();
+      setStatus("Saving physical stock and sign-off...");
+      await savePhysicalSnapshot();
+      await loadAll();
     } catch (err) {
-      setStatus(err.message || "Failed to approve Month Close adjustment.");
+      setStatus(err.message || "Save failed.");
     }
   }
 
   async function closeMonth() {
     if (!readyToClose) {
-      setStatus(
-        "Cannot close month. Complete physical stock, reconcile material accountability, clear critical exceptions and sign off."
-      );
+      setStatus("Month cannot be closed yet. Complete physical stock, reconcile differences, and sign off.");
       return;
     }
-
-    const ok = window.confirm(`Close ${month}? This will save the snapshot.`);
-    if (!ok) return;
-
-    try {
-      setStatus("Saving month close snapshot...");
-
-      const payload = {
-        fn: "monthClose.add",
-        periodMonth: month,
-        status: "Closed",
-
-        rmInwardKg: close.rm.purchasedKg,
-        rmValue: close.rm.value,
-        avgRmPrice: close.rm.avgRate,
-
-        washInputKg: close.production.washInputKg,
-        washedOutputKg: close.production.washedOutputKg,
-        sortingInputKg: close.production.sortingInputKg,
-        sortingAcceptedKg: close.production.sortingAcceptedKg,
-        extrusionInputKg: close.production.extrusionInputKg,
-        fgProducedKg: close.production.fgProducedKg,
-        dispatchKg: close.production.dispatchKg,
-
-        productionTon: close.production.fgProducedKg / 1000,
-        dispatchTon: close.production.dispatchKg / 1000,
-        salesValue: close.profitability.salesValue,
-        salesPerKg:
-          close.production.dispatchKg > 0
-            ? close.profitability.salesValue / close.production.dispatchKg
-            : 0,
-
-        washRecovery: close.production.washRecovery,
-        sortingRecovery: close.production.sortingRecovery,
-        extrusionRecovery: close.production.extrusionRecovery,
-        overallRecovery: close.production.overallRecovery,
-
-        rmSystemClosingKg: getCategorySystemKg(materialLines, "RM"),
-        washSystemClosingKg: getCategorySystemKg(materialLines, "WIP"),
-        sortingSystemClosingKg: 0,
-        fgSystemClosingKg: getCategorySystemKg(materialLines, "FG"),
-
-        rmPhysicalKg: getCategoryPhysicalKg(materialLines, "RM"),
-        washPhysicalKg: getCategoryPhysicalKg(materialLines, "WIP"),
-        sortingPhysicalKg: 0,
-        fgPhysicalKg: getCategoryPhysicalKg(materialLines, "FG"),
-        storesPhysicalValue: physical.storesPhysicalValue,
-
-        rmVarianceKg: getCategoryVarianceKg(materialLines, "RM"),
-        washVarianceKg: getCategoryVarianceKg(materialLines, "WIP"),
-        sortingVarianceKg: 0,
-        fgVarianceKg: getCategoryVarianceKg(materialLines, "FG"),
-
-        factoryExpenses: close.costs.factoryExpenseValue,
-        storesIssueQty: close.costs.storesIssueValue,
-        estimatedRmConsumedValue: close.costs.estimatedRmConsumedValue,
-        conversionCost: close.costs.conversionCost,
-        grossProfit: close.profitability.grossProfit,
-        manufacturingProfit: close.profitability.manufacturingProfit,
-        profitPerKg: close.profitability.profitPerKg,
-        processingCostPerKg: close.profitability.conversionCostPerKg,
-
-        productionSignoff: physical.productionSignoff,
-        storesSignoff: physical.storesSignoff,
-        accountsSignoff: physical.accountsSignoff,
-        qcSignoff: physical.qcSignoff,
-        ceoSignoff: physical.ceoSignoff,
-        remarks: physical.remarks,
-        exceptions: JSON.stringify(exceptions),
-      };
-
-      const res = await apiCall(payload);
-
-      if (res.ok) {
-        setStatus("Month close snapshot saved successfully.");
-      } else {
-        setStatus(res.error || "Month close failed.");
-      }
-    } catch (err) {
-      setStatus(err.message || "Month close failed.");
-    }
-  }
-
-  async function previewMaterialRepair() {
-    try {
-      setStatus("Preparing material ledger repair preview...");
-      const res = await apiCall({
-        fn: "monthClose.materialRepair.preview",
-        periodMonth: month,
-      });
-      setMaterialRepairResult(res);
-      setStatus(res?.ok ? "Material ledger repair preview loaded." : res?.error || "Preview failed.");
-    } catch (err) {
-      setStatus(err.message || "Preview failed.");
-    }
-  }
-
-  async function runMaterialRepair() {
-    const ok = window.confirm(
-      `Run controlled material ledger repair for ${monthLabel(month)}? A backup will be created first.`
-    );
-    if (!ok) return;
-
-    try {
-      setStatus("Running controlled material ledger repair...");
-      const res = await apiCall({
-        fn: "monthClose.materialRepair.run",
-        periodMonth: month,
-        confirm: "YES",
-      });
-      setMaterialRepairResult(res);
-      if (!res?.ok) {
-        setStatus(res?.error || "Repair failed.");
-        return;
-      }
-      setStatus("Material ledger repair completed. Reloading Month Close values...");
-      await loadData();
-    } catch (err) {
-      setStatus(err.message || "Repair failed.");
-    }
-  }
-
-  async function verifyMaterialRepair() {
-    try {
-      setStatus("Verifying material ledger...");
-      const res = await apiCall({
-        fn: "monthClose.materialRepair.verify",
-        periodMonth: month,
-      });
-      setMaterialRepairResult(res);
-      setMaterialGroupView(res?.cleanMaterialView?.ok ? res.cleanMaterialView : materialGroupView);
-      setStatus(res?.ok ? "Material ledger verification loaded." : res?.error || "Verification failed.");
-    } catch (err) {
-      setStatus(err.message || "Verification failed.");
-    }
+    if (!window.confirm(`Close ${monthLabel(month)}?`)) return;
+    await savePhysicalSnapshot({ silent: true });
+    const res = await apiCall({
+      fn: "monthClose.add",
+      periodMonth: month,
+      status: "Closed",
+      rmSystemClosingKg: sumByGroup(materialLines, "RM", "systemClosing"),
+      washSystemClosingKg: sumByGroup(materialLines, "WIP", "systemClosing"),
+      sortingSystemClosingKg: 0,
+      fgSystemClosingKg: sumByGroup(materialLines, "FG", "systemClosing"),
+      rmPhysicalKg: sumByGroup(materialLines, "RM", "physicalKg"),
+      washPhysicalKg: sumByGroup(materialLines, "WIP", "physicalKg"),
+      sortingPhysicalKg: 0,
+      fgPhysicalKg: sumByGroup(materialLines, "FG", "physicalKg"),
+      storesPhysicalValue: physical.storesPhysicalValue,
+      rmVarianceKg: sumByGroup(materialLines, "RM", "remainingKg"),
+      washVarianceKg: sumByGroup(materialLines, "WIP", "remainingKg"),
+      sortingVarianceKg: 0,
+      fgVarianceKg: sumByGroup(materialLines, "FG", "remainingKg"),
+      rmInwardKg: close.rm.purchasedKg,
+      washInputKg: close.production.washInputKg,
+      washedOutputKg: close.production.washedOutputKg,
+      sortingInputKg: close.production.sortingInputKg,
+      sortingAcceptedKg: close.production.sortingAcceptedKg,
+      extrusionInputKg: close.production.extrusionInputKg,
+      fgProducedKg: close.production.fgProducedKg,
+      dispatchKg: close.production.dispatchKg,
+      salesValue: close.profitability.salesValue,
+      factoryExpenses: close.costs.factoryExpenseValue,
+      storesIssueQty: close.costs.storesIssueValue,
+      estimatedRmConsumedValue: close.costs.estimatedRmConsumedValue,
+      manufacturingProfit: close.profitability.manufacturingProfit,
+      productionSignoff: physical.productionSignoff,
+      storesSignoff: physical.storesSignoff,
+      accountsSignoff: physical.accountsSignoff,
+      ceoSignoff: physical.ceoSignoff,
+      remarks: physical.remarks,
+    });
+    setStatus(res?.ok ? "Month closed successfully." : res?.error || "Month close failed.");
+    await loadAll();
   }
 
   return (
     <div style={page}>
       <div style={header}>
         <div>
-          <div style={eyebrow}>RegenOS Month-End Control</div>
-          <h1 style={title}>Month Close Control Room</h1>
-          <div style={subtitle}>
-            Review, reconcile, approve and close the month with full kg and rupee accountability.
-          </div>
+          <div style={eyebrow}>Operational Month Close</div>
+          <h1 style={title}>Month Close + Reconciliation</h1>
+          <div style={subtitle}>Where is my stock? Where is my money? What is preventing close?</div>
         </div>
-
         <div style={headerActions}>
-          <input
-            type="month"
-            value={month}
-            onChange={(e) => setMonth(e.target.value)}
-            style={input}
-          />
-          <button onClick={loadData} style={secondaryButton}>
-            {loading ? "Loading..." : "Refresh"}
-          </button>
+          <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={input} />
+          <button onClick={loadAll} style={secondaryButton}>{loading ? "Loading..." : "Refresh"}</button>
         </div>
       </div>
 
-      <div style={statusBanner(readyToClose)}>
-        <div>
-          <div style={{ fontSize: 13, opacity: 0.8 }}>Close Status</div>
-          <div style={{ fontSize: 26, fontWeight: 900 }}>
-            {readyToClose ? "READY TO CLOSE" : "REVIEW REQUIRED"}
-          </div>
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 13, opacity: 0.8 }}>Selected Month</div>
-          <div style={{ fontSize: 22, fontWeight: 800 }}>
-            {monthLabel(month)}
-          </div>
-        </div>
-      </div>
-
-      <MonthCloseWorkflow
-        materialLines={materialLines}
-        hasPhysicalStock={hasPhysicalStock}
-        materialReady={materialReady}
-        exceptions={exceptions}
-        physical={physical}
-        readyToClose={readyToClose}
-        onApproveAdjustment={approveMonthCloseAdjustment}
-      />
-
-      <MonthlySummary close={close} />
-
-      <Panel title="Material Master Close View">
-        <div style={accountabilityTop}>
-          {["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"].map((category) => (
-            <StatusPill
-              key={category}
-              label={categoryLabel(category)}
-              count={formatKg(materialGroupView?.groupTotals?.[category] || 0)}
-              type={category === "FG" ? "success" : category === "WASTE" ? "warning" : "pending"}
-            />
+      <Section title="Close Readiness Dashboard">
+        <div style={cardGrid}>
+          {readiness.map((card) => (
+            <div key={card.title} style={readinessCard(card.ok)}>
+              <div style={cardLabel}>{card.title}</div>
+              <div style={cardValue}>{card.ok ? "OK" : "Action Needed"}</div>
+              <div style={cardNext}>{card.next}</div>
+            </div>
           ))}
         </div>
+      </Section>
 
-        <div style={hintBox}>
-          Month Close now uses Material Master names only. Free-text ledger items, recipe strings, quality references and STORE items are excluded from manufacturing close.
-        </div>
+      <Section title="RM Reconciliation">
+        <ReconTable
+          rows={[
+            ["Opening RM", 0],
+            ["+ RM Inward", close.rm.purchasedKg],
+            ["- RM Consumed", close.rm.consumedKg],
+            ["+ Approved Adjustments", sumByGroup(materialLines, "RM", "approvedAdjustments")],
+            ["= System Closing", sumByGroup(materialLines, "RM", "systemClosing")],
+            ["Physical Closing", sumByGroup(materialLines, "RM", "physicalKg")],
+            ["Difference", sumByGroup(materialLines, "RM", "remainingKg")],
+          ]}
+        />
+      </Section>
 
-        {materialGroupView?.unmappedLedgerRows?.length > 0 && (
-          <div style={hintBox}>
-            <b>Needs Material Master mapping:</b>{" "}
-            {materialGroupView.unmappedLedgerRows.slice(0, 5).map((row) => row.itemName || "Blank").join(", ")}
-          </div>
-        )}
+      <Section title="Production Reconciliation">
+        <ReconTable
+          rows={[
+            ["Wash Input", close.production.washInputKg],
+            ["Wash Output", close.production.washedOutputKg],
+            ["Sorting Input", close.production.sortingInputKg],
+            ["Sorting Output", close.production.sortingAcceptedKg],
+            ["Extrusion Input", close.production.extrusionInputKg],
+            ["Extrusion Output / FG Produced", close.production.fgProducedKg],
+            ["Rework", close.materialFlow.recoveryReuseKg],
+            ["Waste", close.materialFlow.wasteSaleKg + close.materialFlow.trueLossKg],
+            ["Recovery %", close.production.overallRecovery, "percent"],
+          ]}
+        />
+      </Section>
 
-        <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button onClick={previewMaterialRepair} style={secondaryButton}>
-            Preview Material Repair
-          </button>
-          <button onClick={verifyMaterialRepair} style={secondaryButton}>
-            Verify Material Ledger
-          </button>
-          <button onClick={runMaterialRepair} style={miniButton}>
-            Repair June Ledger
-          </button>
-        </div>
+      <Section title="Finished Goods Reconciliation">
+        <ReconTable
+          rows={[
+            ["Opening FG", 0],
+            ["+ FG Produced", close.production.fgProducedKg],
+            ["- Dispatch", close.production.dispatchKg],
+            ["+ Adjustments", sumByGroup(materialLines, "FG", "approvedAdjustments")],
+            ["= System Closing", sumByGroup(materialLines, "FG", "systemClosing")],
+            ["Physical Closing", sumByGroup(materialLines, "FG", "physicalKg")],
+            ["Difference", sumByGroup(materialLines, "FG", "remainingKg")],
+          ]}
+        />
+      </Section>
 
-        {materialRepairResult && (
-          <div style={hintBox}>
-            <b>{materialRepairResult.route || "Material repair"}</b>
-            <div style={mutedCell}>
-              {materialRepairResult.ok ? "OK" : materialRepairResult.error || "Check result"} · {materialRepairResult.periodMonth || month}
-            </div>
-            {materialRepairResult.repair?.summary && (
-              <div style={mutedCell}>
-                Rows to replace: {materialRepairResult.repair.summary.rowsToReplace || 0}; rows to write: {materialRepairResult.repair.summary.rowsToWrite || 0}
-              </div>
-            )}
-          </div>
-        )}
-      </Panel>
+      <Section title="Stores Reconciliation">
+        <ReconTable
+          rows={[
+            ["Opening Stores", 0],
+            ["+ Stores Inward", sum(rows.storesInward, "qty")],
+            ["- Stores Issue", sum(rows.storesIssue, "qty")],
+            ["= System Closing", sum(rows.storesInward, "qty") - sum(rows.storesIssue, "qty")],
+            ["Physical Value", physical.storesPhysicalValue || 0, "currency"],
+          ]}
+        />
+      </Section>
 
-      <Panel title="Material Accountability">
-        <div style={accountabilityTop}>
+      <Section title="Cost Reconciliation">
+        <ReconTable
+          rows={[
+            ["RM Cost", close.costs.estimatedRmConsumedValue, "currency"],
+            ["Stores Cost", close.costs.storesIssueValue, "currency"],
+            ["Factory Expenses", close.costs.factoryExpenseValue, "currency"],
+            ["Sales", close.profitability.salesValue, "currency"],
+            ["Manufacturing Profit", close.profitability.manufacturingProfit, "currency"],
+          ]}
+        />
+      </Section>
+
+      <Section title="Material Accountability">
+        <div style={summaryRow}>
           <StatusPill label="Reconciled" count={materialLines.filter((x) => x.statusType === "success").length} type="success" />
-          <StatusPill label="Pending" count={materialLines.filter((x) => x.statusType === "warning" || x.statusType === "pending").length} type="warning" />
+          <StatusPill label="Pending" count={materialLines.filter((x) => x.statusType === "pending" || x.statusType === "warning").length} type="warning" />
           <StatusPill label="Investigation" count={materialLines.filter((x) => x.statusType === "danger").length} type="danger" />
         </div>
-
+        {materialLines.length === 0 && (
+          <div style={warningBox}>No active manufacturing materials found. Check Material Master categories.</div>
+        )}
         <div style={tableWrap}>
           <table style={table}>
             <thead>
               <tr>
                 {[
-                  "Material",
-                  "System Closing Qty",
-                  "Physical Closing Qty",
-                  "Difference Qty",
-                  "Difference Value",
+                  "Material Code",
+                  "Material Name",
+                  "Group",
+                  "Opening",
+                  "Inward",
+                  "Consumed",
+                  "Produced",
+                  "Dispatched",
+                  "Approved Adjustments",
+                  "System Closing",
+                  "Physical Closing",
+                  "Difference",
                   "Reason",
                   "Status",
-                  "Approve Adjustment",
-                ].map((h) => (
-                  <th key={h} style={th}>{h}</th>
-                ))}
+                  "Action",
+                ].map((h) => <th key={h} style={th}>{h}</th>)}
               </tr>
             </thead>
             <tbody>
               {materialLines.map((line) => (
                 <tr key={line.key}>
-                  <td style={td}>
-                    <b>{line.stage}</b>
-                    <div style={mutedCell}>{line.itemCode}</div>
-                    {line.sourceNote && <div style={mutedCell}>{line.sourceNote}</div>}
-                  </td>
-                  <td style={td}>{formatKg(line.systemKg)}</td>
+                  <td style={td}>{line.materialCode || "-"}</td>
+                  <td style={td}><b>{line.materialName}</b></td>
+                  <td style={td}>{line.group}</td>
+                  <td style={td}>{formatKg(line.opening)}</td>
+                  <td style={td}>{formatKg(line.inward)}</td>
+                  <td style={td}>{formatKg(line.consumed)}</td>
+                  <td style={td}>{formatKg(line.produced)}</td>
+                  <td style={td}>{formatKg(line.dispatched)}</td>
+                  <td style={td}>{formatKg(line.approvedAdjustments)}</td>
+                  <td style={td}>{formatKg(line.systemClosing)}</td>
                   <td style={td}>
                     <input
                       value={physicalMaterialLines[line.key] ?? ""}
-                      onChange={(e) => onMaterialPhysicalChange(line.key, e.target.value)}
-                      onBlur={savePhysicalFromRow}
+                      onChange={(e) => onPhysicalChange(line.key, e.target.value)}
+                      onBlur={() => savePhysicalSnapshot({ silent: true }).catch((err) => setStatus(err.message))}
                       type="number"
-                      placeholder="Enter kg"
+                      placeholder="Kg"
                       style={qtyInput}
                     />
                   </td>
-                  <td style={td}>{line.hasPhysical ? formatKg(line.varianceKg) : "-"}</td>
-                  <td style={td}>{line.hasPhysical ? formatCurrency(getDifferenceValue(line, close)) : "-"}</td>
-                  <td style={td}>
-                    {line.hasDifference && !line.adjustmentApproved ? (
-                      <input
-                        value={adjustmentReasons[line.key] || ""}
-                        onChange={(e) => onAdjustmentReasonChange(line.key, e.target.value)}
-                        placeholder="Reason for difference"
-                        style={smallInput}
-                      />
-                    ) : (
-                      <span style={{ color: "#64748b" }}>-</span>
-                    )}
-                  </td>
-                  <td style={td}>
-                    <span style={pill(line.statusType)}>{line.statusText}</span>
-                  </td>
+                  <td style={td}>{line.hasPhysical ? formatKg(line.remainingKg) : "-"}</td>
                   <td style={td}>
                     {line.statusType === "danger" ? (
-                      <button style={miniButton} onClick={() => approveMonthCloseAdjustment(line)}>
-                        Approve Adjustment
-                      </button>
-                    ) : line.statusType === "warning" ? (
-                      <span style={{ color: "#b45309", fontWeight: 800 }}>Pending approval</span>
-                    ) : line.statusType === "pending" ? (
-                      <span style={{ color: "#64748b" }}>Enter physical stock</span>
-                    ) : (
-                      <span style={{ color: "#15803d", fontWeight: 800 }}>{line.statusText}</span>
-                    )}
+                      <input
+                        value={adjustmentReasons[line.key] || ""}
+                        onChange={(e) => onReasonChange(line.key, e.target.value)}
+                        placeholder="Reason"
+                        style={smallInput}
+                      />
+                    ) : "-"}
+                  </td>
+                  <td style={td}><span style={pill(line.statusType)}>{line.status}</span></td>
+                  <td style={td}>
+                    {line.statusType === "danger" ? (
+                      <button onClick={() => approveAdjustment(line)} style={miniButton}>Approve Adjustment</button>
+                    ) : line.status}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      </Section>
 
-        <div style={hintBox}>
-          Enter physical closing stock directly in the material rows. Differences calculate immediately; approving a row creates the approved correction and posts it to the inventory ledger automatically.
+      <Section title="Sign Off">
+        <div style={formGrid}>
+          <InputBox label="Production" name="productionSignoff" value={physical.productionSignoff} onChange={onSignoffChange} />
+          <InputBox label="Stores" name="storesSignoff" value={physical.storesSignoff} onChange={onSignoffChange} />
+          <InputBox label="Accounts" name="accountsSignoff" value={physical.accountsSignoff} onChange={onSignoffChange} />
+          <InputBox label="CEO" name="ceoSignoff" value={physical.ceoSignoff} onChange={onSignoffChange} />
         </div>
-      </Panel>
-
-      <InventoryReconciliation close={close} />
-      <MaterialFlowSummary data={materialFlowData(close)} />
-      <WasteAnalysis close={close} />
-      <CostAnalysis close={close} />
-      <ProfitabilitySummary close={close} />
-      <CloseChecklist close={close} />
-
-      <Panel title="Exceptions">
-        <div style={{ display: "grid", gap: 10 }}>
-          {exceptions.map((item, index) => (
-            <div key={index} style={exceptionStyle(item.type)}>
-              {item.type === "success" ? "✅" : item.type === "danger" ? "🚨" : "⚠️"}{" "}
-              {item.text}
-            </div>
-          ))}
-        </div>
-      </Panel>
-
-      <Panel title="Sign-Off">
-        <div style={approvalGrid}>
-          <InputBox label="Production Manager" name="productionSignoff" value={physical.productionSignoff} onChange={onPhysicalChange} />
-          <InputBox label="Stores" name="storesSignoff" value={physical.storesSignoff} onChange={onPhysicalChange} />
-          <InputBox label="Accounts" name="accountsSignoff" value={physical.accountsSignoff} onChange={onPhysicalChange} />
-          <InputBox label="QC" name="qcSignoff" value={physical.qcSignoff} onChange={onPhysicalChange} />
-          <InputBox label="CEO Approval" name="ceoSignoff" value={physical.ceoSignoff} onChange={onPhysicalChange} />
-        </div>
-
-        <div style={{ marginTop: 16 }}>
-          <label style={label}>CEO / Management Remarks</label>
-          <textarea
-            name="remarks"
-            value={physical.remarks}
-            onChange={onPhysicalChange}
-            style={textarea}
-            placeholder="Enter closing remarks, adjustment reasons, or action items."
-          />
-        </div>
-
-        <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button onClick={savePhysicalStock} style={closeButton}>
-            SAVE / UPDATE SIGN-OFFS
-          </button>
-
-          <button onClick={loadPhysicalCount} style={secondaryButton}>
-            RELOAD SAVED COUNT
-          </button>
-        </div>
-      </Panel>
+        <textarea name="remarks" value={physical.remarks} onChange={onSignoffChange} style={textarea} placeholder="Remarks" />
+        <button onClick={saveSignoffs} style={secondaryButton}>Save Sign-Off</button>
+      </Section>
 
       <div style={closePanel}>
         <div>
-          <h2 style={{ margin: 0 }}>Control Room Snapshot</h2>
-          <div style={{ color: "#64748b", marginTop: 6 }}>
-            Close is allowed only after material accountability is reconciled.
-          </div>
+          <h2 style={{ margin: 0 }}>Close Month</h2>
+          <div style={muted}>Close is allowed only after physical stock, differences and sign-off are complete.</div>
         </div>
-
-        <button
-          onClick={closeMonth}
-          style={readyToClose ? closeButton : disabledCloseButton}
-        >
-          CLOSE MONTH
-        </button>
+        <button onClick={closeMonth} style={readyToClose ? closeButton : disabledButton}>Close Month</button>
       </div>
 
-      {status && <div style={statusStyle}>{status}</div>}
+      {status && <div style={statusBox}>{status}</div>}
     </div>
   );
 }
 
-
-function MonthCloseWorkflow({
-  materialLines,
-  hasPhysicalStock,
-  materialReady,
-  exceptions,
-  physical,
-  readyToClose,
-  onApproveAdjustment,
-}) {
-  const pendingAdjustments = materialLines.filter((x) => x.statusType === "warning").length;
-  const needsAction = materialLines.filter((x) => x.statusType === "danger").length;
-  const physicalPending = materialLines.filter((x) => !x.hasPhysical).length;
-  const criticalExceptions = exceptions.filter((x) => x.type === "danger").length;
-
-  const approvalsDone =
-    String(physical.productionSignoff || "").trim() &&
-    String(physical.storesSignoff || "").trim() &&
-    String(physical.accountsSignoff || "").trim() &&
-    String(physical.qcSignoff || "").trim() &&
-    String(physical.ceoSignoff || "").trim();
-
-  const steps = [
-    {
-      label: "Physical Stock",
-      status: hasPhysicalStock ? "Complete" : "Pending",
-      type: hasPhysicalStock ? "success" : "warning",
-      action: hasPhysicalStock ? "None" : "Enter physical stock in material rows",
-    },
-    {
-      label: "Material Reconciliation",
-      status: materialReady ? "Reconciled" : needsAction > 0 ? "Difference Found" : "Pending Approval",
-      type: materialReady ? "success" : needsAction > 0 ? "danger" : "warning",
-      action: materialReady ? "None" : needsAction > 0 ? "Approve difference in row" : "Difference approval pending",
-    },
-    {
-      label: "Critical Exceptions",
-      status: criticalExceptions === 0 ? "Clear" : "Blocked",
-      type: criticalExceptions === 0 ? "success" : "danger",
-      action: criticalExceptions === 0 ? "None" : "Resolve exception before close",
-    },
-    {
-      label: "Approvals",
-      status: approvalsDone ? "Complete" : "Pending",
-      type: approvalsDone ? "success" : "warning",
-      action: approvalsDone ? "None" : "Complete sign-offs",
-    },
-    {
-      label: "Month Close",
-      status: readyToClose ? "Ready" : "Not Ready",
-      type: readyToClose ? "success" : "pending",
-      action: readyToClose ? "Lock Month" : "Finish pending steps",
-    },
-  ];
-
-  const completed = steps.filter((x) => x.type === "success").length;
-  const progress = Math.round((completed / steps.length) * 100);
-
-  return (
-    <Panel title="Month Close Workflow">
-      <div style={workflowHeader}>
-        <div>
-          <div style={workflowLabel}>Progress</div>
-          <div style={workflowPercent}>{progress}%</div>
-        </div>
-        <div style={progressTrack}>
-          <div style={{ ...progressFill, width: `${progress}%` }} />
-        </div>
-      </div>
-
-      <div style={workflowGrid}>
-        {steps.map((step) => (
-          <div key={step.label} style={workflowStep(step.type)}>
-            <div style={workflowStepTitle}>{step.label}</div>
-            <div style={workflowStepStatus}>{step.status}</div>
-            <div style={workflowStepAction}>{step.action}</div>
-          </div>
-        ))}
-      </div>
-
-      <div style={nextActionBox}>
-        <b>Next Action: </b>
-        {physicalPending > 0
-          ? "Enter physical closing stock in the material rows."
-          : needsAction > 0
-          ? "Enter a reason and approve the difference rows below."
-          : pendingAdjustments > 0
-          ? "Refresh after the pending row is approved."
-          : !approvalsDone
-          ? "Complete Production, Stores, Accounts, QC and CEO sign-offs."
-          : readyToClose
-          ? "Ready to close the month."
-          : "Review remaining exceptions."}
-      </div>
-
-      {needsAction > 0 && (
-        <div style={actionList}>
-          {materialLines
-            .filter((line) => line.statusType === "danger")
-            .map((line) => (
-              <div key={line.key} style={actionRow}>
-                <div>
-                  <b>{line.stage}</b>
-                  <div style={actionSub}>
-                    Remaining difference: {formatKg(line.remainingKg)}
-                  </div>
-                </div>
-                <button style={miniButton} onClick={() => onApproveAdjustment(line)}>
-                  Approve Adjustment
-                </button>
-              </div>
-            ))}
-        </div>
-      )}
-
-      {pendingAdjustments > 0 && (
-        <div style={actionRow}>
-          <div>
-            <b>Difference approval pending</b>
-            <div style={actionSub}>Refresh after the row approval is completed.</div>
-          </div>
-          <span style={{ color: "#b45309", fontWeight: 900 }}>Pending</span>
-        </div>
-      )}
-    </Panel>
-  );
-}
-
-
-function getLineVariance(lines, stage) {
-  const line = lines.find((x) => x.stage === stage);
-  return line ? line.remainingKg : 0;
-}
-
-function parsePhysicalMaterialLines(value) {
-  try {
-    const rows = typeof value === "string" ? JSON.parse(value || "[]") : value || [];
-    return rows.reduce((map, row) => {
-      const key = `${row.category}|${row.materialId || row.materialCode || row.materialName}`;
-      map[key] = row.physicalKg === null || row.physicalKg === undefined ? "" : row.physicalKg;
-      return map;
-    }, {});
-  } catch (err) {
-    return {};
-  }
-}
-
-function categoryLabel(category) {
-  const labels = {
-    RM: "RM Material",
-    WIP: "WIP Material",
-    FG: "FG Material",
-    REWORK: "Rework Material",
-    WASTE: "Waste Material",
-    ADDITIVE: "Additive Material",
-  };
-  return labels[category] || "Material";
-}
-
-function getCategorySystemKg(lines, category) {
-  return lines
-    .filter((line) => line.category === category)
-    .reduce((sum, line) => sum + num(line.systemKg), 0);
-}
-
-function getCategoryPhysicalKg(lines, category) {
-  return lines
-    .filter((line) => line.category === category)
-    .reduce((sum, line) => sum + (line.hasPhysical ? num(line.physicalKg) : 0), 0);
-}
-
-function getCategoryVarianceKg(lines, category) {
-  return lines
-    .filter((line) => line.category === category)
-    .reduce((sum, line) => sum + num(line.remainingKg), 0);
-}
-
-function getDifferenceValue(line, close) {
-  const differenceKg = Math.abs(num(line.remainingKg || line.varianceKg));
-  const rate =
-    line.itemType === "RM"
-      ? close.rm.avgRate
-      : close.profitability.manufacturingCostPerKg || close.rm.avgRate;
-
-  return differenceKg * num(rate);
-}
-
-function materialFlowData(close) {
-  return {
-    ...close.materialFlow,
-    washInputKg: close.materialFlow.rmInputKg,
-    fgProducedKg: close.materialFlow.fgKg,
-    salesValue: close.profitability.salesValue,
-    avgRmPrice: close.rm.avgRate,
-  };
-}
-
-function InputBox({ label, name, value, onChange, type = "text" }) {
-  return (
-    <div>
-      <label style={labelStyle}>{label}</label>
-      <input name={name} value={value} onChange={onChange} type={type} style={input} />
-    </div>
-  );
-}
-
-function Panel({ title, children }) {
+function Section({ title, children }) {
   return (
     <section style={panel}>
       <h2 style={panelTitle}>{title}</h2>
       {children}
     </section>
+  );
+}
+
+function ReconTable({ rows }) {
+  return (
+    <div style={tableWrap}>
+      <table style={table}>
+        <tbody>
+          {rows.map(([label, value, type]) => (
+            <tr key={label}>
+              <td style={td}><b>{label}</b></td>
+              <td style={td}>{type === "currency" ? formatCurrency(value) : type === "percent" ? formatPercent(value) : formatKg(value)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -1134,13 +660,87 @@ function StatusPill({ label, count, type }) {
   );
 }
 
+function InputBox({ label, name, value, onChange }) {
+  return (
+    <div>
+      <label style={labelStyle}>{label}</label>
+      <input name={name} value={value} onChange={onChange} style={input} />
+    </div>
+  );
+}
+
+function parsePhysicalMaterialLines(value) {
+  try {
+    const rows = typeof value === "string" ? JSON.parse(value || "[]") : value || [];
+    return rows.reduce((map, row) => {
+      const key = `${row.category}|${row.materialId || row.materialCode || row.materialName}`;
+      map[key] = row.physicalKg === null || row.physicalKg === undefined ? "" : row.physicalKg;
+      return map;
+    }, {});
+  } catch {
+    return {};
+  }
+}
+
+function buildMaterialGroupsFromMaster(rows = []) {
+  const groups = { RM: [], WIP: [], FG: [], REWORK: [], WASTE: [], ADDITIVE: [] };
+  rows.forEach((row) => {
+    const status = String(row.status || "ACTIVE").toUpperCase();
+    const category = normalizeMaterialCategory(row.category || row.materialType || row.materialCategory);
+    if (status === "DELETED" || status === "INACTIVE" || !groups[category]) return;
+    groups[category].push({
+      materialId: row.materialId || "",
+      materialCode: row.materialCode || "",
+      materialName: row.materialName || row.name || "",
+      category,
+      opening: 0,
+      inward: 0,
+      consumed: 0,
+      produced: 0,
+      dispatched: 0,
+      approvedAdjustments: 0,
+      balance: 0,
+    });
+  });
+  return groups;
+}
+
+function hasMaterialGroupRows(groups = {}) {
+  return MANUFACTURING_GROUPS.some((category) => Array.isArray(groups[category]) && groups[category].length > 0);
+}
+
+function normalizeMaterialCategory(value) {
+  const raw = String(value || "").trim().toUpperCase();
+  if (["RAW MATERIAL", "RAW_MATERIAL", "RM MATERIAL", "RM MATERIALS"].includes(raw)) return "RM";
+  if (["WORK IN PROCESS", "WORK_IN_PROCESS", "WIP MATERIAL", "WIP MATERIALS"].includes(raw)) return "WIP";
+  if (["FINISHED GOODS", "FINISHED_GOODS", "FG MATERIAL", "FG MATERIALS"].includes(raw)) return "FG";
+  if (["REWORK MATERIAL", "REWORK MATERIALS"].includes(raw)) return "REWORK";
+  if (["WASTE MATERIAL", "WASTE MATERIALS"].includes(raw)) return "WASTE";
+  if (["ADDITIVE MATERIAL", "ADDITIVE MATERIALS"].includes(raw)) return "ADDITIVE";
+  if (["STORE", "STORES", "STORE ITEM"].includes(raw)) return "STORE";
+  return raw;
+}
+
+function sum(rows, key) {
+  return rows.reduce((total, row) => total + num(row[key]), 0);
+}
+
+function sumByGroup(lines, group, key) {
+  return lines.filter((line) => line.group === group).reduce((total, line) => total + num(line[key]), 0);
+}
+
+function getDifferenceValue(line, close) {
+  const rate = line.group === "RM" ? close.rm.avgRate : close.profitability.manufacturingCostPerKg || close.rm.avgRate;
+  return Math.abs(num(line.remainingKg)) * num(rate);
+}
+
 function num(value) {
   const n = Number(value || 0);
   return Number.isFinite(n) ? n : 0;
 }
 
 function formatKg(value) {
-  return `${num(value).toLocaleString("en-IN", { maximumFractionDigits: 0 })} Kg`;
+  return `${num(value).toLocaleString("en-IN", { maximumFractionDigits: 2 })} kg`;
 }
 
 function formatCurrency(value) {
@@ -1148,207 +748,46 @@ function formatCurrency(value) {
 }
 
 function formatPercent(value) {
-  return `${num(value).toFixed(2)}%`;
+  return `${num(value).toFixed(1)}%`;
 }
 
-function monthLabel(value) {
-  if (!value) return "";
-  const [year, month] = value.split("-");
-  const d = new Date(Number(year), Number(month) - 1, 1);
-  return d.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+function monthLabel(month) {
+  const [year, mm] = String(month || "").split("-");
+  if (!year || !mm) return month;
+  return new Date(Number(year), Number(mm) - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
 }
 
-const page = { padding: 22, background: "#f8fafc", minHeight: "100vh" };
-const header = { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 20, flexWrap: "wrap", marginBottom: 18 };
-const eyebrow = { color: "#0f766e", fontSize: 13, fontWeight: 900, textTransform: "uppercase", letterSpacing: 0.8 };
-const title = { margin: "4px 0 0", fontSize: 34, color: "#0f172a" };
-const subtitle = { color: "#64748b", marginTop: 6, maxWidth: 760 };
+const page = { padding: 24, background: "#f8fafc", minHeight: "100vh", color: "#0f172a" };
+const header = { display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 20 };
 const headerActions = { display: "flex", gap: 10, alignItems: "center" };
-
-const statusBanner = (ready) => ({
-  background: ready ? "linear-gradient(135deg, #0f766e, #14b8a6)" : "linear-gradient(135deg, #92400e, #f59e0b)",
-  color: "white",
-  padding: 22,
-  borderRadius: 18,
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 20,
-  alignItems: "center",
-  marginBottom: 18,
-  boxShadow: "0 10px 25px rgba(15, 23, 42, 0.14)",
-});
-
-const panel = { background: "white", padding: 18, borderRadius: 16, boxShadow: "0 2px 12px rgba(15, 23, 42, 0.08)", border: "1px solid #e2e8f0", marginBottom: 18 };
-const panelTitle = { margin: "0 0 14px", color: "#0f172a" };
-const input = { width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #cbd5e1", boxSizing: "border-box", background: "white" };
-const smallInput = { ...input, minWidth: 190, padding: "8px 10px", fontSize: 12 };
-const qtyInput = { ...input, width: 140, padding: "8px 10px", fontSize: 12, textAlign: "right" };
-const mutedCell = { color: "#64748b", fontSize: 12, marginTop: 3 };
-const textarea = { ...input, minHeight: 95, resize: "vertical" };
-const label = { display: "block", fontWeight: 800, marginBottom: 8, color: "#334155" };
-const labelStyle = { ...label, fontSize: 13 };
-const approvalGrid = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 14 };
-
-const closePanel = { background: "white", padding: 20, borderRadius: 18, boxShadow: "0 2px 12px rgba(15, 23, 42, 0.08)", border: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", gap: 20, alignItems: "center", flexWrap: "wrap" };
-const closeButton = { background: "#0f766e", color: "white", border: "none", padding: "15px 24px", borderRadius: 12, cursor: "pointer", fontWeight: 900, fontSize: 15 };
-const disabledCloseButton = { ...closeButton, background: "#94a3b8", cursor: "not-allowed" };
-const secondaryButton = { background: "#0f172a", color: "white", border: "none", padding: "11px 16px", borderRadius: 10, cursor: "pointer", fontWeight: 800 };
-const statusStyle = { marginTop: 16, padding: 14, borderRadius: 12, background: "#ecfdf5", color: "#065f46", fontWeight: 800 };
-
-const exceptionStyle = (type) => ({
-  padding: 13,
-  borderRadius: 12,
-  fontWeight: 700,
-  color: type === "success" ? "#065f46" : type === "danger" ? "#991b1b" : "#92400e",
-  background: type === "success" ? "#ecfdf5" : type === "danger" ? "#fef2f2" : "#fffbeb",
-  border: type === "success" ? "1px solid #a7f3d0" : type === "danger" ? "1px solid #fecaca" : "1px solid #fde68a",
-});
-
-const accountabilityTop = { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 };
-const summaryPill = (type) => ({
-  display: "flex",
-  gap: 10,
-  alignItems: "center",
-  background: type === "success" ? "#ecfdf5" : type === "danger" ? "#fef2f2" : "#fffbeb",
-  color: type === "success" ? "#065f46" : type === "danger" ? "#991b1b" : "#92400e",
-  border: type === "success" ? "1px solid #a7f3d0" : type === "danger" ? "1px solid #fecaca" : "1px solid #fde68a",
-  borderRadius: 999,
-  padding: "8px 12px",
-  fontWeight: 900,
-});
-
+const eyebrow = { color: "#047857", fontWeight: 900, textTransform: "uppercase", fontSize: 12 };
+const title = { margin: "4px 0", fontSize: 30, fontWeight: 900 };
+const subtitle = { color: "#64748b", fontWeight: 700 };
+const panel = { background: "white", border: "1px solid #e5e7eb", borderRadius: 16, padding: 18, marginBottom: 18, boxShadow: "0 10px 30px rgba(15,23,42,0.06)" };
+const panelTitle = { margin: "0 0 14px", fontSize: 20, fontWeight: 900 };
+const cardGrid = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 };
+const readinessCard = (ok) => ({ background: ok ? "#ecfdf5" : "#fff7ed", border: `1px solid ${ok ? "#bbf7d0" : "#fed7aa"}`, borderRadius: 14, padding: 14 });
+const cardLabel = { color: "#475569", fontWeight: 800, fontSize: 12 };
+const cardValue = { fontSize: 20, fontWeight: 900, marginTop: 4 };
+const cardNext = { color: "#64748b", fontSize: 12, marginTop: 4, fontWeight: 700 };
 const tableWrap = { overflowX: "auto", border: "1px solid #e5e7eb", borderRadius: 12 };
 const table = { width: "100%", borderCollapse: "collapse", fontSize: 13 };
-const th = { background: "#f8fafc", color: "#334155", textAlign: "left", padding: "10px 12px", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap" };
-const td = { padding: "10px 12px", borderBottom: "1px solid #e5e7eb", color: "#334155", verticalAlign: "middle", whiteSpace: "nowrap" };
-
-const pill = (type) => ({
-  display: "inline-block",
-  padding: "6px 9px",
-  borderRadius: 999,
-  fontWeight: 900,
-  fontSize: 12,
-  color: type === "success" ? "#065f46" : type === "danger" ? "#991b1b" : "#92400e",
-  background: type === "success" ? "#ecfdf5" : type === "danger" ? "#fef2f2" : "#fffbeb",
-});
-
+const th = { textAlign: "left", padding: 10, background: "#f1f5f9", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap" };
+const td = { padding: 10, borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap", verticalAlign: "top" };
+const summaryRow = { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 };
+const summaryPill = (type) => ({ display: "flex", gap: 10, alignItems: "center", background: type === "success" ? "#ecfdf5" : type === "danger" ? "#fef2f2" : "#fffbeb", border: "1px solid #e5e7eb", borderRadius: 999, padding: "8px 12px", fontWeight: 900 });
+const pill = (type) => ({ display: "inline-block", borderRadius: 999, padding: "5px 9px", fontWeight: 900, background: type === "success" ? "#dcfce7" : type === "danger" ? "#fee2e2" : type === "warning" ? "#fef3c7" : "#e2e8f0", color: type === "success" ? "#166534" : type === "danger" ? "#991b1b" : type === "warning" ? "#92400e" : "#475569" });
+const input = { border: "1px solid #cbd5e1", borderRadius: 10, padding: "10px 12px", fontWeight: 700 };
+const qtyInput = { ...input, width: 110 };
+const smallInput = { ...input, width: 180 };
+const textarea = { ...input, width: "100%", minHeight: 90, marginTop: 14 };
+const labelStyle = { display: "block", fontSize: 12, fontWeight: 900, color: "#475569", marginBottom: 6 };
+const formGrid = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 };
+const secondaryButton = { background: "#0f172a", color: "white", border: "none", padding: "11px 16px", borderRadius: 10, cursor: "pointer", fontWeight: 900 };
 const miniButton = { background: "#0f766e", color: "white", border: "none", borderRadius: 8, padding: "7px 10px", fontWeight: 900, cursor: "pointer", fontSize: 12 };
-const miniDarkButton = { ...miniButton, background: "#0f172a" };
-const hintBox = { marginTop: 12, padding: 12, borderRadius: 12, background: "#f8fafc", border: "1px dashed #cbd5e1", color: "#475569", fontWeight: 700 };
-
-
-const workflowHeader = {
-  display: "grid",
-  gridTemplateColumns: "160px 1fr",
-  gap: 16,
-  alignItems: "center",
-  marginBottom: 16,
-};
-
-const workflowLabel = {
-  color: "#64748b",
-  fontSize: 12,
-  fontWeight: 900,
-  textTransform: "uppercase",
-};
-
-const workflowPercent = {
-  color: "#0f172a",
-  fontSize: 30,
-  fontWeight: 900,
-  marginTop: 2,
-};
-
-const progressTrack = {
-  height: 14,
-  background: "#e2e8f0",
-  borderRadius: 999,
-  overflow: "hidden",
-};
-
-const progressFill = {
-  height: "100%",
-  background: "linear-gradient(135deg, #0f766e, #14b8a6)",
-  borderRadius: 999,
-};
-
-const workflowGrid = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
-  gap: 12,
-  marginBottom: 14,
-};
-
-const workflowStep = (type) => ({
-  border:
-    type === "success"
-      ? "1px solid #a7f3d0"
-      : type === "danger"
-      ? "1px solid #fecaca"
-      : type === "warning"
-      ? "1px solid #fde68a"
-      : "1px solid #cbd5e1",
-  background:
-    type === "success"
-      ? "#ecfdf5"
-      : type === "danger"
-      ? "#fef2f2"
-      : type === "warning"
-      ? "#fffbeb"
-      : "#f8fafc",
-  borderRadius: 14,
-  padding: 14,
-});
-
-const workflowStepTitle = {
-  color: "#334155",
-  fontSize: 13,
-  fontWeight: 900,
-};
-
-const workflowStepStatus = {
-  color: "#0f172a",
-  fontSize: 18,
-  fontWeight: 900,
-  marginTop: 6,
-};
-
-const workflowStepAction = {
-  color: "#64748b",
-  fontSize: 12,
-  fontWeight: 700,
-  marginTop: 6,
-};
-
-const nextActionBox = {
-  background: "#f8fafc",
-  border: "1px dashed #cbd5e1",
-  borderRadius: 12,
-  padding: 12,
-  color: "#334155",
-  marginBottom: 12,
-};
-
-const actionList = {
-  display: "grid",
-  gap: 10,
-};
-
-const actionRow = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 12,
-  alignItems: "center",
-  padding: 12,
-  border: "1px solid #e2e8f0",
-  borderRadius: 12,
-  background: "white",
-  marginTop: 10,
-};
-
-const actionSub = {
-  color: "#64748b",
-  fontSize: 12,
-  fontWeight: 700,
-  marginTop: 3,
-};
+const closeButton = { background: "#0f766e", color: "white", border: "none", padding: "14px 22px", borderRadius: 12, cursor: "pointer", fontWeight: 900 };
+const disabledButton = { ...closeButton, background: "#94a3b8", cursor: "not-allowed" };
+const closePanel = { ...panel, display: "flex", justifyContent: "space-between", alignItems: "center" };
+const muted = { color: "#64748b", marginTop: 6 };
+const warningBox = { background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 12, fontWeight: 800, marginBottom: 12 };
+const statusBox = { position: "sticky", bottom: 16, background: "#0f172a", color: "white", padding: 14, borderRadius: 12, fontWeight: 900 };

@@ -7432,10 +7432,12 @@ function verifyMonthCloseMaterialRepair(data = {}) {
 }
 
 function buildCleanMonthCloseMaterialView_(periodMonth) {
+  createSheetIfMissing_("Material_Master", materialMasterHeaders_());
+  ensureHeaders_("Material_Master", materialMasterHeaders_());
   const ledgerRows = safeRows_("Inventory_Ledger").filter((row) => !isDeleted_(row));
   const masterRows = safeRows_("Material_Master").filter((row) => {
     const status = String(row.status || "ACTIVE").toUpperCase();
-    const category = normalizeMaterialCategoryForLedger_(row.category || row.materialType);
+    const category = monthCloseMaterialCategory_(row);
     return status !== "DELETED" && status !== "INACTIVE" && materialFlowIsManufacturingCategory_(category);
   });
   const masterIndex = monthCloseMaterialMasterIndex_(masterRows);
@@ -7456,13 +7458,22 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
     ADDITIVE: 0,
   };
   const balances = {};
+  const movementStats = {};
   const unmappedLedgerRows = [];
 
   masterRows.forEach((material) => {
-    const category = normalizeMaterialCategoryForLedger_(material.category || material.materialType);
+    const category = monthCloseMaterialCategory_(material);
     const materialId = String(material.materialId || material.materialCode || material.materialName || "").trim();
     if (!materialId || !groups[category]) return;
     balances[materialId] = 0;
+    movementStats[materialId] = {
+      opening: 0,
+      inward: 0,
+      consumed: 0,
+      produced: 0,
+      dispatched: 0,
+      approvedAdjustments: 0,
+    };
   });
 
   ledgerRows.filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row) => {
@@ -7495,22 +7506,40 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
 
     const key = String(material.materialId || material.materialCode || material.materialName || "").trim();
     balances[key] = round2(num(balances[key]) + qty);
+    const stats = movementStats[key] || {
+      opening: 0,
+      inward: 0,
+      consumed: 0,
+      produced: 0,
+      dispatched: 0,
+      approvedAdjustments: 0,
+    };
+    const bucket = classifyMonthCloseLedgerMovement_(row);
+    stats[bucket] = round2(num(stats[bucket]) + Math.abs(qty || num(row.qtyIn) || num(row.qtyOut)));
+    movementStats[key] = stats;
   });
 
   masterRows
     .slice()
     .sort((a, b) => String(a.materialName || "").localeCompare(String(b.materialName || "")))
     .forEach((material) => {
-      const category = normalizeMaterialCategoryForLedger_(material.category || material.materialType);
+      const category = monthCloseMaterialCategory_(material);
       if (!groups[category]) return;
       const key = String(material.materialId || material.materialCode || material.materialName || "").trim();
       const balance = round2(balances[key]);
+      const stats = movementStats[key] || {};
       groups[category].push({
         materialId: material.materialId || "",
         materialCode: material.materialCode || "",
         materialName: material.materialName || material.name || "",
         category,
         unit: material.unit || "Kg",
+        opening: round2(stats.opening),
+        inward: round2(stats.inward),
+        consumed: round2(stats.consumed),
+        produced: round2(stats.produced),
+        dispatched: round2(stats.dispatched),
+        approvedAdjustments: round2(stats.approvedAdjustments),
         balance,
         status: material.status || "ACTIVE",
       });
@@ -7537,11 +7566,39 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
       totalWipClosingKg: round2(groupTotals.WIP),
     },
     groups,
+    rows: ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"].reduce((list, category) => list.concat(groups[category]), []),
     materialCount: masterRows.length,
     unmappedLedgerRows,
     invalidLedgerRows,
     negativeManufacturingMaterials: monthCloseNegativeMasterBalances_(groups),
   };
+}
+
+function monthCloseMaterialCategory_(row) {
+  const raw = String(row.category || row.materialType || row.materialCategory || row.bucketType || "").trim().toUpperCase();
+  if (raw === "RAW MATERIAL" || raw === "RAW_MATERIAL" || raw === "RM MATERIAL" || raw === "RM MATERIALS") return "RM";
+  if (raw === "WORK IN PROCESS" || raw === "WORK_IN_PROCESS" || raw === "WIP MATERIAL" || raw === "WIP MATERIALS") return "WIP";
+  if (raw === "FINISHED GOODS" || raw === "FINISHED_GOODS" || raw === "FG MATERIAL" || raw === "FG MATERIALS") return "FG";
+  if (raw === "REWORK MATERIAL" || raw === "REWORK MATERIALS") return "REWORK";
+  if (raw === "WASTE MATERIAL" || raw === "WASTE MATERIALS") return "WASTE";
+  if (raw === "ADDITIVE MATERIAL" || raw === "ADDITIVE MATERIALS") return "ADDITIVE";
+  return normalizeMaterialCategoryForLedger_(raw);
+}
+
+function classifyMonthCloseLedgerMovement_(row) {
+  const module = String(row.module || row.legacySourceSheet || "").toUpperCase();
+  const movementType = String(row.movementType || "").toUpperCase();
+  const qtyIn = num(row.qtyIn);
+  const qtyOut = num(row.qtyOut);
+
+  if (/OPEN|OPENING/.test(module) || /OPEN|OPENING/.test(movementType)) return "opening";
+  if (/INVENTORY_ADJUSTMENT|ADJUSTMENT/.test(module) || /ADJUSTMENT/.test(movementType)) return "approvedAdjustments";
+  if (/DISPATCH/.test(module) || /DISPATCH/.test(movementType)) return "dispatched";
+  if (/RM_INWARD|RECEIVING|INWARD/.test(module)) return "inward";
+  if (/WASH|SORT|EXTRUSION|PRODUCTION|TRANSFORMATION/.test(module)) {
+    return qtyOut > qtyIn ? "consumed" : "produced";
+  }
+  return qtyOut > qtyIn ? "consumed" : "inward";
 }
 
 function monthCloseMaterialMasterIndex_(masterRows) {

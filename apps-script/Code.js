@@ -413,6 +413,8 @@ function updateFactoryCostMaster(data = {}) {
     if (p.fn === "materialFlow.migrateJuneToV1") return output(migrateJuneMaterialFlowToV1(p.dryRun !== false && String(p.dryRun || "true").toLowerCase() !== "false"));
     if (p.fn === "materialFlow.migrateJuneToV1Chunk") return output(migrateJuneMaterialFlowToV1Chunk(p));
     if (p.fn === "materialFlow.verifyJune2026") return output(verifyJuneMaterialFlowV1(p));
+    if (p.fn === "materialFlow.rebuildJuneLedgerV1") return output(rebuildJuneLedgerV1(p));
+    if (p.fn === "materialFlow.verifyJuneLedgerV1") return output(verifyJuneLedgerV1(p));
     if (p.fn === "trace.batch") return traceBatch(p);
     if (p.fn === "inventory.summary") {
       return output({
@@ -6667,8 +6669,8 @@ function pushRebuiltLedgerRow_(ctx, sourceSheet, sourceId, payload) {
     legacySourceSheet: sourceSheet,
     legacySourceId: sourceId || "",
     legacyMaterialName: payload.legacyMaterialName || payload.itemName || "",
-    migrationId: "LEDGER_REBUILD_FROM_SOURCE",
-    migratedAt: ctx.rebuildAt,
+    migrationId: payload.migrationId || "LEDGER_REBUILD_FROM_SOURCE",
+    migratedAt: payload.migratedAt || ctx.rebuildAt,
   });
 
   ctx.sourceCounts[sourceSheet] = (ctx.sourceCounts[sourceSheet] || 0) + 1;
@@ -7270,6 +7272,152 @@ function verifyJuneMaterialFlowV1(data = {}) {
   };
 }
 
+function rebuildJuneLedgerV1(data = {}) {
+  const periodMonth = "2026-06";
+  const isDryRun = data.dryRun !== false && String(data.dryRun || "true").toLowerCase() !== "false";
+  const beforeRows = safeRows_("Inventory_Ledger").filter((row) => !isDeleted_(row));
+  const rebuiltRows = buildJuneLedgerV1Rows_(periodMonth);
+  const beforeBalances = materialFlowBalancesFromLedger_(beforeRows, periodMonth);
+  const afterBalances = materialFlowBalancesFromLedger_(rebuiltRows, periodMonth);
+  const juneRowsToReplace = beforeRows.filter((row) => isJuneManufacturingLedgerRow_(row, periodMonth));
+  const summary = juneLedgerV1CompactSummary_(beforeBalances, afterBalances, juneRowsToReplace.length, rebuiltRows.length);
+
+  const result = {
+    ok: true,
+    route: "materialFlow.rebuildJuneLedgerV1",
+    periodMonth,
+    dryRun: isDryRun,
+    sourceSheetsUsed: [
+      "RM_Inward",
+      "Wash_Batches",
+      "Sorting_Batches",
+      "Extrusion_Batches",
+      "Dispatches",
+      "Inventory_Adjustments(APPROVED only)",
+    ],
+    backupSheetName: isDryRun ? previewBackupSheetName_("Inventory_Ledger_Backup") : "",
+    summary,
+    message: isDryRun
+      ? "Dry run complete. No data was changed."
+      : "June manufacturing Inventory_Ledger rows were backed up and rebuilt from source sheets.",
+  };
+
+  if (isDryRun) return result;
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    return { ok: false, route: "materialFlow.rebuildJuneLedgerV1", error: "June ledger rebuild is already in progress" };
+  }
+
+  try {
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const ledgerSheet = getSheet("Inventory_Ledger");
+    const headers = inventoryLedgerHeaders_();
+    ensureHeaders_("Inventory_Ledger", headers);
+    const backupSheetName = backupInventoryLedger_(ss, ledgerSheet);
+    const keepRows = beforeRows.filter((row) => !isJuneManufacturingLedgerRow_(row, periodMonth));
+    clearInventoryLedger_(ledgerSheet, headers);
+    writeInventoryLedgerRows_(ledgerSheet, headers, keepRows.concat(rebuiltRows));
+    result.backupSheetName = backupSheetName;
+    result.summary.rowsPreserved = keepRows.length;
+    result.summary.rowsWrittenTotal = keepRows.length + rebuiltRows.length;
+    return result;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function verifyJuneLedgerV1(data = {}) {
+  const periodMonth = "2026-06";
+  const rows = safeRows_("Inventory_Ledger").filter((row) => !isDeleted_(row));
+  const balances = materialFlowBalancesFromLedger_(rows, periodMonth);
+  const monthCloseMaterials = juneManufacturingMonthCloseMaterials_();
+
+  return {
+    ok: true,
+    route: "materialFlow.verifyJuneLedgerV1",
+    periodMonth,
+    juneManufacturingLedgerRows: rows.filter((row) => isJuneManufacturingLedgerRow_(row, periodMonth)).length,
+    negativeManufacturingMaterials: negativeManufacturingBalances_(balances),
+    fgBalances: {
+      E1: num(balances.E1),
+      E2: num(balances.E2),
+      E3: num(balances.E3),
+      E4: num(balances.E4),
+      E5: num(balances.E5),
+    },
+    wipBalances: {
+      washedMixed: num(balances["Washed Mixed"]),
+      washedWhiteFlakes: num(balances["Washed White Flakes"]),
+      whiteSortedFlakes: num(balances["White Sorted Flakes"]),
+    },
+    monthCloseMaterialList: monthCloseMaterials.map((material) => ({
+      material,
+      balance: num(balances[material]),
+      category: materialFlowNormalizeMaterial_(material, "").category,
+    })),
+  };
+}
+
+function buildJuneLedgerV1Rows_(periodMonth) {
+  const moves = [];
+  collectJuneReceivingMoves_(moves, periodMonth);
+  collectJuneWashMoves_(moves, periodMonth);
+  collectJuneSortingMoves_(moves, periodMonth);
+  collectJuneExtrusionMoves_(moves, periodMonth);
+  collectJuneDispatchMoves_(moves, periodMonth);
+  collectJuneAdjustmentMoves_(moves, periodMonth);
+  return movementsToJuneLedgerRows_(moves, periodMonth);
+}
+
+function juneLedgerV1CompactSummary_(beforeBalances, afterBalances, rowsToReplace, rowsToWrite) {
+  return {
+    rowsToReplace,
+    rowsToWrite,
+    beforeBalances: compactManufacturingBalances_(beforeBalances),
+    afterProjectedBalances: compactManufacturingBalances_(afterBalances),
+    whiteSorted: whiteSortedReconciliation_(beforeBalances, afterBalances),
+    negativeBalancesBefore: negativeManufacturingBalances_(beforeBalances),
+    negativeBalancesAfter: negativeManufacturingBalances_(afterBalances),
+    fgBalancesAfter: {
+      E1: num(afterBalances.E1),
+      E2: num(afterBalances.E2),
+      E3: num(afterBalances.E3),
+      E4: num(afterBalances.E4),
+      E5: num(afterBalances.E5),
+    },
+    wipBalancesAfter: {
+      washedMixed: num(afterBalances["Washed Mixed"]),
+      washedWhiteFlakes: num(afterBalances["Washed White Flakes"]),
+      whiteSortedFlakes: num(afterBalances["White Sorted Flakes"]),
+    },
+    warnings: juneMigrationWarnings_(),
+  };
+}
+
+function juneManufacturingMonthCloseMaterials_() {
+  return [
+    "White Flakes",
+    "White Regrind",
+    "Mixed Material",
+    "Washed White Flakes",
+    "Washed Mixed",
+    "White Sorted Flakes",
+    "E1",
+    "E2",
+    "E3",
+    "E4",
+    "E5",
+    "Sink Material",
+    "Dust",
+    "Wrapper Reject",
+    "Micro Plastic",
+    "Lumps",
+    "Purging",
+    "Rework Material",
+  ];
+}
+
 function buildJuneV1MaterialMovements_(periodMonth) {
   const moves = [];
   collectJuneReceivingMoves_(moves, periodMonth);
@@ -7327,7 +7475,18 @@ function collectJuneWashMoves_(moves, periodMonth) {
 }
 
 function collectJuneSortingMoves_(moves, periodMonth) {
-  safeRows_("Sorting_Batches").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row, index) => {
+  const rows = safeRows_("Sorting_Batches").filter((row) => materialFlowRowInPeriod_(row, periodMonth));
+  const totalRecordedOutput = rows.reduce((sum, row) => {
+    return sum +
+      num(row.whiteSortedKg || row.acceptedQtyKg) +
+      num(row.allMixSortedKg) +
+      num(row.commodityKg) +
+      num(row.rejectedQtyKg) +
+      num(row.dustKg);
+  }, 0);
+  if (totalRecordedOutput <= 0) return;
+
+  rows.forEach((row, index) => {
     const sourceId = row.sortingBatchId || row.batchId || "SORT-" + (index + 1);
     const inputMaterial = materialName_(row.inputMaterial, "Washed White Flakes");
     pushMaterialFlowMove_(moves, { sourceSheet: "Sorting_Batches", sourceId, field: "inputMaterial", originalName: inputMaterial, category: "WIP", qtyOut: row.inputWeightKg, date: row.date });
@@ -7406,7 +7565,10 @@ function collectJunePhysicalCountMoves_(moves, periodMonth) {
 }
 
 function collectJuneAdjustmentMoves_(moves, periodMonth) {
-  safeRows_("Inventory_Adjustments").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row) => {
+  safeRows_("Inventory_Adjustments").filter((row) => {
+    const status = String(row.status || row.approvalStatus || "").toUpperCase();
+    return materialFlowRowInPeriod_(row, periodMonth) && status === "APPROVED";
+  }).forEach((row) => {
     const qty = num(row.quantityKg);
     pushMaterialFlowMove_(moves, { sourceSheet: "Inventory_Adjustments", sourceId: row.adjustmentId, field: "itemCode", originalName: row.itemCode || row.material, category: row.itemType || "UNKNOWN", qtyIn: qty > 0 ? qty : 0, qtyOut: qty < 0 ? Math.abs(qty) : 0, date: row.date });
   });

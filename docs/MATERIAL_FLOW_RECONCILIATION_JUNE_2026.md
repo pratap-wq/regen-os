@@ -111,7 +111,10 @@ when color sorting was skipped.
 Routes:
 
 - `materialFlow.auditJune2026`
+- `materialFlow.migrationPlanJune2026`
 - `materialFlow.migrateJuneToV1`
+- `materialFlow.migrateJuneToV1Chunk`
+- `materialFlow.verifyJune2026`
 
 Apps Script function:
 
@@ -121,6 +124,30 @@ Dry-run URL:
 
 ```text
 ?fn=materialFlow.migrateJuneToV1&dryRun=true
+```
+
+Lightweight plan URL:
+
+```text
+?fn=materialFlow.migrationPlanJune2026
+```
+
+Chunked dry-run URL:
+
+```text
+?fn=materialFlow.migrateJuneToV1Chunk&dryRun=true&chunkSize=100&cursor=0
+```
+
+Chunked live URL, only after approval:
+
+```text
+?fn=materialFlow.migrateJuneToV1Chunk&dryRun=false&chunkSize=100&cursor=0
+```
+
+Verify URL:
+
+```text
+?fn=materialFlow.verifyJune2026
 ```
 
 Audit URL:
@@ -155,6 +182,8 @@ Live run, only if manually called with `dryRun=false`:
 - Prevents duplicate June ledger rows by replacing the June ledger slice.
 - Excludes `STORE` materials from the manufacturing material-flow dry-run and manufacturing Month Close audit.
 - Returns `whiteSortedReconciliation` showing whether negative White Sorted/White Sorted Flakes is removed.
+- Chunked migration replaces only June manufacturing ledger rows. June STORE ledger rows are preserved.
+- FG quality refs such as `E1-20260601-A-001` are excluded from inventory material names.
 
 Month Close manufacturing grouping after normalization:
 
@@ -176,16 +205,22 @@ Reason: `Inventory_Ledger` now includes `legacyMaterialName` to preserve the old
 
 1. Deploy Apps Script with `clasp push`.
 2. Run `db.runMigrations`.
-3. Run audit:
+3. Run lightweight plan:
+   `?fn=materialFlow.migrationPlanJune2026`
+4. Run audit if a detailed material list is needed:
    `?fn=materialFlow.auditJune2026&periodMonth=2026-06`
-4. Review:
+5. Review:
    - `materials`
    - `negativeInventory`
    - `directFlowDiagnosis`
    - `proposedNormalizationMap`
-5. Run dry-run migration:
-   `?fn=materialFlow.migrateJuneToV1&dryRun=true`
-6. Compare before/after balances.
-7. Only after approval, run:
-   `?fn=materialFlow.migrateJuneToV1&dryRun=false`
-8. Re-open Month Close for June 2026 and verify no material is negative unless backed by real physical variance.
+6. Run chunked dry-run migration:
+   `?fn=materialFlow.migrateJuneToV1Chunk&dryRun=true&chunkSize=100&cursor=0`
+7. Continue using returned `nextCursor` until `done=true`.
+8. Compare before/after balances.
+9. Only after approval, run live chunks:
+   `?fn=materialFlow.migrateJuneToV1Chunk&dryRun=false&chunkSize=100&cursor=0`
+10. Continue using returned `nextCursor` until `done=true`.
+11. Verify:
+   `?fn=materialFlow.verifyJune2026`
+12. Re-open Month Close for June 2026 and verify no material is negative unless backed by real physical variance.

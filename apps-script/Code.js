@@ -409,7 +409,10 @@ function updateFactoryCostMaster(data = {}) {
     if (p.fn === "inventoryLedger.audit") return auditInventoryLedger(p);
     if (p.fn === "inventoryLedger.rebuild") return rebuildInventoryLedger(p);
     if (p.fn === "materialFlow.auditJune2026") return auditJuneMaterialFlowV1(p);
+    if (p.fn === "materialFlow.migrationPlanJune2026") return output(materialFlowMigrationPlanJune2026(p));
     if (p.fn === "materialFlow.migrateJuneToV1") return output(migrateJuneMaterialFlowToV1(p.dryRun !== false && String(p.dryRun || "true").toLowerCase() !== "false"));
+    if (p.fn === "materialFlow.migrateJuneToV1Chunk") return output(migrateJuneMaterialFlowToV1Chunk(p));
+    if (p.fn === "materialFlow.verifyJune2026") return output(verifyJuneMaterialFlowV1(p));
     if (p.fn === "trace.batch") return traceBatch(p);
     if (p.fn === "inventory.summary") {
       return output({
@@ -6606,6 +6609,12 @@ function writeInventoryLedgerRows_(ledgerSheet, headers, rows) {
   ledgerSheet.getRange(2, 1, values.length, headers.length).setValues(values);
 }
 
+function appendInventoryLedgerRows_(ledgerSheet, headers, rows) {
+  if (!rows.length) return;
+  const values = rows.map((row) => headers.map((header) => row[header] !== undefined ? row[header] : ""));
+  ledgerSheet.getRange(ledgerSheet.getLastRow() + 1, 1, values.length, headers.length).setValues(values);
+}
+
 function buildInventoryLedgerRowsFromSources_() {
   const ctx = {
     rows: [],
@@ -7089,7 +7098,7 @@ function migrateJuneMaterialFlowToV1(dryRun) {
     dryRun: isDryRun,
     migrationFunction: "migrateJuneMaterialFlowToV1",
     periodMonth,
-    rowsBefore: beforeRows.filter((row) => materialFlowRowInPeriod_(row, periodMonth)).length,
+    rowsBefore: beforeRows.filter((row) => isJuneManufacturingLedgerRow_(row, periodMonth)).length,
     rowsAfter: rebuiltRows.length,
     beforeBalances,
     afterBalances,
@@ -7124,7 +7133,7 @@ function migrateJuneMaterialFlowToV1(dryRun) {
     const headers = inventoryLedgerHeaders_();
     ensureHeaders_("Inventory_Ledger", headers);
     const backupSheetName = backupInventoryLedger_(ss, ledgerSheet);
-    const keepRows = beforeRows.filter((row) => !materialFlowRowInPeriod_(row, periodMonth));
+    const keepRows = beforeRows.filter((row) => !isJuneManufacturingLedgerRow_(row, periodMonth));
     clearInventoryLedger_(ledgerSheet, headers);
     writeInventoryLedgerRows_(ledgerSheet, headers, keepRows.concat(rebuiltRows));
     result.backupSheetName = backupSheetName;
@@ -7133,6 +7142,132 @@ function migrateJuneMaterialFlowToV1(dryRun) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function materialFlowMigrationPlanJune2026(data = {}) {
+  const periodMonth = data.periodMonth || "2026-06";
+  const beforeRows = safeRows_("Inventory_Ledger").filter((row) => !isDeleted_(row));
+  const rebuiltRows = movementsToJuneLedgerRows_(buildJuneV1MaterialMovements_(periodMonth), periodMonth);
+  const beforeBalances = materialFlowBalancesFromLedger_(beforeRows, periodMonth);
+  const afterBalances = materialFlowBalancesFromLedger_(rebuiltRows, periodMonth);
+
+  return {
+    ok: true,
+    route: "materialFlow.migrationPlanJune2026",
+    periodMonth,
+    beforeBalances: compactManufacturingBalances_(beforeBalances),
+    afterProjectedBalances: compactManufacturingBalances_(afterBalances),
+    whiteSorted: whiteSortedReconciliation_(beforeBalances, afterBalances),
+    negativeBalancesBefore: negativeManufacturingBalances_(beforeBalances),
+    negativeBalancesAfter: negativeManufacturingBalances_(afterBalances),
+    rowsToChangeCount: beforeRows.filter((row) => isJuneManufacturingLedgerRow_(row, periodMonth)).length,
+    projectedRowsToWrite: rebuiltRows.length,
+    backupSheetNamesThatWouldBeCreated: [previewBackupSheetName_("Inventory_Ledger_Backup")],
+    warnings: juneMigrationWarnings_(),
+  };
+}
+
+function migrateJuneMaterialFlowToV1Chunk(data = {}) {
+  const periodMonth = data.periodMonth || "2026-06";
+  const dryRun = data.dryRun !== false && String(data.dryRun || "true").toLowerCase() !== "false";
+  const chunkSize = Math.max(1, Math.min(500, Number(data.chunkSize || 100)));
+  const cursor = Math.max(0, Number(data.cursor || 0));
+  const rebuiltRows = movementsToJuneLedgerRows_(buildJuneV1MaterialMovements_(periodMonth), periodMonth);
+  const beforeRows = safeRows_("Inventory_Ledger").filter((row) => !isDeleted_(row));
+  const beforeBalances = materialFlowBalancesFromLedger_(beforeRows, periodMonth);
+  const afterBalances = materialFlowBalancesFromLedger_(rebuiltRows, periodMonth);
+  const end = Math.min(cursor + chunkSize, rebuiltRows.length);
+  const chunkRows = rebuiltRows.slice(cursor, end);
+  const done = end >= rebuiltRows.length;
+  const summary = {
+    periodMonth,
+    dryRun,
+    cursor,
+    chunkSize,
+    processedRows: chunkRows.length,
+    nextCursor: done ? "" : String(end),
+    done,
+    totalRows: rebuiltRows.length,
+    whiteSorted: whiteSortedReconciliation_(beforeBalances, afterBalances),
+    negativeBalancesAfter: negativeManufacturingBalances_(afterBalances),
+    warnings: juneMigrationWarnings_(),
+  };
+
+  if (dryRun) {
+    return {
+      ok: true,
+      route: "materialFlow.migrateJuneToV1Chunk",
+      message: "Dry-run chunk complete. No data was changed.",
+      processedRows: chunkRows.length,
+      nextCursor: summary.nextCursor,
+      done,
+      summary,
+    };
+  }
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    return { ok: false, error: "June material flow chunk migration is already in progress" };
+  }
+
+  try {
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const ledgerSheet = getSheet("Inventory_Ledger");
+    const headers = inventoryLedgerHeaders_();
+    ensureHeaders_("Inventory_Ledger", headers);
+    let backupSheetName = "";
+
+    if (cursor === 0) {
+      backupSheetName = backupInventoryLedger_(ss, ledgerSheet);
+      const keepRows = beforeRows.filter((row) => !isJuneManufacturingLedgerRow_(row, periodMonth));
+      clearInventoryLedger_(ledgerSheet, headers);
+      writeInventoryLedgerRows_(ledgerSheet, headers, keepRows);
+    }
+
+    appendInventoryLedgerRows_(ledgerSheet, headers, chunkRows);
+
+    return {
+      ok: true,
+      route: "materialFlow.migrateJuneToV1Chunk",
+      backupSheetName,
+      processedRows: chunkRows.length,
+      nextCursor: summary.nextCursor,
+      done,
+      summary,
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function verifyJuneMaterialFlowV1(data = {}) {
+  const periodMonth = data.periodMonth || "2026-06";
+  const balances = materialFlowBalancesFromLedger_(safeRows_("Inventory_Ledger"), periodMonth);
+  const monthCloseMaterials = ["White Flakes", "Washed White Flakes", "Washed Mixed", "White Sorted Flakes", "E1", "E2", "E3", "E4", "E5", "Sink Material", "Dust", "Wrapper Reject", "Micro Plastic", "Lumps", "Purging", "Rework Material"];
+
+  return {
+    ok: true,
+    route: "materialFlow.verifyJune2026",
+    periodMonth,
+    negativeManufacturingMaterials: negativeManufacturingBalances_(balances),
+    fgBalances: {
+      E1: num(balances.E1),
+      E2: num(balances.E2),
+      E3: num(balances.E3),
+      E4: num(balances.E4),
+      E5: num(balances.E5),
+    },
+    wipBalances: {
+      washedMixed: num(balances["Washed Mixed"]),
+      washedWhiteFlakes: num(balances["Washed White Flakes"]),
+      whiteSortedFlakes: num(balances["White Sorted Flakes"]),
+    },
+    monthCloseMaterialList: monthCloseMaterials.map((material) => ({
+      material,
+      balance: num(balances[material]),
+      category: materialFlowNormalizeMaterial_(material, "").category,
+    })),
+  };
 }
 
 function buildJuneV1MaterialMovements_(periodMonth) {
@@ -7249,7 +7384,7 @@ function collectJuneLedgerMoves_(moves, periodMonth) {
 
 function collectJuneQualityMoves_(moves, periodMonth) {
   safeRows_("RM_Quality").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row) => pushMaterialFlowMove_(moves, { sourceSheet: "RM_Quality", sourceId: row.qualityId, field: "material", originalName: row.material || row.materialName, category: "RM", date: row.date }));
-  safeRows_("FG_Quality").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row) => pushMaterialFlowMove_(moves, { sourceSheet: "FG_Quality", sourceId: row.qualityId, field: "grade", originalName: row.grade || row.productionGrade || row.fgBatchCode, category: "FG", qtyIn: row.quantityKg, date: row.date }));
+  safeRows_("FG_Quality").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row) => pushMaterialFlowMove_(moves, { sourceSheet: "FG_Quality", sourceId: row.qualityId, field: "grade", originalName: row.grade || row.productionGrade, category: "FG", qtyIn: row.quantityKg, date: row.date }));
 }
 
 function collectJuneMonthCloseMoves_(moves, periodMonth) {
@@ -7321,6 +7456,9 @@ function materialFlowNormalizeMaterial_(name, category) {
     "ANTI OXIDANT": ["Antioxidant", "ADDITIVE", "Antioxidant"],
     "MASTER BATCH": ["Masterbatch", "ADDITIVE", "Masterbatch"],
     "BATTERY FLAKES": ["Battery Scrap", "RM", "Battery Scrap"],
+    "LUMPS": ["Lumps", "REWORK", "Lumps"],
+    "PURGING": ["Purging", "REWORK", "Purging"],
+    "REWORK": ["Rework Material", "REWORK", "Rework Material"],
     "RECIPE TEXT": ["Recipe Text", "UNKNOWN", "Do not store as inventory material"],
   };
   if (map[upper]) return { name: map[upper][0], category: map[upper][1], mergeInto: map[upper][2] };
@@ -7330,6 +7468,7 @@ function materialFlowNormalizeMaterial_(name, category) {
 function materialFlowCleanName_(value) {
   let text = String(value || "").trim();
   if (!text) return "";
+  if (materialFlowIsQualityReference_(text)) return "";
   text = text.replace(/\bE([1-5])\s*:\s*[\d,]+(?:\.\d+)?\s*(KG|KGS|KILOGRAMS)?/gi, "E$1");
   text = text.replace(/\b\d+(?:\.\d+)?\s*(kg|kgs|kilogram|kilograms|mt|tons?|tonnes?)\b/gi, " ");
   text = text.replace(/\s+/g, " ").trim();
@@ -7343,6 +7482,13 @@ function materialFlowIsRecipeText_(value) {
   if (/FEED\s*COMPOSITION|RECIPE|DOSING/i.test(text)) return true;
   if (/:/.test(text) && /\+/.test(text)) return true;
   if (/(ANTIOXIDANT|MASTER\s*BATCH|MASTERBATCH|SORTED\s*FLAKES|WHITE\s*FLAKES)\s*:/i.test(text)) return true;
+  return false;
+}
+
+function materialFlowIsQualityReference_(value) {
+  const text = String(value || "").trim().toUpperCase();
+  if (/^E[1-5]-\d{8}-[A-Z0-9]+-\d{3,}$/.test(text)) return true;
+  if (/^MR-\d{8}-[A-Z0-9]+-\d{3,}$/.test(text)) return true;
   return false;
 }
 
@@ -7485,8 +7631,53 @@ function materialFlowBalancesFromLedger_(rows, periodMonth) {
   return balances;
 }
 
+function isJuneManufacturingLedgerRow_(row, periodMonth) {
+  if (!materialFlowRowInPeriod_(row, periodMonth)) return false;
+  const normalized = materialFlowNormalizeMaterial_(row.itemName, row.itemType);
+  return materialFlowIsManufacturingCategory_(normalized.category);
+}
+
 function materialFlowIsManufacturingCategory_(category) {
-  return ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE", "UNKNOWN"].indexOf(String(category || "").toUpperCase()) !== -1;
+  return ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"].indexOf(String(category || "").toUpperCase()) !== -1;
+}
+
+function compactManufacturingBalances_(balances) {
+  const compact = {};
+  Object.keys(balances || {}).sort().forEach((material) => {
+    const normalized = materialFlowNormalizeMaterial_(material, "");
+    if (!materialFlowIsManufacturingCategory_(normalized.category)) return;
+    compact[material] = round2(num(balances[material]));
+  });
+  return compact;
+}
+
+function negativeManufacturingBalances_(balances) {
+  return Object.keys(balances || {}).sort()
+    .filter((material) => num(balances[material]) < -0.01)
+    .map((material) => ({ material, balance: round2(num(balances[material])) }));
+}
+
+function whiteSortedReconciliation_(beforeBalances, afterBalances) {
+  const before = num(beforeBalances["White Sorted"] || 0) + num(beforeBalances["White Sorted Flakes"] || 0);
+  const after = num(afterBalances["White Sorted"] || 0) + num(afterBalances["White Sorted Flakes"] || 0);
+  return {
+    beforeWhiteSorted: round2(before),
+    afterWhiteSorted: round2(after),
+    negativeWhiteSortedRemoved: before < -0.01 && after >= -0.01,
+  };
+}
+
+function previewBackupSheetName_(prefix) {
+  return prefix + "_" + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd_HHmmss");
+}
+
+function juneMigrationWarnings_() {
+  return [
+    "Chunk route does not return huge material arrays or examples.",
+    "STORE materials are excluded from manufacturing migration summaries.",
+    "Recipe/feed text and FG quality references are excluded from Inventory_Ledger itemName.",
+    "Live chunk migration must start with cursor=0 and then continue with returned nextCursor; do not rerun the same live cursor.",
+  ];
 }
 
 function proposedJuneMaterialNormalizationMap_() {

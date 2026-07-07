@@ -167,17 +167,15 @@ export default function MonthlyAudit() {
               String(material.materialName || material.materialCode || "").toUpperCase();
           return sameMonth && (sameSource || sameMaterial);
         });
-        const approvedAdjustmentKg = related
-          .filter((a) => String(a.status || "").toUpperCase() === "APPROVED")
-          .reduce((sum, a) => sum + num(a.quantityKg), 0);
+        const approvedAdjustmentKg = num(material.approvedAdjustments ?? material.adjusted);
         const pendingAdjustmentKg = related
           .filter((a) => ["DRAFT", "SUBMITTED", "PENDING"].includes(String(a.status || "").toUpperCase()))
           .reduce((sum, a) => sum + num(a.quantityKg), 0);
-        const systemClosing = num(material.balance);
+        const systemClosing = num(material.systemStock ?? material.balance);
         const hasPhysical = Math.abs(systemClosing) <= 0.01 || physicalValue !== "";
         const physicalKg = hasPhysical ? num(physicalValue) : 0;
         const differenceKg = hasPhysical ? physicalKg - systemClosing : 0;
-        const remainingKg = differenceKg - approvedAdjustmentKg;
+        const remainingKg = differenceKg;
 
         let rowStatus = "Physical Pending";
         let statusType = "pending";
@@ -206,7 +204,7 @@ export default function MonthlyAudit() {
           consumed: num(material.consumed),
           produced: num(material.produced),
           dispatched: num(material.dispatched),
-          approvedAdjustments: num(material.approvedAdjustments) + approvedAdjustmentKg,
+          approvedAdjustments: approvedAdjustmentKg,
           systemClosing,
           physicalKg,
           physicalValue,
@@ -485,6 +483,12 @@ export default function MonthlyAudit() {
                   "Material Code",
                   "Material",
                   "Type",
+                  "Opening",
+                  "Inward",
+                  "Consumed",
+                  "Produced",
+                  "Dispatched",
+                  "Adjusted",
                   "System Stock",
                   "Actual Stock",
                   "Difference",
@@ -500,6 +504,12 @@ export default function MonthlyAudit() {
                   <td style={td}>{line.materialCode || "-"}</td>
                   <td style={td}><b>{line.materialName}</b></td>
                   <td style={td}>{line.group}</td>
+                  <td style={td}>{formatKg(line.opening)}</td>
+                  <td style={td}>{formatKg(line.inward)}</td>
+                  <td style={td}>{formatKg(line.consumed)}</td>
+                  <td style={td}>{formatKg(line.produced)}</td>
+                  <td style={td}>{formatKg(line.dispatched)}</td>
+                  <td style={td}>{formatKg(line.approvedAdjustments)}</td>
                   <td style={td}>{formatKg(line.systemClosing)}</td>
                   <td style={td}>
                     <input

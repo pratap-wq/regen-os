@@ -47,7 +47,7 @@ export default function Sidebar() {
     { label: "Inventory Adjustments", path: "/inventory-adjustments" },
     { label: "Factory Expenses", path: "/factory-expenses" },
     { label: "FG Rates", path: "/fg-rates" },
-    { label: "Production Materials", path: "/production-materials" },
+    { label: "Factory Masters", path: "/factory-masters" },
   ],
 },
     {

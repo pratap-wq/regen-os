@@ -27,7 +27,7 @@ import WashBatches from "./pages/WashBatches";
 import ExtrusionBatches from "./pages/ExtrusionBatches";
 import Dispatch from "./pages/Dispatch";
 import ColorSorterBatches from "./pages/ColorSorterBatches";
-import ProductionMaterials from "./pages/ProductionMaterials";
+import FactoryMasters from "./pages/FactoryMasters";
 import LiveInventory from "./pages/LiveInventory";
 import MonthlyAudit from "./pages/MonthlyAudit";
 import InventoryAdjustments from "./pages/InventoryAdjustments";
@@ -128,7 +128,8 @@ export default function App() {
               />
 
               <Route path="/dispatch" element={<Dispatch />} />
-              <Route path="/production-materials" element={<ProductionMaterials />} />
+              <Route path="/factory-masters" element={<FactoryMasters />} />
+              <Route path="/production-materials" element={<FactoryMasters />} />
               <Route path="/consumables" element={<Consumables />} />
               <Route path="/stores-inward" element={<StoresInward />} />
               <Route path="/stores-issue" element={<StoresIssue />} />

@@ -144,6 +144,24 @@ function normalizeMasterRows(masterType, rows = []) {
       };
     }
 
+    if (type === "productgrade") {
+      return {
+        ...row,
+        id: row.id || row.gradeId || row.gradeCode || row.gradeName || "",
+        code: row.code || row.gradeCode || "",
+        name: row.name || row.gradeName || row.gradeCode || "",
+      };
+    }
+
+    if (type === "storagelocation") {
+      return {
+        ...row,
+        id: row.id || row.locationId || row.locationCode || row.locationName || "",
+        code: row.code || row.locationCode || "",
+        name: row.name || row.locationName || row.locationCode || "",
+      };
+    }
+
     return {
       ...row,
       id: row.id || row.supplierId || row.customerId || row.machineId || row.recipeId || row.itemId || row.testId || row.categoryId || "",

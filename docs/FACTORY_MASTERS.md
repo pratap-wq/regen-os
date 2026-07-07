@@ -2,13 +2,14 @@
 
 ## Purpose
 
-Factory Masters provide controlled self-service master data inside transaction screens. Operators should not leave a transaction to create a missing material, supplier, customer, machine, recipe, store item, quality test, or expense category.
+Factory Masters provide controlled self-service master data through one shared master-management screen. Transaction dropdowns should send users to the same Factory Masters screen with the relevant master already selected.
 
 ## Reusable frontend pieces
 
 - `src/services/FactoryMasterService.js`
 - `src/components/FactoryDropdown.jsx`
 - `src/components/FactoryMasterModal.jsx`
+- `src/pages/FactoryMasters.jsx`
 
 Every future transaction dropdown should use `FactoryDropdown` unless the value is a fixed system enum such as status, yes/no, or shift.
 
@@ -30,6 +31,8 @@ Supported `masterType` values:
 - `storeItem`
 - `qualityTest`
 - `expenseCategory`
+- `productGrade`
+- `storageLocation`
 
 ## Master storage map
 
@@ -42,6 +45,20 @@ Supported `masterType` values:
 | Store Item | `storeItem` | `Stores_Master` |
 | Expense Category | `expenseCategory` | `Expense_Category_Master` |
 | Quality Test | `qualityTest` | `Quality_Test_Master` |
+| Production Recipe | `recipe` | `Production_Recipes` |
+| Product Grade | `productGrade` | `Production_Grades` |
+| Storage Location | `storageLocation` | `Storage_Locations` |
+
+## Master management screen
+
+All maintainable masters are managed through one page:
+
+- Route: `/factory-masters`
+- Legacy alias: `/production-materials`
+
+The page uses a master selector at the top. Changing the selected master reloads the same reusable table with columns appropriate for that master. Do not create separate master-maintenance pages for new masters.
+
+Transaction dropdown `+` buttons navigate to `/factory-masters?master=<masterType>&new=1`, so the relevant master is already selected and the add modal opens from the shared page.
 
 Production material dropdowns must use `Material_Master` as the primary source:
 
@@ -55,19 +72,15 @@ If `Material_Master` is empty or missing input/output categories during transiti
 `FactoryDropdown` supports:
 
 - Search
-- Favorites
-- Recently Used
 - Add New
 - Edit
 - Disable
 - Pending Approval status
 - Merge Duplicate
 - Audit Trail display
-- Auto-select after creation
-- No page reload
-- No navigation away from transaction
+- No separate master page per dropdown
 
-Favorites and recently used are stored per browser/device for fast operator access. Created, updated, disabled, and merged audit fields are stored in Google Sheets.
+Created, updated, disabled, and merged audit fields are stored in Google Sheets.
 
 ## Audit fields
 

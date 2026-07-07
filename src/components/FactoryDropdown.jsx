@@ -1,11 +1,10 @@
 import { useEffect, useId, useMemo, useState } from "react";
-import FactoryMasterModal from "./FactoryMasterModal";
+import { useNavigate } from "react-router-dom";
 import "./factoryDesignSystem.css";
 import {
   listFactoryMaster,
   rememberMasterItem,
 } from "../services/FactoryMasterService";
-import { auth } from "../firebase";
 
 export default function FactoryDropdown({
   masterType,
@@ -18,14 +17,11 @@ export default function FactoryDropdown({
   filter,
   label,
   allowAddNew = false,
-  approvalRequired = false,
-  defaultStatus,
-  defaults = {},
 }) {
   const listId = useId();
+  const navigate = useNavigate();
   const [items, setItems] = useState([]);
   const [inputValue, setInputValue] = useState(value || "");
-  const [modalOpen, setModalOpen] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -110,13 +106,13 @@ export default function FactoryDropdown({
     if (exact) emit(exact);
   }
 
-  async function onSaved(item) {
-    setModalOpen(false);
-    await loadItems();
+  function openMasterManager() {
+    const params = new URLSearchParams({
+      master: masterType || "",
+      new: "1",
+    });
 
-    if (item && String(item.status || "").toUpperCase() !== "DISABLED") {
-      emit(item);
-    }
+    navigate(`/factory-masters?${params.toString()}`);
   }
 
   return (
@@ -144,7 +140,7 @@ export default function FactoryDropdown({
         {allowAddNew && (
           <button
             type="button"
-            onClick={() => setModalOpen(true)}
+            onClick={openMasterManager}
             style={smallButton}
             title="Add new"
             aria-label={`Add new ${placeholder}`}
@@ -153,22 +149,6 @@ export default function FactoryDropdown({
           </button>
         )}
       </div>
-
-      {modalOpen && (
-        <FactoryMasterModal
-          masterType={masterType}
-          title={`Add ${placeholder}`}
-          item={null}
-          items={items}
-          defaults={defaults}
-          defaultStatus={
-            defaultStatus || (approvalRequired ? "PENDING_APPROVAL" : "ACTIVE")
-          }
-          createdBy={auth.currentUser?.email || "System"}
-          onClose={() => setModalOpen(false)}
-          onSaved={onSaved}
-        />
-      )}
     </div>
   );
 }

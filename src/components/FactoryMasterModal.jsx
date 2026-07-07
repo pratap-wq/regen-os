@@ -15,6 +15,8 @@ const typeDefaults = {
   storeItem: { unit: "Nos" },
   qualityTest: { unit: "", testType: "" },
   expenseCategory: {},
+  productGrade: {},
+  storageLocation: {},
 };
 
 const emptyDefaults = {};
@@ -258,6 +260,26 @@ export default function FactoryMasterModal({
               <span style={label}>Category Code</span>
               <input name="categoryCode" value={form.categoryCode || ""} onChange={onChange} style={input} />
             </label>
+          )}
+
+          {masterType === "productGrade" && (
+            <label style={field}>
+              <span style={label}>Grade Code</span>
+              <input name="gradeCode" value={form.gradeCode || ""} onChange={onChange} style={input} />
+            </label>
+          )}
+
+          {masterType === "storageLocation" && (
+            <>
+              <label style={field}>
+                <span style={label}>Location Code</span>
+                <input name="locationCode" value={form.locationCode || ""} onChange={onChange} style={input} />
+              </label>
+              <label style={field}>
+                <span style={label}>Location Type</span>
+                <input name="locationType" value={form.locationType || ""} onChange={onChange} style={input} />
+              </label>
+            </>
           )}
         </div>
 

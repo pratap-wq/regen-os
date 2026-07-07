@@ -2498,6 +2498,24 @@ function factoryMasterConfigs_() {
       headers: REGEN_DB_SCHEMA.Expense_Category_Master,
       defaults: {},
     },
+    productGrade: {
+      sheet: "Production_Grades",
+      idField: "gradeId",
+      nameField: "gradeName",
+      codeField: "gradeCode",
+      idPrefix: "GRD",
+      headers: ["gradeId", "gradeCode", "gradeName", "status", "createdBy", "createdAt", "updatedBy", "updatedAt", "disabledBy", "disabledAt", "mergedIntoId", "mergedBy", "mergedAt", "favorite"],
+      defaults: {},
+    },
+    storageLocation: {
+      sheet: "Storage_Locations",
+      idField: "locationId",
+      nameField: "locationName",
+      codeField: "locationCode",
+      idPrefix: "LOC",
+      headers: ["locationId", "locationCode", "locationName", "locationType", "status", "createdBy", "createdAt", "updatedBy", "updatedAt", "disabledBy", "disabledAt", "mergedIntoId", "mergedBy", "mergedAt", "favorite"],
+      defaults: {},
+    },
   };
 }
 

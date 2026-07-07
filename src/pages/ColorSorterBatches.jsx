@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { apiCall } from "../api/api";
 import DataTable from "../components/DataTable";
 import FormSection from "../components/FormSection";
@@ -24,10 +24,6 @@ export default function ColorSorterBatches() {
 
   const [editingId, setEditingId] =
     useState(null);
-  const [saving, setSaving] =
-    useState(false);
-  const submitLockRef =
-    useRef(false);
 
   const blankForm = {
 
@@ -379,11 +375,8 @@ export default function ColorSorterBatches() {
   async function submit(e) {
 
     e.preventDefault();
-    if (submitLockRef.current) return;
 
     try {
-      submitLockRef.current = true;
-      setSaving(true);
 
       let res;
 
@@ -430,16 +423,9 @@ export default function ColorSorterBatches() {
         setForm(
           blankForm
         );
-        submitLockRef.current = false;
-        setSaving(false);
 
         loadData();
 
-      }
-      else {
-        setStatus(res.error || "Save failed");
-        submitLockRef.current = false;
-        setSaving(false);
       }
 
     } catch (err) {
@@ -447,8 +433,6 @@ export default function ColorSorterBatches() {
       setStatus(
         err.message
       );
-      submitLockRef.current = false;
-      setSaving(false);
 
     }
 
@@ -1102,15 +1086,12 @@ export default function ColorSorterBatches() {
 
           <button
             type="submit"
-            disabled={saving}
             style={saveButton(
               editingId
             )}
           >
 
-            {saving
-              ? "Saving..."
-              : editingId
+            {editingId
               ? "Update Batch"
               : "Save Batch"}
 

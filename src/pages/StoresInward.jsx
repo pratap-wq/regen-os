@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 import DataTable from "../components/DataTable";
@@ -65,8 +65,6 @@ export default function StoresInward() {
   const [lastStockMovement, setLastStockMovement] = useState(null);
   const [status, setStatus] = useState("");
   const [form, setForm] = useState(blankForm);
-  const [saving, setSaving] = useState(false);
-  const submitLockRef = useRef(false);
 
   const [showAddItem, setShowAddItem] = useState(false);
   const [newItem, setNewItem] = useState(blankNewItem);
@@ -256,15 +254,12 @@ export default function StoresInward() {
 
   async function submit(e) {
     e.preventDefault();
-    if (submitLockRef.current) return;
 
     if (!form.date) return alert("Date is mandatory");
     if (!form.itemName) return alert("Select item");
     if (!form.qty) return alert("Enter quantity");
 
     try {
-      submitLockRef.current = true;
-      setSaving(true);
       const beforeQty = getAvailableStock(form.itemName);
       const addedQty = Number(form.qty || 0);
       const res = await apiCall({
@@ -275,8 +270,6 @@ export default function StoresInward() {
 
       if (res.ok === false) {
         setStatus(res.error || "Error saving stores inward");
-        submitLockRef.current = false;
-        setSaving(false);
         return;
       }
 
@@ -289,20 +282,14 @@ export default function StoresInward() {
         remaining: beforeQty + addedQty,
       });
       setForm(blankForm);
-      submitLockRef.current = false;
-      setSaving(false);
       loadData();
     } catch (err) {
       setStatus(err.message);
-      submitLockRef.current = false;
-      setSaving(false);
     }
   }
 
   function clearMainForm() {
     setForm(blankForm);
-    submitLockRef.current = false;
-    setSaving(false);
     setStatus("Ready for new inward entry");
   }
 
@@ -562,8 +549,8 @@ export default function StoresInward() {
           </Field>
 
           <div style={formActions}>
-            <button type="submit" disabled={saving} style={primaryButton}>
-              {saving ? "Saving..." : "Save Inward"}
+            <button type="submit" style={primaryButton}>
+              Save Inward
             </button>
 
             <button type="button" style={clearButton} onClick={clearMainForm}>

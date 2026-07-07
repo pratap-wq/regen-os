@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
 import { calculateMonthClose } from "../services/monthCloseEngine";
 import { getPhysicalCount, savePhysicalCount } from "../services/physicalCountService";
@@ -28,12 +28,6 @@ export default function MonthlyAudit() {
     materials: [],
   });
   const [materialGroupView, setMaterialGroupView] = useState(null);
-  const [savingSignoff, setSavingSignoff] = useState(false);
-  const [approvingKey, setApprovingKey] = useState("");
-  const [closing, setClosing] = useState(false);
-  const signoffLockRef = useRef(false);
-  const approveLockRef = useRef(false);
-  const closeLockRef = useRef(false);
   const [physical, setPhysical] = useState({
     storesPhysicalValue: "",
     productionSignoff: "",
@@ -279,7 +273,6 @@ export default function MonthlyAudit() {
   }
 
   async function approveAdjustment(line) {
-    if (approveLockRef.current) return;
     if (!line.hasPhysical) {
       setStatus("Enter physical closing stock first.");
       return;
@@ -295,62 +288,47 @@ export default function MonthlyAudit() {
     }
     if (!window.confirm(`Approve ${formatKg(line.remainingKg)} difference for ${line.materialName}?`)) return;
 
-    approveLockRef.current = true;
-    setApprovingKey(line.key);
-    setStatus("Approving...");
-    try {
-      await savePhysicalSnapshot({ silent: true });
-      const res = await apiCall({
-        fn: "inventoryAdjustments.approveMonthClose",
-        periodMonth: month,
-        closeMonth: month,
-        date: `${month}-01`,
-        module: "MONTH_CLOSE",
-        itemType: line.group,
-        materialId: line.materialId,
-        materialCode: line.materialCode,
-        itemCode: line.materialName,
-        material: line.materialName,
-        stage: line.group,
-        systemQty: line.systemClosing,
-        physicalQty: line.physicalKg,
-        differenceQty: line.remainingKg,
-        value: getDifferenceValue(line, close),
-        reason,
-        remarks: physical.remarks || "",
-        sourceRef: `MONTH_CLOSE:${month}:${line.key}`,
-        approvedBy: physical.accountsSignoff || physical.ceoSignoff || "Month Close",
-      });
-      if (!res?.ok) {
-        setStatus(res?.error || "Difference approval failed.");
-        return;
-      }
-      setStatus("Difference approved.");
-      await loadAll();
-    } finally {
-      approveLockRef.current = false;
-      setApprovingKey("");
+    await savePhysicalSnapshot({ silent: true });
+    const res = await apiCall({
+      fn: "inventoryAdjustments.approveMonthClose",
+      periodMonth: month,
+      closeMonth: month,
+      date: `${month}-01`,
+      module: "MONTH_CLOSE",
+      itemType: line.group,
+      materialId: line.materialId,
+      materialCode: line.materialCode,
+      itemCode: line.materialName,
+      material: line.materialName,
+      stage: line.group,
+      systemQty: line.systemClosing,
+      physicalQty: line.physicalKg,
+      differenceQty: line.remainingKg,
+      value: getDifferenceValue(line, close),
+      reason,
+      remarks: physical.remarks || "",
+      sourceRef: `MONTH_CLOSE:${month}:${line.key}`,
+      approvedBy: physical.accountsSignoff || physical.ceoSignoff || "Month Close",
+    });
+    if (!res?.ok) {
+      setStatus(res?.error || "Difference approval failed.");
+      return;
     }
+    setStatus("Difference approved.");
+    await loadAll();
   }
 
   async function saveSignoffs() {
-    if (signoffLockRef.current) return;
     try {
-      signoffLockRef.current = true;
-      setSavingSignoff(true);
       setStatus("Saving physical stock and sign-off...");
       await savePhysicalSnapshot();
       await loadAll();
     } catch (err) {
       setStatus(err.message || "Save failed.");
-    } finally {
-      signoffLockRef.current = false;
-      setSavingSignoff(false);
     }
   }
 
   async function closeMonth() {
-    if (closeLockRef.current) return;
     if (monthClosed) {
       setStatus("This month is already closed.");
       return;
@@ -360,65 +338,57 @@ export default function MonthlyAudit() {
       return;
     }
     if (!window.confirm(`Close ${monthLabel(month)}?`)) return;
-    closeLockRef.current = true;
-    setClosing(true);
-    setStatus("Closing...");
-    try {
-      await savePhysicalSnapshot({ silent: true });
-      const res = await apiCall({
-        fn: "monthClose.add",
-        periodMonth: month,
-        status: "Closed",
-        rmSystemClosingKg: sumByGroup(materialLines, "RM", "systemClosing"),
-        washSystemClosingKg: sumByGroup(materialLines, "WIP", "systemClosing"),
-        sortingSystemClosingKg: 0,
-        fgSystemClosingKg: sumByGroup(materialLines, "FG", "systemClosing"),
-        rmPhysicalKg: sumByGroup(materialLines, "RM", "physicalKg"),
-        washPhysicalKg: sumByGroup(materialLines, "WIP", "physicalKg"),
-        sortingPhysicalKg: 0,
-        fgPhysicalKg: sumByGroup(materialLines, "FG", "physicalKg"),
-        storesPhysicalValue: physical.storesPhysicalValue,
-        rmVarianceKg: sumByGroup(materialLines, "RM", "remainingKg"),
-        washVarianceKg: sumByGroup(materialLines, "WIP", "remainingKg"),
-        sortingVarianceKg: 0,
-        fgVarianceKg: sumByGroup(materialLines, "FG", "remainingKg"),
-        rmInwardKg: close.rm.purchasedKg,
-        washInputKg: close.production.washInputKg,
-        washedOutputKg: close.production.washedOutputKg,
-        sortingInputKg: close.production.sortingInputKg,
-        sortingAcceptedKg: close.production.sortingAcceptedKg,
-        extrusionInputKg: close.production.extrusionInputKg,
-        fgProducedKg: close.production.fgProducedKg,
-        dispatchKg: close.production.dispatchKg,
-        salesValue: close.profitability.salesValue,
-        factoryExpenses: close.costs.factoryExpenseValue,
-        storesIssueQty: close.costs.storesIssueValue,
-        estimatedRmConsumedValue: close.costs.estimatedRmConsumedValue,
-        manufacturingProfit: close.profitability.manufacturingProfit,
-        exceptions: JSON.stringify(materialLines.map((line) => ({
-          key: line.key,
-          stockType: line.materialName,
-          category: line.group,
-          openingKg: line.opening,
-          flowInKg: line.flowIn,
-          flowOutKg: line.flowOut,
-          systemKg: line.systemClosing,
-          physicalKg: line.physicalKg,
-          differenceKg: line.remainingKg,
-          status: line.status,
-        }))),
-        productionSignoff: physical.productionSignoff,
-        storesSignoff: physical.storesSignoff,
-        accountsSignoff: physical.accountsSignoff,
-        ceoSignoff: physical.ceoSignoff,
-        remarks: physical.remarks,
-      });
-      setStatus(res?.ok ? "Month closed successfully." : res?.error || "Month close failed.");
-      await loadAll();
-    } finally {
-      closeLockRef.current = false;
-      setClosing(false);
-    }
+    await savePhysicalSnapshot({ silent: true });
+    const res = await apiCall({
+      fn: "monthClose.add",
+      periodMonth: month,
+      status: "Closed",
+      rmSystemClosingKg: sumByGroup(materialLines, "RM", "systemClosing"),
+      washSystemClosingKg: sumByGroup(materialLines, "WIP", "systemClosing"),
+      sortingSystemClosingKg: 0,
+      fgSystemClosingKg: sumByGroup(materialLines, "FG", "systemClosing"),
+      rmPhysicalKg: sumByGroup(materialLines, "RM", "physicalKg"),
+      washPhysicalKg: sumByGroup(materialLines, "WIP", "physicalKg"),
+      sortingPhysicalKg: 0,
+      fgPhysicalKg: sumByGroup(materialLines, "FG", "physicalKg"),
+      storesPhysicalValue: physical.storesPhysicalValue,
+      rmVarianceKg: sumByGroup(materialLines, "RM", "remainingKg"),
+      washVarianceKg: sumByGroup(materialLines, "WIP", "remainingKg"),
+      sortingVarianceKg: 0,
+      fgVarianceKg: sumByGroup(materialLines, "FG", "remainingKg"),
+      rmInwardKg: close.rm.purchasedKg,
+      washInputKg: close.production.washInputKg,
+      washedOutputKg: close.production.washedOutputKg,
+      sortingInputKg: close.production.sortingInputKg,
+      sortingAcceptedKg: close.production.sortingAcceptedKg,
+      extrusionInputKg: close.production.extrusionInputKg,
+      fgProducedKg: close.production.fgProducedKg,
+      dispatchKg: close.production.dispatchKg,
+      salesValue: close.profitability.salesValue,
+      factoryExpenses: close.costs.factoryExpenseValue,
+      storesIssueQty: close.costs.storesIssueValue,
+      estimatedRmConsumedValue: close.costs.estimatedRmConsumedValue,
+      manufacturingProfit: close.profitability.manufacturingProfit,
+      exceptions: JSON.stringify(materialLines.map((line) => ({
+        key: line.key,
+        stockType: line.materialName,
+        category: line.group,
+        openingKg: line.opening,
+        flowInKg: line.flowIn,
+        flowOutKg: line.flowOut,
+        systemKg: line.systemClosing,
+        physicalKg: line.physicalKg,
+        differenceKg: line.remainingKg,
+        status: line.status,
+      }))),
+      productionSignoff: physical.productionSignoff,
+      storesSignoff: physical.storesSignoff,
+      accountsSignoff: physical.accountsSignoff,
+      ceoSignoff: physical.ceoSignoff,
+      remarks: physical.remarks,
+    });
+    setStatus(res?.ok ? "Month closed successfully." : res?.error || "Month close failed.");
+    await loadAll();
   }
 
   return (
@@ -522,7 +492,7 @@ export default function MonthlyAudit() {
                   <td style={td}><span style={pill(line.statusType)}>{line.status}</span></td>
                   <td style={td}>
                     {line.statusType === "danger" ? (
-                      <button disabled={Boolean(approvingKey)} onClick={() => approveAdjustment(line)} style={miniButton}>{approvingKey === line.key ? "Approving..." : "Approve Difference"}</button>
+                      <button onClick={() => approveAdjustment(line)} style={miniButton}>Approve Difference</button>
                     ) : line.status}
                   </td>
                 </tr>
@@ -582,7 +552,7 @@ export default function MonthlyAudit() {
           <InputBox label="CEO" name="ceoSignoff" value={physical.ceoSignoff} onChange={onSignoffChange} />
         </div>
         <textarea name="remarks" value={physical.remarks} onChange={onSignoffChange} style={textarea} placeholder="Remarks" />
-        <button disabled={savingSignoff} onClick={saveSignoffs} style={secondaryButton}>{savingSignoff ? "Saving..." : "Save Sign-Off"}</button>
+        <button onClick={saveSignoffs} style={secondaryButton}>Save Sign-Off</button>
       </Section>
 
       <div style={closePanel}>
@@ -590,8 +560,8 @@ export default function MonthlyAudit() {
           <h2 style={{ margin: 0 }}>Close Month</h2>
           <div style={muted}>Close is allowed only after actual stock, differences, and sign-off are complete.</div>
         </div>
-        <button disabled={closing || !readyToClose || monthClosed} onClick={closeMonth} style={readyToClose ? closeButton : disabledButton}>
-          {closing ? "Closing..." : monthClosed ? "Month Closed" : "Close Month"}
+        <button onClick={closeMonth} style={readyToClose ? closeButton : disabledButton}>
+          {monthClosed ? "Month Closed" : "Close Month"}
         </button>
       </div>
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 import DataTable from "../components/DataTable";
@@ -48,8 +48,6 @@ export default function RMInward() {
 
   const [form, setForm] = useState(blankForm);
   const [materialLines, setMaterialLines] = useState([{ ...blankLine }]);
-  const [saving, setSaving] = useState(false);
-  const submitLockRef = useRef(false);
   const [rows, setRows] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [status, setStatus] = useState("");
@@ -206,14 +204,11 @@ export default function RMInward() {
   function clearForm() {
     setForm(blankForm);
     setMaterialLines([{ ...blankLine }]);
-    submitLockRef.current = false;
-    setSaving(false);
     setStatus("Ready for new receiving entry");
   }
 
   async function submit(e) {
     e.preventDefault();
-    if (submitLockRef.current) return;
 
     const lines = cleanLines();
     const commercialTotals = calculateCommercialTotals(form, materialLines);
@@ -223,8 +218,6 @@ export default function RMInward() {
     if (lines.length === 0) return alert("Add at least one material line");
 
     try {
-      submitLockRef.current = true;
-      setSaving(true);
       const res = await apiCall({
         fn: "rm.add",
         ...form,
@@ -243,8 +236,6 @@ export default function RMInward() {
 
       if (res.ok === false) {
         setStatus(res.error || "Error saving RM inward");
-        submitLockRef.current = false;
-        setSaving(false);
         return;
       }
 
@@ -253,8 +244,6 @@ export default function RMInward() {
       loadData();
     } catch (err) {
       setStatus(err.message);
-      submitLockRef.current = false;
-      setSaving(false);
     }
   }
 
@@ -556,7 +545,7 @@ export default function RMInward() {
         </Field>
 
         <div style={buttonWrap}>
-          <button type="submit" disabled={saving} style={saving ? disabledButton : saveButton}>{saving ? "Saving..." : "Save Material Receiving"}</button>
+          <button type="submit" style={saveButton}>Save Material Receiving</button>
           <button type="button" onClick={clearForm} style={clearButton}>Clear / New Entry</button>
         </div>
       </form>
@@ -711,7 +700,6 @@ const deleteButton = { background: "#dc2626", color: "white", border: "none", pa
 const lineTotal = { marginTop: 8, fontWeight: 800, color: "#0f766e" };
 const buttonWrap = { gridColumn: "1 / -1", display: "flex", gap: 10, flexWrap: "wrap" };
 const saveButton = { background: "#0f766e", color: "white", border: "none", padding: "12px 18px", borderRadius: 8, cursor: "pointer", fontWeight: 800 };
-const disabledButton = { ...saveButton, opacity: 0.6, cursor: "not-allowed" };
 const clearButton = { background: "#64748b", color: "white", border: "none", padding: "12px 18px", borderRadius: 8, cursor: "pointer", fontWeight: 800 };
 const modalOverlay = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 9999 };
 const modal = { background: "white", width: "min(980px,92vw)", maxHeight: "90vh", overflow: "auto", borderRadius: 14, padding: 22 };

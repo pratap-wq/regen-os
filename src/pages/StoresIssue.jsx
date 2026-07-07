@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 import DataTable from "../components/DataTable";
@@ -51,8 +51,6 @@ export default function StoresIssue() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const [lastStockMovement, setLastStockMovement] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const submitLockRef = useRef(false);
 
   useEffect(() => {
     loadData();
@@ -253,14 +251,11 @@ export default function StoresIssue() {
 
   function clearMainForm() {
     setForm(blankForm);
-    submitLockRef.current = false;
-    setSaving(false);
     setStatus("Ready for new stores issue entry");
   }
 
   async function submit(e) {
     e.preventDefault();
-    if (submitLockRef.current) return;
 
     if (!form.date) return alert("Date is mandatory");
     if (!form.itemName) return alert("Select item");
@@ -268,8 +263,6 @@ export default function StoresIssue() {
     if (!form.department) return alert("Select department");
 
     try {
-      submitLockRef.current = true;
-      setSaving(true);
       const finalForm = calculateIssueValue({ ...form });
       const beforeQty = getAvailableStock(finalForm.itemName);
       const issuedQty = Number(finalForm.qty || 0);
@@ -278,8 +271,6 @@ export default function StoresIssue() {
         setStatus(
           `Cannot issue ${issuedQty.toFixed(2)}. Available ${finalForm.itemName} stock is ${beforeQty.toFixed(2)}.`
         );
-        submitLockRef.current = false;
-        setSaving(false);
         return;
       }
 
@@ -298,18 +289,12 @@ export default function StoresIssue() {
           remaining: beforeQty - issuedQty,
         });
         setForm(blankForm);
-        submitLockRef.current = false;
-        setSaving(false);
         loadData();
       } else {
         setStatus(res.error || "Error");
-        submitLockRef.current = false;
-        setSaving(false);
       }
     } catch (err) {
       setStatus(err.message);
-      submitLockRef.current = false;
-      setSaving(false);
     }
   }
 
@@ -663,8 +648,8 @@ export default function StoresIssue() {
           </Field>
 
           <div style={formActions}>
-            <button type="submit" disabled={saving} style={primaryButton}>
-              {saving ? "Saving..." : "Save Issue"}
+            <button type="submit" style={primaryButton}>
+              Save Issue
             </button>
 
             <button type="button" style={clearButton} onClick={clearMainForm}>

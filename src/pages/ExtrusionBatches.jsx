@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 import {
@@ -109,8 +109,6 @@ export default function ExtrusionBatches() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(blankForm);
   const [feedRows, setFeedRows] = useState(blankFeed);
-  const [saving, setSaving] = useState(false);
-  const submitLockRef = useRef(false);
 
   useEffect(() => {
     loadRows();
@@ -458,19 +456,14 @@ export default function ExtrusionBatches() {
 
   async function submit(e) {
     e.preventDefault();
-    if (submitLockRef.current) return;
 
     try {
-      submitLockRef.current = true;
-      setSaving(true);
       const cleanFeed = feedRows.filter(
         (r) => r.materialType && Number(r.qtyKg || 0) > 0
       );
 
       if (cleanFeed.length === 0) {
         alert("Add at least one feed material");
-        submitLockRef.current = false;
-        setSaving(false);
         return;
       }
 
@@ -495,18 +488,12 @@ export default function ExtrusionBatches() {
         setEditingId(null);
         setForm(blankForm);
         setFeedRows(blankFeed);
-        submitLockRef.current = false;
-        setSaving(false);
         loadRows();
       } else {
         setStatus(res.error || "Error saving batch");
-        submitLockRef.current = false;
-        setSaving(false);
       }
     } catch (err) {
       setStatus(err.message);
-      submitLockRef.current = false;
-      setSaving(false);
     }
   }
 
@@ -778,8 +765,8 @@ export default function ExtrusionBatches() {
         </FormSection>
 
         <div style={stickyBar}>
-          <button type="submit" disabled={saving} style={saveButton(editingId)}>
-            {saving ? "Saving..." : editingId ? "Update Batch" : "Save Batch"}
+          <button type="submit" style={saveButton(editingId)}>
+            {editingId ? "Update Batch" : "Save Batch"}
           </button>
         </div>
       </form>

@@ -57,6 +57,9 @@ export default function FactoryExpenses() {
   const [form, setForm] =
     useState(blankForm);
 
+  const [editingExpenseId, setEditingExpenseId] =
+    useState("");
+
   useEffect(() => {
 
     loadRows();
@@ -76,7 +79,13 @@ export default function FactoryExpenses() {
         });
 
       setRows(
-        res.rows || []
+        (res.rows || []).map((row) => ({
+          ...row,
+          itemName:
+            row.itemName ||
+            row.description ||
+            "",
+        }))
       );
 
     } catch (err) {
@@ -110,20 +119,34 @@ export default function FactoryExpenses() {
         await apiCall({
 
           fn:
-            "factoryExpense.add",
+            editingExpenseId
+              ? "factoryExpenses.update"
+              : "factoryExpense.add",
 
           ...form,
+
+          expenseId:
+            editingExpenseId,
+
+          description:
+            form.itemName,
 
         });
 
       if (res.ok) {
 
         setStatus(
-          "Factory expense saved successfully"
+          editingExpenseId
+            ? "Factory expense updated successfully"
+            : "Factory expense saved successfully"
         );
 
         setForm(
           blankForm
+        );
+
+        setEditingExpenseId(
+          ""
         );
 
         loadRows();
@@ -136,6 +159,134 @@ export default function FactoryExpenses() {
         );
 
       }
+
+    } catch (err) {
+
+      setStatus(
+        err.message
+      );
+
+    }
+
+  }
+
+  function editExpense(row) {
+
+    setEditingExpenseId(
+      row.expenseId || ""
+    );
+
+    setForm({
+
+      ...blankForm,
+
+      month:
+        row.month ||
+        "",
+
+      year:
+        String(
+          row.year || ""
+        ),
+
+      category:
+        row.category || "",
+
+      itemName:
+        row.itemName ||
+        row.description ||
+        "",
+
+      amount:
+        row.amount || "",
+
+      remarks:
+        row.remarks || "",
+
+      createdBy:
+        row.createdBy ||
+        "Pratap",
+
+    });
+
+    setStatus(
+      `Editing expense ${row.expenseId || ""}`
+    );
+
+  }
+
+  function cancelEdit() {
+
+    setEditingExpenseId(
+      ""
+    );
+
+    setForm(
+      blankForm
+    );
+
+    setStatus(
+      "Edit cancelled"
+    );
+
+  }
+
+  async function deleteExpense(row) {
+
+    const ok =
+      window.confirm(
+        "Delete this factory expense? This will soft-delete the row and exclude it from totals."
+      );
+
+    if (!ok) return;
+
+    try {
+
+      const res =
+        await apiCall({
+
+          fn:
+            "factoryExpenses.delete",
+
+          expenseId:
+            row.expenseId,
+
+          deletedBy:
+            "Pratap",
+
+        });
+
+      if (res.ok === false) {
+
+        setStatus(
+          res.error ||
+            "Delete failed"
+        );
+
+        return;
+
+      }
+
+      setStatus(
+        "Factory expense deleted"
+      );
+
+      if (
+        editingExpenseId &&
+        editingExpenseId === row.expenseId
+      ) {
+
+        setEditingExpenseId(
+          ""
+        );
+
+        setForm(
+          blankForm
+        );
+
+      }
+
+      loadRows();
 
     } catch (err) {
 
@@ -490,9 +641,25 @@ export default function FactoryExpenses() {
               }
             >
 
-              Save Expense
+              {editingExpenseId
+                ? "Update Expense"
+                : "Save Expense"}
 
             </button>
+
+            {editingExpenseId && (
+
+              <button
+                type="button"
+                onClick={cancelEdit}
+                style={secondaryButton}
+              >
+
+                Cancel Edit
+
+              </button>
+
+            )}
 
           </div>
 
@@ -561,6 +728,10 @@ export default function FactoryExpenses() {
                   Remarks
                 </th>
 
+                <th style={thStyle}>
+                  Actions
+                </th>
+
               </tr>
 
             </thead>
@@ -611,6 +782,45 @@ export default function FactoryExpenses() {
                       {
                         r.remarks
                       }
+                    </td>
+
+                    <td style={tdStyle}>
+
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 8,
+                          flexWrap:
+                            "wrap",
+                        }}
+                      >
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            editExpense(r)
+                          }
+                          style={editButton}
+                        >
+
+                          Edit
+
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            deleteExpense(r)
+                          }
+                          style={deleteButton}
+                        >
+
+                          Delete
+
+                        </button>
+
+                      </div>
+
                     </td>
 
                   </tr>
@@ -809,3 +1019,34 @@ function KPI({
   );
 
 }
+
+const secondaryButton = {
+  background: "#64748b",
+  color: "white",
+  border: "none",
+  padding: "10px 14px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
+  marginLeft: 10,
+};
+
+const editButton = {
+  background: "#2563eb",
+  color: "white",
+  border: "none",
+  padding: "7px 10px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const deleteButton = {
+  background: "#dc2626",
+  color: "white",
+  border: "none",
+  padding: "7px 10px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
+};

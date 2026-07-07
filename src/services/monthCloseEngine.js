@@ -11,6 +11,11 @@ export function calculateMonthClose({
 }) {
   const rowsInMonth = (rows) =>
     rows.filter((r) => {
+      if (String(r.status || "").toUpperCase() === "DELETED") return false;
+      if (String(r.inwardStatus || "").toUpperCase() === "DELETED") return false;
+      if (String(r.issueStatus || "").toUpperCase() === "DELETED") return false;
+      if (String(r.dispatchStatus || "").toUpperCase() === "DELETED") return false;
+
       const pm = String(r.periodMonth || "").trim();
       if (pm) return pm.slice(0, 7) === periodMonth;
 

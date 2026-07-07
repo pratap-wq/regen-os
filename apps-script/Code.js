@@ -100,9 +100,13 @@ function doGet(e) {
     if (p.fn === "factoryExpenses.add") return addFactoryExpense(p);
     if (p.fn === "factoryExpenses.list") return listMaster("Factory_Expenses");
     if (p.fn === "factoryExpenses.update") return updateFactoryExpense(p);
+    if (p.fn === "factoryExpenses.delete") return deleteFactoryExpense(p);
+    if (p.fn === "factoryExpenses.disable") return deleteFactoryExpense(p);
     if (p.fn === "factoryExpense.add") return addFactoryExpense(p);
     if (p.fn === "factoryExpense.list") return listMaster("Factory_Expenses");
     if (p.fn === "factoryExpense.update") return updateFactoryExpense(p);
+    if (p.fn === "factoryExpense.delete") return deleteFactoryExpense(p);
+    if (p.fn === "factoryExpense.disable") return deleteFactoryExpense(p);
     if (p.fn === "factoryCostMaster.add") return addFactoryCostMaster(p);
     if (p.fn === "factoryCostMaster.list") return listMaster("Factory_Cost_Master");
     if (p.fn === "factoryCostMaster.update") return updateFactoryCostMaster(p);
@@ -620,6 +624,8 @@ const REGEN_DB_SCHEMA = {
     "description",
     "paidBy",
     "status",
+    "deletedBy",
+    "deletedAt",
   ],
   Material_Master: [
     "materialId",
@@ -1630,6 +1636,8 @@ function addProductionMaterial(data = {}) {
     "status",
     "createdBy",
     "createdAt",
+    "deletedBy",
+    "deletedAt",
   ]);
 
   const materialId = data.materialId || generateBatchId("PM");
@@ -4727,20 +4735,42 @@ function updateFactoryCostMaster(data = {}) {
 }
 function updateFactoryExpense(data = {}) {
   const date = normalizeDateOnly_(data.date || todayYmd());
+  const periodMonth = getPeriodMonthFromPayload_(data, date);
   validateOperationalWrite_(
-    { ...data, date },
+    { ...data, date, periodMonth },
     getRowById_("Factory_Expenses", "expenseId", data.expenseId)
   );
 
   return updateById("Factory_Expenses", "expenseId", data.expenseId, {
     date,
-    periodMonth: data.periodMonth || getPeriodMonth(date),
+    periodMonth,
+    month: data.month || periodMonth.slice(5, 7),
+    year: data.year || periodMonth.slice(0, 4),
     category: data.category || "",
-    description: data.description || "",
+    description: data.description || data.itemName || "",
     amount: num(data.amount),
     paidBy: data.paidBy || "",
     remarks: data.remarks || "",
-    status: data.status || "",
+    status: data.status || "ACTIVE",
+  });
+}
+
+function deleteFactoryExpense(data = {}) {
+  if (!data.expenseId) {
+    return output({ ok: false, error: "Missing expenseId" });
+  }
+
+  validateOperationalWrite_(
+    data,
+    getRowById_("Factory_Expenses", "expenseId", data.expenseId)
+  );
+
+  ensureHeaders_("Factory_Expenses", ["status", "deletedBy", "deletedAt"]);
+
+  return updateById("Factory_Expenses", "expenseId", data.expenseId, {
+    status: "DELETED",
+    deletedBy: data.deletedBy || data.updatedBy || data.createdBy || "System",
+    deletedAt: new Date(),
   });
 }
 

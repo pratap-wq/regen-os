@@ -758,7 +758,14 @@ const REGEN_DB_SCHEMA = {
     "date",
     "supplier",
     "vehicleNo",
+    "poNumber",
+    "supplierGrnNumber",
+    "supplierInvoiceNumber",
+    "invoiceDate",
     "material",
+    "materialLines",
+    "materialSummary",
+    "quantityKg",
     "grossWeight",
     "tareWeight",
     "netWeight",
@@ -776,6 +783,13 @@ const REGEN_DB_SCHEMA = {
     "transportPaidBy",
     "transportCost",
     "transportRemarks",
+    "taxableValue",
+    "gstPercent",
+    "gstAmount",
+    "invoiceTotal",
+    "freight",
+    "transportCharges",
+    "commercialRemarks",
   ],
   Suppliers: [
     "supplierId",
@@ -1195,6 +1209,13 @@ const REGEN_DB_SCHEMA = {
     "qualityId",
     "date",
     "rmInwardId",
+    "rubberPercent",
+    "ppPercent",
+    "sinkMaterialPercent",
+    "moisturePercent",
+    "contaminationPercent",
+    "mfi",
+    "visualRating",
     "formOfMaterial",
     "conditionOfMaterial",
     "sampleQtyGm",
@@ -1220,7 +1241,10 @@ const REGEN_DB_SCHEMA = {
     "fgBatchCode",
     "moisturePercent",
     "mfi",
+    "izod",
+    "ashPercent",
     "colour",
+    "blackDots",
     "appearance",
     "bagWeight1Kg",
     "bagWeight2Kg",
@@ -4182,6 +4206,68 @@ function validateManufacturingCutover(data = {}) {
 }
 // RM
 
+function parseRmMaterialLines_(value, fallbackMaterial, fallbackQty) {
+  let rows = value;
+
+  if (typeof value === "string" && value.trim()) {
+    try {
+      rows = JSON.parse(value);
+    } catch (err) {
+      rows = [];
+    }
+  }
+
+  if (!Array.isArray(rows)) rows = [];
+
+  const parsed = rows
+    .map(function(row) {
+      return {
+        material: String(row.material || row.materialName || "").trim(),
+        quantityKg: num(row.quantityKg || row.qtyKg || row.quantity || row.netWeight),
+        remarks: row.remarks || "",
+        rate: num(row.rate),
+        amount: num(row.amount),
+      };
+    })
+    .filter(function(row) {
+      return row.material && row.quantityKg > 0;
+    });
+
+  if (!parsed.length && fallbackMaterial && num(fallbackQty) > 0) {
+    parsed.push({
+      material: String(fallbackMaterial).trim(),
+      quantityKg: num(fallbackQty),
+      remarks: "",
+      rate: 0,
+      amount: 0,
+    });
+  }
+
+  return parsed;
+}
+
+function materialLinesSummary_(lines) {
+  return (lines || [])
+    .map(function(line) {
+      return line.material + ": " + line.quantityKg + " Kg";
+    })
+    .join(" + ");
+}
+
+function generateRmReceivingRef_(dateValue, supplier) {
+  const date = normalizeDateOnly_(dateValue || todayYmd());
+  const compactDate = String(date).replace(/-/g, "");
+  const supplierCode = cleanCodePart_(supplier, "SUP");
+  const prefix = "MR-" + compactDate + "-" + supplierCode + "-";
+  const rows = getRowsAsObjects("RM_Inward");
+  const sequence =
+    rows.filter(function(row) {
+      return String(row.inwardId || "").indexOf(prefix) === 0;
+    }).length + 1;
+
+  return prefix + String(sequence).padStart(3, "0");
+}
+
 function postApprovedRmInventory_(inwardId, data = {}, dateValue) {
   const existing = getRowsAsObjects("Inventory_Ledger").find(function(row) {
     return (
@@ -4195,25 +4281,33 @@ function postApprovedRmInventory_(inwardId, data = {}, dateValue) {
     return { posted: false, reason: "ALREADY_POSTED", ledgerId: existing.ledgerId || "" };
   }
 
-  addInventoryLedger({
-    date: dateValue || normalizeDateOnly_(data.date || todayYmd()),
-    module: "RM_INWARD",
-    movementType: "IN",
-    itemType: "RM",
-    itemName: data.material || "",
-    sourceRef: data.supplier || "",
-    targetRef: inwardId,
-    qtyIn: num(data.netWeight),
-    qtyOut: 0,
-    unit: "Kg",
-    remarks:
-      data.transportPaidBy === "REGEN"
-        ? String(data.remarks || "") + " | Transport by Regen"
-        : data.remarks || "",
-    createdBy: data.createdBy || "Quality",
+  const lines = parseRmMaterialLines_(data.materialLines, data.material, data.netWeight || data.quantityKg);
+  let posted = 0;
+  const warnings = [];
+
+  lines.forEach(function(line) {
+    try {
+      addInventoryLedger({
+        date: dateValue || normalizeDateOnly_(data.date || todayYmd()),
+        module: "RM_INWARD",
+        movementType: "IN",
+        itemType: "RM",
+        itemName: line.material,
+        sourceRef: data.supplier || "",
+        targetRef: inwardId,
+        qtyIn: line.quantityKg,
+        qtyOut: 0,
+        unit: "Kg",
+        remarks: line.remarks || data.remarks || "",
+        createdBy: data.createdBy || "Quality",
+      });
+      posted += 1;
+    } catch (err) {
+      warnings.push(line.material + ": " + err.message);
+    }
   });
 
-  return { posted: true };
+  return { posted: posted > 0, movements: posted, warnings };
 }
 
 function addRM(data = {}) {
@@ -4224,11 +4318,20 @@ function addRM(data = {}) {
     "date",
     "supplier",
     "vehicleNo",
+    "poNumber",
+    "supplierGrnNumber",
+    "supplierInvoiceNumber",
+    "invoiceDate",
     "material",
+    "materialLines",
+    "materialSummary",
+    "quantityKg",
     "color",
     "grossWeight",
     "tareWeight",
     "netWeight",
+    "sampleRequired",
+    "qcStatus",
     "moisture",
     "contamination",
     "estimatedRecovery",
@@ -4240,10 +4343,19 @@ function addRM(data = {}) {
     "transportPaidBy",
     "transportCost",
     "transportRemarks",
+    "taxableValue",
+    "gstPercent",
+    "gstAmount",
+    "invoiceTotal",
+    "freight",
+    "transportCharges",
+    "commercialRemarks",
   ]);
 
-  const inwardId = data.inwardId || data.batchId || generateBatchId("RMIN");
   const date = normalizeDateOnly_(data.date || todayYmd());
+  const inwardId = data.inwardId || data.batchId || generateRmReceivingRef_(date, data.supplier);
+  const lines = parseRmMaterialLines_(data.materialLines, data.material, data.netWeight || data.quantityKg);
+  const totalQty = lines.reduce(function(sum, line) { return sum + num(line.quantityKg); }, 0);
   validateOperationalWrite_({ ...data, date });
 
   appendObjectRow(sh, {
@@ -4251,17 +4363,31 @@ function addRM(data = {}) {
     date,
     supplier: data.supplier || "",
     vehicleNo: data.vehicleNo || "",
-    material: data.material || "",
+    poNumber: data.poNumber || "",
+    supplierGrnNumber: data.supplierGrnNumber || "",
+    supplierInvoiceNumber: data.supplierInvoiceNumber || "",
+    invoiceDate: data.invoiceDate ? normalizeDateOnly_(data.invoiceDate) : "",
+    material: data.material || (lines[0] && lines[0].material) || "",
+    materialLines: JSON.stringify(lines),
+    materialSummary: materialLinesSummary_(lines),
+    quantityKg: totalQty,
     color: data.color || "",
     grossWeight: num(data.grossWeight),
     tareWeight: num(data.tareWeight),
-    netWeight: num(data.netWeight),
+    netWeight: totalQty || num(data.netWeight),
     sampleRequired: data.sampleRequired || "YES",
     qcStatus: data.qcStatus || "PENDING",
 
     transportPaidBy: data.transportPaidBy || "SUPPLIER",
     transportCost: num(data.transportCost),
     transportRemarks: data.transportRemarks || "",
+    taxableValue: num(data.taxableValue),
+    gstPercent: num(data.gstPercent),
+    gstAmount: num(data.gstAmount),
+    invoiceTotal: num(data.invoiceTotal),
+    freight: num(data.freight),
+    transportCharges: num(data.transportCharges),
+    commercialRemarks: data.commercialRemarks || "",
 
     moisture: data.moisture || "",
     contamination: data.contamination || "",
@@ -4291,26 +4417,57 @@ function updateRM(data = {}) {
     "status",
     "sampleRequired",
     "qcStatus",
+    "poNumber",
+    "supplierGrnNumber",
+    "supplierInvoiceNumber",
+    "invoiceDate",
+    "materialLines",
+    "materialSummary",
+    "quantityKg",
     "transportPaidBy",
     "transportCost",
     "transportRemarks",
+    "taxableValue",
+    "gstPercent",
+    "gstAmount",
+    "invoiceTotal",
+    "freight",
+    "transportCharges",
+    "commercialRemarks",
   ]);
+
+  const lines = parseRmMaterialLines_(data.materialLines, data.material, data.netWeight || data.quantityKg);
+  const totalQty = lines.reduce(function(sum, line) { return sum + num(line.quantityKg); }, 0);
 
   return updateById("RM_Inward", "inwardId", idValue, {
     date: normalizeDateOnly_(data.date || todayYmd()),
     supplier: data.supplier || "",
     vehicleNo: data.vehicleNo || "",
-    material: data.material || "",
+    poNumber: data.poNumber || "",
+    supplierGrnNumber: data.supplierGrnNumber || "",
+    supplierInvoiceNumber: data.supplierInvoiceNumber || "",
+    invoiceDate: data.invoiceDate ? normalizeDateOnly_(data.invoiceDate) : "",
+    material: data.material || (lines[0] && lines[0].material) || "",
+    materialLines: lines.length ? JSON.stringify(lines) : data.materialLines || "",
+    materialSummary: lines.length ? materialLinesSummary_(lines) : data.materialSummary || data.material || "",
+    quantityKg: totalQty || num(data.quantityKg),
     color: data.color || "",
     grossWeight: num(data.grossWeight),
     tareWeight: num(data.tareWeight),
-    netWeight: num(data.netWeight),
+    netWeight: totalQty || num(data.netWeight),
     sampleRequired: data.sampleRequired || "YES",
     qcStatus: data.qcStatus || "",
 
     transportPaidBy: data.transportPaidBy || "SUPPLIER",
     transportCost: num(data.transportCost),
     transportRemarks: data.transportRemarks || "",
+    taxableValue: num(data.taxableValue),
+    gstPercent: num(data.gstPercent),
+    gstAmount: num(data.gstAmount),
+    invoiceTotal: num(data.invoiceTotal),
+    freight: num(data.freight),
+    transportCharges: num(data.transportCharges),
+    commercialRemarks: data.commercialRemarks || "",
 
     remarks: data.remarks || "",
     status: data.status || "",
@@ -6411,23 +6568,28 @@ function resolveMaterialForRebuild_(payload = {}) {
 function rebuildFromRmInward_(ctx) {
   const rows = getRowsAsObjects("RM_Inward").filter((row) => !isDeleted_(row));
   rows.forEach((row, index) => {
-    const sourceId = String(row.inwardId || row.batchId || "RM-" + (index + 1));
-    const material = materialName_(row.material || row.color, "Mixed Material");
-    const quantityKg = num(row.netWeight || row.quantityKg || row.grossWeight);
+    if (String(row.qcStatus || "").toUpperCase() && String(row.qcStatus || "").toUpperCase() !== "APPROVED") return;
+    if (String(row.status || "").toUpperCase() === "QC_PENDING") return;
 
-    pushRebuiltLedgerRow_(ctx, "RM_Inward", sourceId, {
-      date: row.date,
-      module: "RM_INWARD",
-      movementType: "IN",
-      itemType: materialCategory_(material),
-      itemName: material,
-      sourceRef: row.supplier || sourceId,
-      targetRef: sourceId,
-      qtyIn: quantityKg,
-      qtyOut: 0,
-      unit: "Kg",
-      remarks: "Ledger rebuilt from RM_Inward",
-      createdBy: row.createdBy || "Ledger Rebuild",
+    const sourceId = String(row.inwardId || row.batchId || "RM-" + (index + 1));
+    const lines = parseRmMaterialLines_(row.materialLines, row.material || row.color, row.netWeight || row.quantityKg || row.grossWeight);
+
+    lines.forEach(function(line) {
+      const material = materialName_(line.material, "Mixed Material");
+      pushRebuiltLedgerRow_(ctx, "RM_Inward", sourceId, {
+        date: row.date,
+        module: "RM_INWARD",
+        movementType: "IN",
+        itemType: materialCategory_(material),
+        itemName: material,
+        sourceRef: row.supplier || sourceId,
+        targetRef: sourceId,
+        qtyIn: line.quantityKg,
+        qtyOut: 0,
+        unit: "Kg",
+        remarks: "Approved RM receiving rebuilt from RM_Inward",
+        createdBy: row.createdBy || "Ledger Rebuild",
+      });
     });
   });
 }
@@ -7008,6 +7170,13 @@ function addRmQuality(data = {}) {
     "qualityId",
     "date",
     "rmInwardId",
+    "rubberPercent",
+    "ppPercent",
+    "sinkMaterialPercent",
+    "moisturePercent",
+    "contaminationPercent",
+    "mfi",
+    "visualRating",
     "formOfMaterial",
     "conditionOfMaterial",
     "sampleQtyGm",
@@ -7030,33 +7199,30 @@ function addRmQuality(data = {}) {
   const qualityId = data.qualityId || generateBatchId("RMQ");
   const date = normalizeDateOnly_(data.date || todayYmd());
 
-  const sample = num(data.sampleQtyGm);
-  const dryDust = num(data.dryDustGm);
-  const coloured = num(data.colouredFlakesGm);
-  const pp = num(data.ppGm);
-  const sink = num(data.sinkMaterialGm);
-
-  const percent = (v) => (sample > 0 ? round2((num(v) / sample) * 100) : 0);
-
   appendObjectRow(sh, {
     qualityId,
     date,
     rmInwardId: data.rmInwardId || data.inwardId || "",
+    rubberPercent: num(data.rubberPercent),
+    ppPercent: num(data.ppPercent),
+    sinkMaterialPercent: num(data.sinkMaterialPercent),
+    moisturePercent: num(data.moisturePercent),
+    contaminationPercent: num(data.contaminationPercent),
+    mfi: num(data.mfi),
+    visualRating: data.visualRating || "",
     formOfMaterial: data.formOfMaterial || "",
     conditionOfMaterial: data.conditionOfMaterial || "",
-    sampleQtyGm: sample,
-    dryDustGm: dryDust,
-    colouredFlakesGm: coloured,
+    sampleQtyGm: num(data.sampleQtyGm),
+    dryDustGm: num(data.dryDustGm),
+    colouredFlakesGm: num(data.colouredFlakesGm),
     rubberContaminationNo: num(data.rubberContaminationNo),
-    ppGm: pp,
-    sinkMaterialGm: sink,
-    dryDustPercent: percent(dryDust),
-    colouredFlakesPercent: percent(coloured),
-    ppPercent: percent(pp),
-    sinkMaterialPercent: percent(sink),
-    acceptGm: sample - dryDust - coloured - pp - sink,
+    ppGm: num(data.ppGm),
+    sinkMaterialGm: num(data.sinkMaterialGm),
+    dryDustPercent: num(data.dryDustPercent),
+    colouredFlakesPercent: num(data.colouredFlakesPercent),
+    acceptGm: num(data.acceptGm),
     remarks: data.remarks || "",
-    status: data.status || "ACTIVE",
+    status: data.status || "APPROVED",
     createdBy: data.createdBy || "System",
     createdAt: new Date(),
   });
@@ -7099,30 +7265,27 @@ function addRmQuality(data = {}) {
 }
 
 function updateRmQuality(data = {}) {
-  const sample = num(data.sampleQtyGm);
-  const dryDust = num(data.dryDustGm);
-  const coloured = num(data.colouredFlakesGm);
-  const pp = num(data.ppGm);
-  const sink = num(data.sinkMaterialGm);
-
-  const percent = (v) => (sample > 0 ? round2((num(v) / sample) * 100) : 0);
-
   const result = updateById("RM_Quality", "qualityId", data.qualityId, {
     date: normalizeDateOnly_(data.date || todayYmd()),
     rmInwardId: data.rmInwardId || data.inwardId || "",
+    rubberPercent: num(data.rubberPercent),
+    ppPercent: num(data.ppPercent),
+    sinkMaterialPercent: num(data.sinkMaterialPercent),
+    moisturePercent: num(data.moisturePercent),
+    contaminationPercent: num(data.contaminationPercent),
+    mfi: num(data.mfi),
+    visualRating: data.visualRating || "",
     formOfMaterial: data.formOfMaterial || "",
     conditionOfMaterial: data.conditionOfMaterial || "",
-    sampleQtyGm: sample,
-    dryDustGm: dryDust,
-    colouredFlakesGm: coloured,
+    sampleQtyGm: num(data.sampleQtyGm),
+    dryDustGm: num(data.dryDustGm),
+    colouredFlakesGm: num(data.colouredFlakesGm),
     rubberContaminationNo: num(data.rubberContaminationNo),
-    ppGm: pp,
-    sinkMaterialGm: sink,
-    dryDustPercent: percent(dryDust),
-    colouredFlakesPercent: percent(coloured),
-    ppPercent: percent(pp),
-    sinkMaterialPercent: percent(sink),
-    acceptGm: sample - dryDust - coloured - pp - sink,
+    ppGm: num(data.ppGm),
+    sinkMaterialGm: num(data.sinkMaterialGm),
+    dryDustPercent: num(data.dryDustPercent),
+    colouredFlakesPercent: num(data.colouredFlakesPercent),
+    acceptGm: num(data.acceptGm),
     remarks: data.remarks || "",
     status: data.status || "",
   });
@@ -7170,7 +7333,10 @@ function addFgQuality(data = {}) {
     "fgBatchCode",
     "moisturePercent",
     "mfi",
+    "izod",
+    "ashPercent",
     "colour",
+    "blackDots",
     "appearance",
     "bagWeight1Kg",
     "bagWeight2Kg",
@@ -7186,13 +7352,6 @@ function addFgQuality(data = {}) {
   const qualityId = data.qualityId || generateBatchId("FGQ");
   const date = normalizeDateOnly_(data.date || todayYmd());
 
-  const b1 = num(data.bagWeight1Kg);
-  const b2 = num(data.bagWeight2Kg);
-  const b3 = num(data.bagWeight3Kg);
-  const b4 = num(data.bagWeight4Kg);
-  const bagCount = [b1, b2, b3, b4].filter((x) => x > 0).length;
-  const avgBagWeightKg = bagCount > 0 ? round2((b1 + b2 + b3 + b4) / bagCount) : 0;
-
   appendObjectRow(sh, {
     qualityId,
     date,
@@ -7200,15 +7359,18 @@ function addFgQuality(data = {}) {
     fgBatchCode: data.fgBatchCode || data.extrusionBatchId || "",
     moisturePercent: num(data.moisturePercent),
     mfi: num(data.mfi),
+    izod: num(data.izod),
+    ashPercent: num(data.ashPercent),
     colour: data.colour || "",
+    blackDots: num(data.blackDots),
     appearance: data.appearance || "",
-    bagWeight1Kg: b1,
-    bagWeight2Kg: b2,
-    bagWeight3Kg: b3,
-    bagWeight4Kg: b4,
-    avgBagWeightKg,
+    bagWeight1Kg: num(data.bagWeight1Kg),
+    bagWeight2Kg: num(data.bagWeight2Kg),
+    bagWeight3Kg: num(data.bagWeight3Kg),
+    bagWeight4Kg: num(data.bagWeight4Kg),
+    avgBagWeightKg: num(data.avgBagWeightKg),
     remarks: data.remarks || "",
-    status: data.status || "ACTIVE",
+    status: data.status || "APPROVED",
     createdBy: data.createdBy || "System",
     createdAt: new Date(),
   });
@@ -7217,26 +7379,22 @@ function addFgQuality(data = {}) {
 }
 
 function updateFgQuality(data = {}) {
-  const b1 = num(data.bagWeight1Kg);
-  const b2 = num(data.bagWeight2Kg);
-  const b3 = num(data.bagWeight3Kg);
-  const b4 = num(data.bagWeight4Kg);
-  const bagCount = [b1, b2, b3, b4].filter((x) => x > 0).length;
-  const avgBagWeightKg = bagCount > 0 ? round2((b1 + b2 + b3 + b4) / bagCount) : 0;
-
   return updateById("FG_Quality", "qualityId", data.qualityId, {
     date: normalizeDateOnly_(data.date || todayYmd()),
     extrusionBatchId: data.extrusionBatchId || data.fgBatchCode || "",
     fgBatchCode: data.fgBatchCode || data.extrusionBatchId || "",
     moisturePercent: num(data.moisturePercent),
     mfi: num(data.mfi),
+    izod: num(data.izod),
+    ashPercent: num(data.ashPercent),
     colour: data.colour || "",
+    blackDots: num(data.blackDots),
     appearance: data.appearance || "",
-    bagWeight1Kg: b1,
-    bagWeight2Kg: b2,
-    bagWeight3Kg: b3,
-    bagWeight4Kg: b4,
-    avgBagWeightKg,
+    bagWeight1Kg: num(data.bagWeight1Kg),
+    bagWeight2Kg: num(data.bagWeight2Kg),
+    bagWeight3Kg: num(data.bagWeight3Kg),
+    bagWeight4Kg: num(data.bagWeight4Kg),
+    avgBagWeightKg: num(data.avgBagWeightKg),
     remarks: data.remarks || "",
     status: data.status || "",
   });

@@ -11,6 +11,18 @@ export function buildInventoryLots({
 }) {
   const lots = [];
 
+  function parseMaterialLines(value) {
+    if (!value) return [];
+    if (Array.isArray(value)) return value;
+    if (typeof value !== "string") return [];
+    try {
+      const rows = JSON.parse(value);
+      return Array.isArray(rows) ? rows : [];
+    } catch {
+      return [];
+    }
+  }
+
   rmRows.forEach((r) => {
     const qcStatus = String(r.qcStatus || "").toUpperCase();
     const status = String(r.status || "").toUpperCase();
@@ -18,6 +30,27 @@ export function buildInventoryLots({
     const isApproved = qcStatus === "APPROVED" || isLegacyWithoutQc;
 
     if (!isApproved || status === "REJECTED" || status === "HOLD") return;
+
+    const materialLines = parseMaterialLines(r.materialLines)
+      .map((line) => ({
+        material: line.material || line.materialName || "",
+        quantityKg: n(line.quantityKg || line.qtyKg || line.quantity),
+      }))
+      .filter((line) => line.material && line.quantityKg > 0);
+
+    if (materialLines.length) {
+      materialLines.forEach((line, index) => {
+        lots.push({
+          lotId: `${r.inwardId || r.id || "MR"}-${index + 1}`,
+          sourceType: "RM",
+          material: line.material,
+          availableKg: line.quantityKg,
+          date: r.date || "",
+          label: `${r.inwardId || "MR"} | ${line.material} | ${line.quantityKg} Kg`,
+        });
+      });
+      return;
+    }
 
     const qty = n(r.netWeight || r.quantityKg);
     if (qty > 0) {

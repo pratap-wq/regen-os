@@ -9,14 +9,13 @@ export default function Quality() {
   const blankRm = {
     date: today,
     rmInwardId: "",
-    formOfMaterial: "",
-    conditionOfMaterial: "",
-    sampleQtyGm: "",
-    dryDustGm: "",
-    colouredFlakesGm: "",
-    rubberContaminationNo: "",
-    ppGm: "",
-    sinkMaterialGm: "",
+    rubberPercent: "",
+    ppPercent: "",
+    sinkMaterialPercent: "",
+    moisturePercent: "",
+    contaminationPercent: "",
+    mfi: "",
+    visualRating: "",
     remarks: "",
     status: "APPROVED",
     createdBy: "Quality",
@@ -28,14 +27,13 @@ export default function Quality() {
     fgBatchCode: "",
     moisturePercent: "",
     mfi: "",
+    izod: "",
+    ashPercent: "",
     colour: "",
+    blackDots: "",
     appearance: "",
-    bagWeight1Kg: "",
-    bagWeight2Kg: "",
-    bagWeight3Kg: "",
-    bagWeight4Kg: "",
     remarks: "",
-    status: "QC_COMPLETED",
+    status: "APPROVED",
     createdBy: "Quality",
   };
 
@@ -77,14 +75,6 @@ export default function Quality() {
     setFgQualityRows(fgq);
     setRmRows(rm);
     setExtrusionRows(extrusion);
-  }
-
-  function n(v) {
-    return Number(v || 0);
-  }
-
-  function percent(value, total) {
-    return n(total) > 0 ? ((n(value) / n(total)) * 100).toFixed(2) : "0.00";
   }
 
   function dateInput(value) {
@@ -133,39 +123,17 @@ export default function Quality() {
     });
   }, [extrusionRows, fgDoneMap]);
 
-  const rmCalculated = useMemo(() => {
-    const sample = n(rmForm.sampleQtyGm);
-    const dryDust = n(rmForm.dryDustGm);
-    const coloured = n(rmForm.colouredFlakesGm);
-    const pp = n(rmForm.ppGm);
-    const sink = n(rmForm.sinkMaterialGm);
+  const pendingFirstRmRows = useMemo(() => {
+    return [...pendingRmRows].sort((a, b) =>
+      String(a.qcStatus || "PENDING").localeCompare(String(b.qcStatus || "PENDING"))
+    );
+  }, [pendingRmRows]);
 
-    return {
-      dryDustPercent: percent(dryDust, sample),
-      colouredFlakesPercent: percent(coloured, sample),
-      ppPercent: percent(pp, sample),
-      sinkMaterialPercent: percent(sink, sample),
-      acceptGm: sample - dryDust - coloured - pp - sink,
-    };
-  }, [rmForm]);
-
-  const fgCalculated = useMemo(() => {
-    const weights = [
-      n(fgForm.bagWeight1Kg),
-      n(fgForm.bagWeight2Kg),
-      n(fgForm.bagWeight3Kg),
-      n(fgForm.bagWeight4Kg),
-    ].filter((x) => x > 0);
-
-    const avg =
-      weights.length > 0
-        ? weights.reduce((s, x) => s + x, 0) / weights.length
-        : 0;
-
-    return {
-      avgBagWeightKg: avg.toFixed(2),
-    };
-  }, [fgForm]);
+  const pendingFirstFgRows = useMemo(() => {
+    return [...pendingFgRows].sort((a, b) =>
+      String(dateInput(b.date)).localeCompare(String(dateInput(a.date)))
+    );
+  }, [pendingFgRows]);
   function onRmChange(e) {
     setRmForm({
       ...rmForm,
@@ -194,8 +162,6 @@ export default function Quality() {
       ...blankRm,
       date: dateInput(row.date) || today,
       rmInwardId: id,
-      formOfMaterial: inferRmForm(row.material),
-      conditionOfMaterial: "",
       remarks: `QC for ${id}`,
     });
   }
@@ -213,18 +179,10 @@ export default function Quality() {
     });
   }
 
-  function inferRmForm(material) {
-    const text = String(material || "").toLowerCase();
-    if (text.includes("flake")) return "Flakes";
-    if (text.includes("bucket")) return "Buckets";
-    return "";
-  }
-
   async function saveRmQuality(e) {
     e.preventDefault();
 
     if (!rmForm.rmInwardId) return alert("Select RM inward batch");
-    if (!rmForm.sampleQtyGm) return alert("Enter sample quantity");
 
     try {
       const res = await apiCall({
@@ -350,28 +308,6 @@ export default function Quality() {
     }
   }
 
-  async function syncOldData() {
-    const ok = window.confirm("Sync old RM/FG data into Quality records?");
-    if (!ok) return;
-
-    try {
-      const res = await apiCall({ fn: "quality.syncOldData" });
-
-      if (res.ok === false) {
-        alert(res.error || "Sync failed");
-        return;
-      }
-
-      setStatus(
-        `Sync completed. RM created: ${res.rmCreated || 0}, FG created: ${
-          res.fgCreated || 0
-        }`
-      );
-      loadData();
-    } catch (err) {
-      alert(err.message);
-    }
-  }
   return (
     <div style={page}>
       <div style={hero}>
@@ -416,22 +352,9 @@ export default function Quality() {
         <>
           <div style={kpiGrid}>
             <KPI title="Pending RM QC" value={pendingRmRows.length} />
-            <KPI title="Pending FG QC" value={pendingFgRows.length} />
+              <KPI title="Pending FG QC" value={pendingFgRows.length} />
             <KPI title="RM QC Done" value={rmQualityRows.length} />
             <KPI title="FG QC Done" value={fgQualityRows.length} />
-          </div>
-
-          <div style={syncBox}>
-            <div>
-              <b>Old Data Sync</b>
-              <div style={muted}>
-                Creates pending quality records for old RM inward and FG batches.
-              </div>
-            </div>
-
-            <button type="button" onClick={syncOldData} style={syncButton}>
-              Sync Old Quality Data
-            </button>
           </div>
 
           <div style={twoCol}>
@@ -441,13 +364,13 @@ export default function Quality() {
               {pendingRmRows.length === 0 ? (
                 <div style={empty}>No pending RM quality.</div>
               ) : (
-                pendingRmRows.slice(0, 20).map((r) => (
+                pendingFirstRmRows.slice(0, 20).map((r) => (
                   <div key={r.inwardId || r.batchId} style={pendingRow}>
                     <div>
                       <b>{r.inwardId || r.batchId}</b>
                       <div style={muted}>
-                        {formatDate(r.date)} | {r.supplier || "Supplier"} |{" "}
-                        {r.material || "Material"} |{" "}
+                        {formatDate(r.date)} | {r.supplier || "Supplier"} | {r.vehicleNo || "Vehicle"} |{" "}
+                        {r.materialSummary || r.material || "Material"} |{" "}
                         {Number(r.netWeight || 0).toFixed(0)} kg
                       </div>
                     </div>
@@ -470,12 +393,12 @@ export default function Quality() {
               {pendingFgRows.length === 0 ? (
                 <div style={empty}>No pending FG quality.</div>
               ) : (
-                pendingFgRows.slice(0, 20).map((r) => (
+                pendingFirstFgRows.slice(0, 20).map((r) => (
                   <div key={r.extrusionBatchId || r.batchId} style={pendingRow}>
                     <div>
                       <b>{r.extrusionBatchId || r.batchId}</b>
                       <div style={muted}>
-                        {formatDate(r.date)} | {r.productionGrade || "Grade"} |{" "}
+                        {formatDate(r.date)} | {r.productionGrade || "Grade"} | {r.machine || "Machine"} | {r.shift || "Shift"} |{" "}
                         {Number(r.fgOutputKg || 0).toFixed(0)} kg
                       </div>
                     </div>
@@ -500,17 +423,17 @@ export default function Quality() {
               searchFields={[
                 "qualityId",
                 "rmInwardId",
-                "formOfMaterial",
-                "conditionOfMaterial",
+                "visualRating",
+                "status",
                 "remarks",
               ]}
               columns={[
                 { key: "date", label: "Date", render: (r) => formatDate(r.date) },
-                { key: "rmInwardId", label: "RM Batch" },
-                { key: "dryDustPercent", label: "Dust %" },
+                { key: "rmInwardId", label: "Receiving Ref" },
+                { key: "rubberPercent", label: "Rubber %" },
                 { key: "ppPercent", label: "PP %" },
                 { key: "sinkMaterialPercent", label: "Sink %" },
-                { key: "acceptGm", label: "Accept gm" },
+                { key: "moisturePercent", label: "Moisture %" },
                 { key: "status", label: "Status" },
               ]}
               onEdit={editRm}
@@ -533,8 +456,10 @@ export default function Quality() {
                 { key: "extrusionBatchId", label: "FG Batch" },
                 { key: "moisturePercent", label: "Moisture %" },
                 { key: "mfi", label: "MFI" },
+                { key: "izod", label: "Izod" },
+                { key: "ashPercent", label: "Ash %" },
                 { key: "colour", label: "Colour" },
-                { key: "avgBagWeightKg", label: "Avg Bag Kg" },
+                { key: "blackDots", label: "Black Dots" },
                 { key: "status", label: "Status" },
               ]}
               onEdit={editFg}
@@ -560,7 +485,7 @@ export default function Quality() {
                 />
               </Field>
 
-              <Field label="RM Inward Batch">
+              <Field label="Receiving Ref">
                 <select
                   name="rmInwardId"
                   value={rmForm.rmInwardId}
@@ -571,81 +496,44 @@ export default function Quality() {
                   <option value="">Select RM Batch</option>
                   {rmRows.map((r) => (
                     <option key={r.inwardId || r.batchId} value={r.inwardId || r.batchId}>
-                      {r.inwardId || r.batchId} - {r.supplier || ""} -{" "}
-                      {r.material || ""}
+                      {r.inwardId || r.batchId} - {r.supplier || ""} - {r.vehicleNo || ""} -{" "}
+                      {r.materialSummary || r.material || ""}
                     </option>
                   ))}
                 </select>
               </Field>
 
-              <Field label="Form of Material">
-                <select
-                  name="formOfMaterial"
-                  value={rmForm.formOfMaterial}
-                  onChange={onRmChange}
-                  style={input}
-                >
-                  <option value="">Select</option>
-                  <option>Flakes</option>
-                  <option>Buckets</option>
-                </select>
-              </Field>
-
-              <Field label="Condition of Material">
-                <select
-                  name="conditionOfMaterial"
-                  value={rmForm.conditionOfMaterial}
-                  onChange={onRmChange}
-                  style={input}
-                >
-                  <option value="">Select</option>
-                  <option>Unwashed</option>
-                  <option>Washed</option>
-                  <option>Semi-Washed</option>
-                </select>
-              </Field>
-              <Field label="Sample Quantity gm">
-                <input type="number" name="sampleQtyGm" value={rmForm.sampleQtyGm} onChange={onRmChange} style={input} />
-              </Field>
-
-              <Field label="Dry Dust gm">
-                <input type="number" name="dryDustGm" value={rmForm.dryDustGm} onChange={onRmChange} style={input} />
-              </Field>
-
-              <Field label="Coloured Flakes gm">
-                <input type="number" name="colouredFlakesGm" value={rmForm.colouredFlakesGm} onChange={onRmChange} style={input} />
-              </Field>
-
-              <Field label="Rubber Contamination No.">
-                <input type="number" name="rubberContaminationNo" value={rmForm.rubberContaminationNo} onChange={onRmChange} style={input} />
-              </Field>
-
-              <Field label="PP gm">
-                <input type="number" name="ppGm" value={rmForm.ppGm} onChange={onRmChange} style={input} />
-              </Field>
-
-              <Field label="Sink Material gm">
-                <input type="number" name="sinkMaterialGm" value={rmForm.sinkMaterialGm} onChange={onRmChange} style={input} />
-              </Field>
-
-              <Field label="Dry Dust %">
-                <input readOnly value={rmCalculated.dryDustPercent} style={readonly} />
-              </Field>
-
-              <Field label="Coloured Flakes %">
-                <input readOnly value={rmCalculated.colouredFlakesPercent} style={readonly} />
+              <Field label="Rubber %">
+                <input type="number" name="rubberPercent" value={rmForm.rubberPercent} onChange={onRmChange} style={input} />
               </Field>
 
               <Field label="PP %">
-                <input readOnly value={rmCalculated.ppPercent} style={readonly} />
+                <input type="number" name="ppPercent" value={rmForm.ppPercent} onChange={onRmChange} style={input} />
               </Field>
 
-              <Field label="Sink Material %">
-                <input readOnly value={rmCalculated.sinkMaterialPercent} style={readonly} />
+              <Field label="Sink %">
+                <input type="number" name="sinkMaterialPercent" value={rmForm.sinkMaterialPercent} onChange={onRmChange} style={input} />
               </Field>
 
-              <Field label="Accept gm">
-                <input readOnly value={rmCalculated.acceptGm} style={readonly} />
+              <Field label="Moisture %">
+                <input type="number" name="moisturePercent" value={rmForm.moisturePercent} onChange={onRmChange} style={input} />
+              </Field>
+
+              <Field label="Contamination %">
+                <input type="number" name="contaminationPercent" value={rmForm.contaminationPercent} onChange={onRmChange} style={input} />
+              </Field>
+
+              <Field label="MFI">
+                <input type="number" name="mfi" value={rmForm.mfi} onChange={onRmChange} style={input} />
+              </Field>
+
+              <Field label="Visual Rating">
+                <select name="visualRating" value={rmForm.visualRating} onChange={onRmChange} style={input}>
+                  <option value="">Select</option>
+                  <option>Good</option>
+                  <option>Average</option>
+                  <option>Poor</option>
+                </select>
               </Field>
 
               <Field label="QC Decision">
@@ -669,18 +557,17 @@ export default function Quality() {
           <DataTable
             title="RM Quality History"
             rows={rmQualityRows}
-            searchFields={["qualityId", "rmInwardId", "formOfMaterial", "conditionOfMaterial", "remarks"]}
+            searchFields={["qualityId", "rmInwardId", "visualRating", "status", "remarks"]}
             columns={[
               { key: "date", label: "Date", render: (r) => formatDate(r.date) },
-              { key: "rmInwardId", label: "RM Batch" },
-              { key: "formOfMaterial", label: "Form" },
-              { key: "conditionOfMaterial", label: "Condition" },
-              { key: "sampleQtyGm", label: "Sample gm" },
-              { key: "dryDustPercent", label: "Dust %" },
-              { key: "colouredFlakesPercent", label: "Colour %" },
+              { key: "rmInwardId", label: "Receiving Ref" },
+              { key: "rubberPercent", label: "Rubber %" },
               { key: "ppPercent", label: "PP %" },
               { key: "sinkMaterialPercent", label: "Sink %" },
-              { key: "acceptGm", label: "Accept gm" },
+              { key: "moisturePercent", label: "Moisture %" },
+              { key: "contaminationPercent", label: "Contamination %" },
+              { key: "mfi", label: "MFI" },
+              { key: "visualRating", label: "Visual" },
               { key: "status", label: "Status" },
             ]}
             onEdit={editRm}
@@ -718,6 +605,14 @@ export default function Quality() {
                 <input type="number" name="mfi" value={fgForm.mfi} onChange={onFgChange} style={input} />
               </Field>
 
+              <Field label="Izod">
+                <input type="number" name="izod" value={fgForm.izod} onChange={onFgChange} style={input} />
+              </Field>
+
+              <Field label="Ash %">
+                <input type="number" name="ashPercent" value={fgForm.ashPercent} onChange={onFgChange} style={input} />
+              </Field>
+
               <Field label="Colour">
                 <select name="colour" value={fgForm.colour} onChange={onFgChange} style={input}>
                   <option value="">Select</option>
@@ -728,28 +623,20 @@ export default function Quality() {
                 </select>
               </Field>
 
+              <Field label="Black Dots">
+                <input type="number" name="blackDots" value={fgForm.blackDots} onChange={onFgChange} style={input} />
+              </Field>
+
               <Field label="Appearance">
                 <textarea name="appearance" value={fgForm.appearance} onChange={onFgChange} style={textarea} />
               </Field>
 
-              <Field label="25kg Bag Weight 1">
-                <input type="number" name="bagWeight1Kg" value={fgForm.bagWeight1Kg} onChange={onFgChange} style={input} />
-              </Field>
-
-              <Field label="25kg Bag Weight 2">
-                <input type="number" name="bagWeight2Kg" value={fgForm.bagWeight2Kg} onChange={onFgChange} style={input} />
-              </Field>
-
-              <Field label="25kg Bag Weight 3">
-                <input type="number" name="bagWeight3Kg" value={fgForm.bagWeight3Kg} onChange={onFgChange} style={input} />
-              </Field>
-
-              <Field label="25kg Bag Weight 4">
-                <input type="number" name="bagWeight4Kg" value={fgForm.bagWeight4Kg} onChange={onFgChange} style={input} />
-              </Field>
-
-              <Field label="Average Bag Weight">
-                <input readOnly value={fgCalculated.avgBagWeightKg} style={readonly} />
+              <Field label="QC Decision">
+                <select name="status" value={fgForm.status} onChange={onFgChange} style={input}>
+                  <option value="APPROVED">Approved</option>
+                  <option value="REJECTED">Rejected</option>
+                  <option value="HOLD">Hold</option>
+                </select>
               </Field>
 
               <Field label="Remarks">
@@ -771,9 +658,11 @@ export default function Quality() {
               { key: "extrusionBatchId", label: "FG Batch" },
               { key: "moisturePercent", label: "Moisture %" },
               { key: "mfi", label: "MFI" },
+              { key: "izod", label: "Izod" },
+              { key: "ashPercent", label: "Ash %" },
               { key: "colour", label: "Colour" },
+              { key: "blackDots", label: "Black Dots" },
               { key: "appearance", label: "Appearance" },
-              { key: "avgBagWeightKg", label: "Avg Bag Kg" },
               { key: "status", label: "Status" },
             ]}
             onEdit={editFg}
@@ -840,8 +729,6 @@ const kpiGrid = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(
 const kpi = { background: "white", border: "1px solid #e5e7eb", borderRadius: 14, padding: 16 };
 const kpiTitle = { color: "#64748b", fontSize: 12, fontWeight: 800, textTransform: "uppercase" };
 const kpiValue = { fontSize: 30, fontWeight: 950, color: "#0f766e", marginTop: 6 };
-const syncBox = { background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 14, padding: 14, marginBottom: 18, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" };
-const syncButton = { background: "#d97706", color: "white", border: "none", padding: "10px 14px", borderRadius: 8, cursor: "pointer", fontWeight: 800 };
 const twoCol = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: 18, marginBottom: 18 };
 const card = { background: "white", border: "1px solid #e5e7eb", borderRadius: 14, padding: 18, marginBottom: 18 };
 const sectionTitle = { marginTop: 0, color: "#0f766e" };
@@ -852,7 +739,6 @@ const testButton = { background: "#2563eb", color: "white", border: "none", padd
 const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 };
 const labelStyle = { display: "block", fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 5 };
 const input = { width: "100%", height: 40, padding: "0 10px", border: "1px solid #cbd5e1", borderRadius: 8, boxSizing: "border-box" };
-const readonly = { ...input, background: "#f8fafc", fontWeight: 800 };
 const textarea = { ...input, height: 82, padding: 10 };
 const actionRow = { display: "flex", alignItems: "end" };
 const saveButton = { background: "#0f766e", color: "white", border: "none", padding: "10px 16px", borderRadius: 8, cursor: "pointer", fontWeight: 700 };

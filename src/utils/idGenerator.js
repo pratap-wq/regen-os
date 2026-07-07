@@ -41,8 +41,13 @@ export function getSequence(existingRows = [], idField, prefix) {
   return String(max + 1).padStart(3, "0");
 }
 
-export function generateRMInwardId(dateValue, existingRows = []) {
-  const prefix = `RMI-${dateCompact(dateValue)}`;
+export function generateRMInwardId(dateValue, supplier = "SUPPLIER", existingRows = []) {
+  const supplierCode =
+    String(supplier || "SUP")
+      .replace(/[^a-z0-9]/gi, "")
+      .slice(0, 8)
+      .toUpperCase() || "SUP";
+  const prefix = `MR-${dateCompact(dateValue)}-${supplierCode}`;
   return `${prefix}-${getSequence(existingRows, "inwardId", prefix)}`;
 }
 

@@ -413,8 +413,8 @@ function updateFactoryCostMaster(data = {}) {
     if (p.fn === "materialFlow.migrateJuneToV1") return output(migrateJuneMaterialFlowToV1(p.dryRun !== false && String(p.dryRun || "true").toLowerCase() !== "false"));
     if (p.fn === "materialFlow.migrateJuneToV1Chunk") return output(migrateJuneMaterialFlowToV1Chunk(p));
     if (p.fn === "materialFlow.verifyJune2026") return output(verifyJuneMaterialFlowV1(p));
-    if (p.fn === "materialFlow.rebuildJuneLedgerV1") return output(rebuildJuneLedgerV1(p));
-    if (p.fn === "materialFlow.verifyJuneLedgerV1") return output(verifyJuneLedgerV1(p));
+    if (p.fn === "materialFlow.rebuildJuneLedgerV1") return rebuildJuneLedgerV1(p);
+    if (p.fn === "materialFlow.verifyJuneLedgerV1") return verifyJuneLedgerV1(p);
     if (p.fn === "trace.batch") return traceBatch(p);
     if (p.fn === "inventory.summary") {
       return output({

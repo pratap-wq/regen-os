@@ -12,7 +12,7 @@ export default function CostAnalysis({ close }) {
       color: "#2563eb",
     },
     {
-      title: "Stores & Consumables",
+      title: "Stores Consumed",
       value: c.storesIssueValue,
       color: "#0f766e",
     },
@@ -22,7 +22,7 @@ export default function CostAnalysis({ close }) {
       color: "#d97706",
     },
     {
-      title: "Conversion Cost",
+      title: "Total Factory Overhead",
       value: c.conversionCost,
       color: "#dc2626",
     },

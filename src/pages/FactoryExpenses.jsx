@@ -27,7 +27,6 @@ const EXPENSE_CATEGORIES = [
   "Diesel",
   "Admin",
   "Transport",
-  "Consumables",
   "Other",
 ];
 
@@ -83,7 +82,8 @@ function dateForInput(value) {
 
 function isActive(row) {
   const status = String(row.status || "ACTIVE").toUpperCase();
-  return status !== "DELETED" && status !== "INACTIVE";
+  const issueStatus = String(row.issueStatus || "").toUpperCase();
+  return status !== "DELETED" && status !== "INACTIVE" && issueStatus !== "DELETED" && issueStatus !== "INACTIVE";
 }
 
 function money(value) {
@@ -99,6 +99,12 @@ function normalizeRow(row) {
   };
 }
 
+function storesIssueValue(row) {
+  const qty = Number(row.qty || row.quantity || row.quantityKg || 0);
+  const rate = Number(row.issueRate || row.rate || 0);
+  return Number(row.issueValue || row.value || row.amount || qty * rate || 0);
+}
+
 export default function FactoryExpenses() {
   const now = new Date();
   const [month, setMonth] = useState(String(now.getMonth() + 1).padStart(2, "0"));
@@ -106,6 +112,7 @@ export default function FactoryExpenses() {
   const [categoryFilter, setCategoryFilter] = useState("");
   const [search, setSearch] = useState("");
   const [rows, setRows] = useState([]);
+  const [storesIssueRows, setStoresIssueRows] = useState([]);
   const [status, setStatus] = useState("");
   const [editingExpenseId, setEditingExpenseId] = useState("");
 
@@ -135,8 +142,12 @@ export default function FactoryExpenses() {
 
   async function loadRows() {
     try {
-      const res = await apiCall({ fn: "factoryExpenses.list" });
-      setRows((res.rows || []).map(normalizeRow));
+      const [expenseRes, storesIssueRes] = await Promise.all([
+        apiCall({ fn: "factoryExpenses.list" }),
+        apiCall({ fn: "storesIssue.list" }),
+      ]);
+      setRows((expenseRes.rows || []).map(normalizeRow));
+      setStoresIssueRows(storesIssueRes.rows || []);
     } catch (err) {
       setStatus(err.message);
     }
@@ -246,15 +257,14 @@ export default function FactoryExpenses() {
   }, [rows, selectedMonth, categoryFilter, search]);
 
   const monthlyRows = rows.filter(isActive).filter((row) => rowPeriod(row) === selectedMonth);
-  const totalExpenses = monthlyRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
-  const electricity = monthlyRows
-    .filter((row) => String(row.category || "") === "Electricity")
-    .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const manualFactoryExpenses = monthlyRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const autoStoresConsumed = storesIssueRows
+    .filter(isActive)
+    .filter((row) => rowPeriod(row) === selectedMonth)
+    .reduce((sum, row) => sum + storesIssueValue(row), 0);
+  const combinedFactoryOverhead = manualFactoryExpenses + autoStoresConsumed;
   const labourSalaries = monthlyRows
     .filter((row) => ["Labour", "Salaries", "Salary"].includes(String(row.category || "")))
-    .reduce((sum, row) => sum + Number(row.amount || 0), 0);
-  const adminOther = monthlyRows
-    .filter((row) => ["Admin", "Other"].includes(String(row.category || "")))
     .reduce((sum, row) => sum + Number(row.amount || 0), 0);
 
   return (
@@ -303,10 +313,14 @@ export default function FactoryExpenses() {
       </div>
 
       <div style={kpiGrid}>
-        <KPI title="Total Expenses" value={money(totalExpenses)} />
-        <KPI title="Electricity" value={money(electricity)} />
+        <KPI title="Manual Factory Expenses Total" value={money(manualFactoryExpenses)} />
+        <KPI title="Auto Stores Consumed Total" value={money(autoStoresConsumed)} />
+        <KPI title="Combined Factory Overhead Total" value={money(combinedFactoryOverhead)} />
         <KPI title="Labour + Salaries" value={money(labourSalaries)} />
-        <KPI title="Admin / Other" value={money(adminOther)} />
+      </div>
+
+      <div style={readOnlyNote}>
+        Stores consumed is read-only and comes from Stores Issue values for {selectedMonth}. It is not inserted into Factory Expenses as an editable row, so CEO Cockpit and Month Close can keep stores cost and manual factory expenses separate.
       </div>
 
       <div style={sectionCard}>
@@ -470,3 +484,4 @@ const secondaryButton = { background: "#64748b", color: "white", border: "none",
 const editButton = { background: "#2563eb", color: "white", border: "none", padding: "7px 10px", borderRadius: 8, cursor: "pointer", fontWeight: 700 };
 const deleteButton = { background: "#dc2626", color: "white", border: "none", padding: "7px 10px", borderRadius: 8, cursor: "pointer", fontWeight: 700 };
 const statusStyle = { marginTop: 14, fontWeight: 600, color: "#0f766e" };
+const readOnlyNote = { background: "#f8fafc", border: "1px dashed #cbd5e1", borderRadius: 12, padding: 12, marginBottom: 16, color: "#334155", fontSize: 13, fontWeight: 700 };

@@ -236,6 +236,7 @@ export default function Dashboard() {
 
     const factoryExpenseValue = costEngine.factoryExpenseValue;
     const factoryCostPerKg = costEngine.factoryCostPerKg;
+    const totalFactoryOverhead = storesIssueValue + factoryExpenseValue;
     const profitWaterfall = calculateProfitWaterfall(costEngine);
 
     const avgRmRate = rmPurchased > 0 ? rmValue / rmPurchased : 0;
@@ -383,6 +384,7 @@ export default function Dashboard() {
       storesInwardValue,
       storesIssueQty,
       storesIssueValue,
+      totalFactoryOverhead,
       storesCostPerKg,
       factoryExpenseValue,
       factoryCostPerKg,
@@ -482,10 +484,11 @@ export default function Dashboard() {
         <KPI title="900T Progress" value={`${data.phase2Achievement.toFixed(1)}%`} />
         <KPI title="Revenue" value={`₹ ${cr(data.revenue)} Cr`} color="#16a34a" />
         <KPI title="Gross Contribution" value={`₹ ${lakh(data.grossContribution)} L`} color="#2563eb" />
-        <KPI title="Stores Cost" value={`₹ ${lakh(data.storesIssueValue)} L`} color="#dc2626" />
+        <KPI title="Stores Consumed" value={`₹ ${lakh(data.storesIssueValue)} L`} color="#dc2626" />
         <KPI title="Stores Cost/Kg" value={`₹ ${data.storesCostPerKg.toFixed(2)}`} color="#b45309" />
         <KPI title="Factory Expenses" value={`₹ ${lakh(data.factoryExpenseValue)} L`} color="#7c3aed" />
         <KPI title="Factory Cost/Kg" value={`₹ ${data.factoryCostPerKg.toFixed(2)}`} color="#7c3aed" />
+        <KPI title="Total Factory Overhead" value={`₹ ${lakh(data.totalFactoryOverhead)} L`} color="#0f766e" />
 
         <KPI
           title="Estimated Profit"
@@ -535,8 +538,9 @@ export default function Dashboard() {
         <Panel title="Profitability Snapshot">
           <Metric label="Revenue" value={`₹ ${lakh(data.revenue)} L`} color="#16a34a" />
           <Metric label="Estimated RM Consumed" value={`₹ ${lakh(data.estimatedRmConsumedValue)} L`} />
-          <Metric label="Stores Issue Value" value={`₹ ${lakh(data.storesIssueValue)} L`} color="#dc2626" />
+          <Metric label="Stores Consumed" value={`₹ ${lakh(data.storesIssueValue)} L`} color="#dc2626" />
           <Metric label="Factory Expenses" value={`₹ ${lakh(data.factoryExpenseValue)} L`} color="#7c3aed" />
+          <Metric label="Total Factory Overhead" value={`₹ ${lakh(data.totalFactoryOverhead)} L`} color="#0f766e" />
           <Divider />
           <Metric
             label="Estimated Profit"

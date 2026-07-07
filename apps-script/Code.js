@@ -7631,6 +7631,7 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
     rows: monthCloseStockCategories_().reduce((list, category) => list.concat(groups[category]), []),
     exceptionRows: monthCloseOperationalExceptionRows_(operationalView.unmappedMovements || []),
     storesSummary: monthCloseStoresSummary_(periodMonth),
+    movementSourceSummary: monthCloseMovementSourceSummary_(operationalView, groups),
     materialCount: masterRows.length,
     unmappedLedgerRows,
     invalidLedgerRows,
@@ -7799,6 +7800,15 @@ function monthCloseMaterialDebug_(groups, priorClosedOpening) {
 function monthCloseOperationalStockStats_(periodMonth, masterIndex) {
   const stats = {};
   const unmappedMovements = {};
+  const movementSourceSummary = {
+    rmReceivedKg: 0,
+    rmUsedKg: 0,
+    fgMadeKg: 0,
+    dispatchedKg: 0,
+    mappedKg: 0,
+    unmappedKg: 0,
+    mappingWarnings: [],
+  };
   const moves = [];
 
   collectJuneReceivingMoves_(moves, periodMonth);
@@ -7810,15 +7820,28 @@ function monthCloseOperationalStockStats_(periodMonth, masterIndex) {
 
   moves.forEach((move) => {
     const normalized = materialFlowNormalizeMaterial_(move.originalName, move.category);
+    monthCloseAddMovementSourceSummary_(movementSourceSummary, move, false);
     const material = matchMonthCloseMaterial_(
-      { materialId: "", materialCode: "", itemName: normalized.name || move.originalName },
+      {
+        materialId: "",
+        materialCode: move.materialCode || move.itemCode || "",
+        itemCode: move.itemCode || "",
+        material: move.material || "",
+        materialName: move.materialName || "",
+        grade: move.grade || "",
+        fgGrade: move.fgGrade || "",
+        outputGrade: move.outputGrade || "",
+        itemName: normalized.name || move.originalName,
+      },
       normalized,
       masterIndex
     );
     if (!material) {
       monthCloseAddUnmappedMovement_(unmappedMovements, move, normalized);
+      monthCloseAddMovementSourceSummary_(movementSourceSummary, move, true);
       return;
     }
+    movementSourceSummary.mappedKg = round2(num(movementSourceSummary.mappedKg) + Math.abs(num(move.qtyIn) || num(move.qtyOut)));
 
     const key = String(material.materialId || material.materialCode || material.materialName || "").trim();
     if (!key) return;
@@ -7850,16 +7873,18 @@ function monthCloseOperationalStockStats_(periodMonth, masterIndex) {
   return {
     stats,
     unmappedMovements: Object.values(unmappedMovements),
+    movementSourceSummary,
   };
 }
 
 function monthCloseAddUnmappedMovement_(unmapped, move, normalized) {
   if (!materialFlowIsManufacturingCategory_(normalized.category)) return;
   if (normalized.name === "Recipe Text") return;
-  const key = normalized.category + "|" + normalized.name;
+  const label = monthCloseUnmappedMovementLabel_(move, normalized);
+  const key = label;
   if (!unmapped[key]) {
     unmapped[key] = {
-      materialName: normalized.name || move.originalName || "Unmapped Movement",
+      materialName: label,
       category: normalized.category || "UNKNOWN",
       originalNames: {},
       opening: 0,
@@ -7884,6 +7909,57 @@ function monthCloseAddUnmappedMovement_(unmapped, move, normalized) {
   }
 }
 
+function monthCloseUnmappedMovementLabel_(move, normalized) {
+  const bucket = monthCloseOperationalBucket_(move);
+  const category = String(normalized.category || move.category || "").toUpperCase();
+  if (move.sourceSheet === "RM_Inward" || (category === "RM" && bucket === "inward")) return "Unmapped RM Received";
+  if ((move.sourceSheet === "Wash_Batches" || move.sourceSheet === "Extrusion_Batches") && category === "RM" && bucket === "consumed") return "Unmapped RM Used";
+  if (move.sourceSheet === "Extrusion_Batches" && category === "FG" && bucket === "produced") return "Unmapped FG Made";
+  if (move.sourceSheet === "Dispatches" || bucket === "dispatched") return "Unmapped Dispatch";
+  if (category === "WASTE" || category === "REWORK") return "Unmapped Waste / Rework";
+  return "Unmapped " + (normalized.name || move.originalName || "Movement");
+}
+
+function monthCloseAddMovementSourceSummary_(summary, move, isUnmapped) {
+  const qty = Math.abs(num(move.qtyIn) || num(move.qtyOut));
+  const bucket = monthCloseOperationalBucket_(move);
+  const category = String(move.category || "").toUpperCase();
+  if (!isUnmapped) {
+    if (move.sourceSheet === "RM_Inward") summary.rmReceivedKg = round2(num(summary.rmReceivedKg) + num(move.qtyIn));
+    if ((move.sourceSheet === "Wash_Batches" || move.sourceSheet === "Extrusion_Batches") && category === "RM" && bucket === "consumed") {
+      summary.rmUsedKg = round2(num(summary.rmUsedKg) + num(move.qtyOut));
+    }
+    if (move.sourceSheet === "Extrusion_Batches" && category === "FG" && bucket === "produced") {
+      summary.fgMadeKg = round2(num(summary.fgMadeKg) + num(move.qtyIn));
+    }
+    if (move.sourceSheet === "Dispatches") summary.dispatchedKg = round2(num(summary.dispatchedKg) + num(move.qtyOut));
+  }
+  if (isUnmapped) {
+    summary.unmappedKg = round2(num(summary.unmappedKg) + qty);
+    if (summary.mappingWarnings.length < 20) {
+      summary.mappingWarnings.push(monthCloseUnmappedMovementLabel_(move, materialFlowNormalizeMaterial_(move.originalName, move.category)) + ": " + (move.originalName || "blank") + " (" + qty + " kg)");
+    }
+  }
+}
+
+function monthCloseMovementSourceSummary_(operationalView, groups) {
+  const summary = operationalView.movementSourceSummary || {};
+  const mappedFromRows = monthCloseStockCategories_().reduce((total, category) => {
+    return total + (groups[category] || []).reduce((sum, row) => {
+      return sum + Math.abs(num(row.inward)) + Math.abs(num(row.produced)) + Math.abs(num(row.consumed)) + Math.abs(num(row.dispatched)) + Math.abs(num(row.approvedAdjustments));
+    }, 0);
+  }, 0);
+  return {
+    rmReceivedKg: round2(summary.rmReceivedKg),
+    rmUsedKg: round2(summary.rmUsedKg),
+    fgMadeKg: round2(summary.fgMadeKg),
+    dispatchedKg: round2(summary.dispatchedKg),
+    mappedKg: round2(Math.max(num(summary.mappedKg), mappedFromRows)),
+    unmappedKg: round2(summary.unmappedKg),
+    mappingWarnings: summary.mappingWarnings || [],
+  };
+}
+
 function monthCloseOperationalExceptionRows_(rows) {
   return rows
     .filter((row) => monthCloseStatsHasMovement_(row))
@@ -7892,7 +7968,7 @@ function monthCloseOperationalExceptionRows_(rows) {
       return {
         materialId: "UNMAPPED-" + (index + 1),
         materialCode: "CHECK",
-        materialName: "Unmapped Movement: " + row.materialName,
+        materialName: row.materialName,
         category: row.category || "CHECK",
         unit: "Kg",
         opening: round2(row.opening),
@@ -8020,9 +8096,16 @@ function matchMonthCloseMaterial_(ledgerRow, normalized, masterIndex) {
   const candidates = [
     ledgerRow.materialId,
     ledgerRow.materialCode,
+    ledgerRow.itemCode,
+    ledgerRow.material,
+    ledgerRow.materialName,
+    ledgerRow.grade,
+    ledgerRow.fgGrade,
+    ledgerRow.outputGrade,
     ledgerRow.itemName,
     normalized && normalized.name,
     materialCode_(ledgerRow.itemName || ""),
+    materialCode_(ledgerRow.materialName || ledgerRow.material || ledgerRow.grade || ""),
   ];
 
   for (let i = 0; i < candidates.length; i += 1) {
@@ -8366,8 +8449,11 @@ function materialFlowCleanName_(value) {
   if (materialFlowIsQualityReference_(text)) return "";
   text = text.replace(/\bE([1-5])\s*:\s*[\d,]+(?:\.\d+)?\s*(KG|KGS|KILOGRAMS)?/gi, "E$1");
   text = text.replace(/\b\d+(?:\.\d+)?\s*(kg|kgs|kilogram|kilograms|mt|tons?|tonnes?)\b/gi, " ");
+  text = text.replace(/_/g, " ");
   text = text.replace(/\s+/g, " ").trim();
   if (materialFlowIsRecipeText_(text)) return "Recipe Text";
+  text = text.replace(/:/g, " ");
+  text = text.replace(/\s+/g, " ").trim();
   return text;
 }
 

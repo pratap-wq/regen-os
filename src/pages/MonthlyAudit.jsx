@@ -158,6 +158,16 @@ export default function MonthlyAudit() {
     const groups = hasMaterialGroupRows(materialGroupView?.groups)
       ? materialGroupView.groups
       : buildMaterialGroupsFromMaster(rows.materials);
+    const movementSummary = materialGroupView?.movementSourceSummary || {};
+    const monthHasMovement =
+      num(movementSummary.rmReceivedKg) > 0 ||
+      num(movementSummary.rmUsedKg) > 0 ||
+      num(movementSummary.fgMadeKg) > 0 ||
+      num(movementSummary.dispatchedKg) > 0 ||
+      close.rm.purchasedKg > 0 ||
+      close.production.washInputKg > 0 ||
+      close.production.fgProducedKg > 0 ||
+      close.production.dispatchKg > 0;
 
     const stockRows = MANUFACTURING_GROUPS.flatMap((category) =>
       (groups[category] || []).map((material) => {
@@ -177,7 +187,7 @@ export default function MonthlyAudit() {
           .filter((a) => ["DRAFT", "SUBMITTED", "PENDING"].includes(String(a.status || "").toUpperCase()))
           .reduce((sum, a) => sum + num(a.quantityKg), 0);
         const systemClosing = num(material.systemStock ?? material.balance);
-        const hasPhysical = Math.abs(systemClosing) <= 0.01 || physicalValue !== "";
+        const hasPhysical = physicalValue !== "" || (!monthHasMovement && Math.abs(systemClosing) <= 0.01);
         const physicalKg = hasPhysical ? num(physicalValue) : 0;
         const differenceKg = hasPhysical ? physicalKg - systemClosing : 0;
         const remainingKg = differenceKg;
@@ -229,7 +239,7 @@ export default function MonthlyAudit() {
       const key = `${material.category || "CHECK"}|${material.materialId || material.materialName}`;
       const physicalValue = physicalMaterialLines[key] ?? "";
       const systemClosing = num(material.systemStock ?? material.balance);
-      const hasPhysical = Math.abs(systemClosing) <= 0.01 || physicalValue !== "";
+      const hasPhysical = physicalValue !== "" || (!monthHasMovement && Math.abs(systemClosing) <= 0.01);
       const physicalKg = hasPhysical ? num(physicalValue) : 0;
       const differenceKg = hasPhysical ? physicalKg - systemClosing : 0;
       return {
@@ -259,7 +269,7 @@ export default function MonthlyAudit() {
     });
 
     return stockRows.concat(exceptionRows);
-  }, [materialGroupView, rows.materials, rows.adjustments, physicalMaterialLines, month]);
+  }, [materialGroupView, rows.materials, rows.adjustments, physicalMaterialLines, month, close]);
 
   const monthClosed = useMemo(
     () =>
@@ -587,6 +597,26 @@ export default function MonthlyAudit() {
           <StatusPill label="Closing" count={formatQtyCount(materialGroupView?.storesSummary?.closingQty)} type="success" />
         </div>
         <div style={muted}>Stores are summarized here so consumable items do not crowd the manufacturing stock table.</div>
+      </Section>
+
+      <Section title="Mapping Check">
+        <ReconTable
+          rows={[
+            ["RM Received Source", materialGroupView?.movementSourceSummary?.rmReceivedKg || 0],
+            ["RM Used Source", materialGroupView?.movementSourceSummary?.rmUsedKg || 0],
+            ["FG Made Source", materialGroupView?.movementSourceSummary?.fgMadeKg || 0],
+            ["Dispatched Source", materialGroupView?.movementSourceSummary?.dispatchedKg || 0],
+            ["Mapped Movement", materialGroupView?.movementSourceSummary?.mappedKg || 0],
+            ["Unmapped Movement", materialGroupView?.movementSourceSummary?.unmappedKg || 0],
+          ]}
+        />
+        {(materialGroupView?.movementSourceSummary?.mappingWarnings || []).length > 0 && (
+          <div style={warningBox}>
+            {(materialGroupView?.movementSourceSummary?.mappingWarnings || []).slice(0, 8).map((warning) => (
+              <div key={warning}>{warning}</div>
+            ))}
+          </div>
+        )}
       </Section>
 
       <div style={twoColumn}>

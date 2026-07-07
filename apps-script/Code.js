@@ -4651,6 +4651,105 @@ function migrateFactoryExpensePeriods() {
 // WASH BATCHES
 // =====================================================
 
+function parseManufacturingCompositionRows_(value, materialKeys, qtyKeys) {
+  if (!value) return [];
+
+  let rows = value;
+
+  if (typeof value === "string") {
+    try {
+      rows = JSON.parse(value);
+    } catch (err) {
+      return [];
+    }
+  }
+
+  if (!Array.isArray(rows)) return [];
+
+  return rows
+    .map(function(row) {
+      const material = materialKeys
+        .map(function(key) { return row[key]; })
+        .find(function(v) { return String(v || "").trim(); });
+
+      const qty = qtyKeys
+        .map(function(key) { return row[key]; })
+        .find(function(v) { return num(v) > 0; });
+
+      return {
+        material: String(material || "").trim(),
+        qtyKg: num(qty)
+      };
+    })
+    .filter(function(row) {
+      return row.material && row.qtyKg > 0;
+    });
+}
+
+function postManufacturingCompositionLedger_(options) {
+  const inputs = parseManufacturingCompositionRows_(
+    options.inputs,
+    ["material", "materialType", "sourceType", "inputBucket"],
+    ["qtyKg", "quantityKg", "consumeQty", "quantity"]
+  );
+
+  const outputs = parseManufacturingCompositionRows_(
+    options.outputs,
+    ["material", "materialType", "outputBucket", "outputMaterial"],
+    ["qtyKg", "quantityKg", "outputQty", "quantity"]
+  );
+
+  const result = {
+    inputMovements: 0,
+    outputMovements: 0,
+    warnings: []
+  };
+
+  inputs.forEach(function(row) {
+    try {
+      addInventoryLedger({
+        date: options.date,
+        module: options.module,
+        movementType: "OUT",
+        itemName: row.material,
+        sourceRef: options.sourceRef,
+        targetRef: options.targetRef,
+        qtyIn: 0,
+        qtyOut: row.qtyKg,
+        unit: "Kg",
+        remarks: options.module + " input",
+        createdBy: options.createdBy || "System"
+      });
+      result.inputMovements += 1;
+    } catch (err) {
+      result.warnings.push("Input " + row.material + ": " + err.message);
+    }
+  });
+
+  outputs.forEach(function(row) {
+    try {
+      addInventoryLedger({
+        date: options.date,
+        module: options.module,
+        movementType: "IN",
+        itemName: row.material,
+        sourceRef: options.sourceRef,
+        targetRef: options.targetRef,
+        qtyIn: row.qtyKg,
+        qtyOut: 0,
+        unit: "Kg",
+        remarks: options.module + " output",
+        createdBy: options.createdBy || "System"
+      });
+      result.outputMovements += 1;
+    } catch (err) {
+      result.warnings.push("Output " + row.material + ": " + err.message);
+    }
+  });
+
+  return result;
+}
+
 function addWashBatch(data = {}) {
 
   validateOperationalWrite_(data);
@@ -4660,7 +4759,7 @@ function addWashBatch(data = {}) {
   ensureHeaders_("Wash_Batches",[
     "washBatchId","batchId","sourceRMId","sourceRmInwardId","supplier",
     "availableRMQty","date","shift","machine","entryMode","periodMonth",
-    "inputMaterial","inputWeightKg","washedOutputKg",
+    "inputMaterial","inputWeightKg","feedComposition","outputComposition","washedOutputKg",
     "raffiaKg","wrappersKg","microPlasticKg","sinkMaterialKg",
     "ironScrapKg","otherColorKg","dustKg","sludgeKg",
     "washVarianceKg","estimatedRecoveryPercent","recoverySeverity",
@@ -4714,6 +4813,8 @@ function addWashBatch(data = {}) {
 
     inputMaterial:data.inputMaterial||"",
     inputWeightKg,
+    feedComposition:data.feedComposition||"",
+    outputComposition:data.outputComposition||"",
     washedOutputKg,
 
     raffiaKg:num(data.raffiaKg),
@@ -4747,9 +4848,20 @@ function addWashBatch(data = {}) {
     createdAt:new Date()
   });
 
+  const ledger = postManufacturingCompositionLedger_({
+    date: normalizeDateOnly_(data.date||todayYmd()),
+    module: "WASH",
+    sourceRef: washBatchId,
+    targetRef: washBatchId,
+    inputs: data.feedComposition,
+    outputs: data.outputComposition,
+    createdBy: data.createdBy||"System"
+  });
+
   return output({
     ok:true,
-    washBatchId
+    washBatchId,
+    ledger
   });
 
 }
@@ -4862,6 +4974,18 @@ function addSortingBatch(data={}){
 
     const sh=getSheet("Sorting_Batches");
 
+    ensureHeaders_("Sorting_Batches",[
+        "sortingBatchId","sourceWashBatchId","supplier",
+        "date","periodMonth","shift","machine",
+        "inputMaterial","inputWeightKg","feedComposition","outputComposition",
+        "whiteSortedKg","whiteGreyKg","commodityKg","allMixSortedKg",
+        "rejectedQtyKg","acceptedQtyKg",
+        "sorterVarianceKg","recoveryPercent",
+        "operatorName","supervisorName",
+        "machineRunningHours","downtimeHours","downtimeReason",
+        "remarks","status","createdBy","createdAt"
+    ]);
+
     const sortingBatchId=
         data.sortingBatchId||
         generateBatchId("SB");
@@ -4881,6 +5005,8 @@ function addSortingBatch(data={}){
 
         inputMaterial:data.inputMaterial||"",
         inputWeightKg:num(data.inputWeightKg),
+        feedComposition:data.feedComposition||"",
+        outputComposition:data.outputComposition||"",
 
         whiteSortedKg:num(data.whiteSortedKg),
         whiteGreyKg:num(data.whiteGreyKg),
@@ -4909,9 +5035,20 @@ function addSortingBatch(data={}){
 
     });
 
+    const ledger = postManufacturingCompositionLedger_({
+        date: normalizeDateOnly_(data.date||todayYmd()),
+        module: "SORTING",
+        sourceRef: sortingBatchId,
+        targetRef: sortingBatchId,
+        inputs: data.feedComposition,
+        outputs: data.outputComposition,
+        createdBy: data.createdBy||"System"
+    });
+
     return output({
         ok:true,
-        sortingBatchId
+        sortingBatchId,
+        ledger
     });
 
 }
@@ -5008,6 +5145,7 @@ function addExtrusionBatch(data = {}) {
     "inputWeightKg",
     "totalInputKg",
     "feedComposition",
+    "outputComposition",
     "fgOutputKg",
     "lumpsKg",
     "purgingKg",
@@ -5120,6 +5258,7 @@ function addExtrusionBatch(data = {}) {
     inputWeightKg,
     totalInputKg,
     feedComposition: data.feedComposition || "",
+    outputComposition: data.outputComposition || "",
 
     fgOutputKg,
     lumpsKg,
@@ -5160,86 +5299,15 @@ function addExtrusionBatch(data = {}) {
     createdAt: new Date(),
   });
 
-  addInventoryLedger({
+  const ledger = postManufacturingCompositionLedger_({
     date,
     module: "EXTRUSION",
-    movementType: "OUT",
-    itemType: sourceType,
-    itemName: data.inputMaterial || "",
-    sourceRef: sourceBatchId,
+    sourceRef: sourceBatchId || extrusionBatchId,
     targetRef: extrusionBatchId,
-    qtyIn: 0,
-    qtyOut: totalInputKg,
-    unit: "Kg",
-    remarks: "Extrusion input",
-    createdBy: data.createdBy || "System",
+    inputs: data.feedComposition,
+    outputs: data.outputComposition,
+    createdBy: data.createdBy || "System"
   });
-
-  addInventoryLedger({
-    date,
-    module: "EXTRUSION",
-    movementType: "IN",
-    itemType: "FG",
-    itemName: data.productionGrade || "",
-    sourceRef: extrusionBatchId,
-    targetRef: extrusionBatchId,
-    qtyIn: fgOutputKg,
-    qtyOut: 0,
-    unit: "Kg",
-    remarks: "Finished Goods generated",
-    createdBy: data.createdBy || "System",
-  });
-
-  if (lumpsKg > 0) {
-    addInventoryLedger({
-      date,
-      module: "EXTRUSION",
-      movementType: "IN",
-      itemType: "LUMPS",
-      itemName: "Lumps",
-      sourceRef: extrusionBatchId,
-      targetRef: extrusionBatchId,
-      qtyIn: lumpsKg,
-      qtyOut: 0,
-      unit: "Kg",
-      remarks: "Recoverable lumps",
-      createdBy: data.createdBy || "System",
-    });
-  }
-
-  if (purgingKg > 0) {
-    addInventoryLedger({
-      date,
-      module: "EXTRUSION",
-      movementType: "IN",
-      itemType: "PURGING",
-      itemName: "Purging",
-      sourceRef: extrusionBatchId,
-      targetRef: extrusionBatchId,
-      qtyIn: purgingKg,
-      qtyOut: 0,
-      unit: "Kg",
-      remarks: "Recoverable purging",
-      createdBy: data.createdBy || "System",
-    });
-  }
-
-  if (reworkGranulesKg > 0) {
-    addInventoryLedger({
-      date,
-      module: "EXTRUSION",
-      movementType: "IN",
-      itemType: "REWORK",
-      itemName: "Rework Granules",
-      sourceRef: extrusionBatchId,
-      targetRef: extrusionBatchId,
-      qtyIn: reworkGranulesKg,
-      qtyOut: 0,
-      unit: "Kg",
-      remarks: "Rework granules generated",
-      createdBy: data.createdBy || "System",
-    });
-  }
 
   return output({
     ok: true,
@@ -5247,6 +5315,7 @@ function addExtrusionBatch(data = {}) {
     batchId: extrusionBatchId,
     sourceType,
     sourceBatchId,
+    ledger,
   });
 }
 

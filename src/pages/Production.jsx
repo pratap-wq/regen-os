@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
 import FormSection from "../components/FormSection";
-import InventoryFeedTable from "../components/InventoryFeedTable";
+import ManufacturingInputTable from "../components/ManufacturingInputTable";
+import ManufacturingOutputTable from "../components/ManufacturingOutputTable";
 import FactoryDropdown from "../components/FactoryDropdown";
 import { KpiCard, PageLayout } from "../components/factoryDesignSystem";
 import { generateExtrusionBatchId } from "../utils/idGenerator";
@@ -16,7 +17,33 @@ export default function Production() {
     sourceType: "",
     materialType: "",
     qtyKg: "",
+    remarks: "",
   };
+
+  const washOutputDefaults = [
+    { material: "Washed White Flakes", qtyKg: "" },
+    { material: "Sink Material", qtyKg: "" },
+    { material: "Dust", qtyKg: "" },
+    { material: "Other Colour Material", qtyKg: "" },
+  ];
+
+  const sorterOutputDefaults = [
+    { material: "White Sorted", qtyKg: "" },
+    { material: "Mixed Sorted", qtyKg: "" },
+    { material: "Commodity", qtyKg: "" },
+    { material: "Reject", qtyKg: "" },
+    { material: "Dust", qtyKg: "" },
+  ];
+
+  const extrusionOutputDefaults = [
+    { material: "E1", qtyKg: "" },
+    { material: "E2", qtyKg: "" },
+    { material: "E3", qtyKg: "" },
+    { material: "Rework", qtyKg: "" },
+    { material: "Purging", qtyKg: "" },
+    { material: "Lumps", qtyKg: "" },
+    { material: "Waste", qtyKg: "" },
+  ];
 
   const blank = {
     date: today,
@@ -70,6 +97,9 @@ export default function Production() {
   const [washFeedRows, setWashFeedRows] = useState([{ ...blankFeedRow }]);
   const [sorterFeedRows, setSorterFeedRows] = useState([{ ...blankFeedRow }]);
   const [feedRows, setFeedRows] = useState([{ ...blankFeedRow }]);
+  const [washOutputRows, setWashOutputRows] = useState(washOutputDefaults);
+  const [sorterOutputRows, setSorterOutputRows] = useState(sorterOutputDefaults);
+  const [extrusionOutputRows, setExtrusionOutputRows] = useState(extrusionOutputDefaults);
 
   const [rmRows, setRmRows] = useState([]);
   const [washRows, setWashRows] = useState([]);
@@ -175,6 +205,9 @@ export default function Production() {
     setWashFeedRows([{ ...blankFeedRow }]);
     setSorterFeedRows([{ ...blankFeedRow }]);
     setFeedRows([{ ...blankFeedRow }]);
+    setWashOutputRows(washOutputDefaults);
+    setSorterOutputRows(sorterOutputDefaults);
+    setExtrusionOutputRows(extrusionOutputDefaults);
   }
 
   function cleanRows(rows) {
@@ -203,6 +236,41 @@ export default function Production() {
         return `${r.materialType || r.sourceType}: ${r.qtyKg} Kg`;
       })
       .join(" + ");
+  }
+
+  function cleanOutputRows(rows) {
+    return rows.filter((r) => r.material && n(r.qtyKg) > 0);
+  }
+
+  function outputTotalKg(rows) {
+    return cleanOutputRows(rows).reduce((s, r) => s + n(r.qtyKg), 0);
+  }
+
+  function outputKgByName(rows, matchers) {
+    return cleanOutputRows(rows)
+      .filter((r) => {
+        const material = String(r.material || "").toUpperCase();
+        return matchers.some((matcher) => material.includes(matcher));
+      })
+      .reduce((s, r) => s + n(r.qtyKg), 0);
+  }
+
+  function firstFgOutputMaterial(rows) {
+    const fgRow = cleanOutputRows(rows).find((r) =>
+      /^E[1-5]$/i.test(String(r.material || "").trim())
+    );
+    return fgRow?.material || "";
+  }
+
+  function processSummary(inputKg, outputKg) {
+    const varianceKg = inputKg - outputKg;
+    return {
+      totalInputKg: inputKg,
+      totalOutputKg: outputKg,
+      recoveryPercent: inputKg > 0 ? ((outputKg / inputKg) * 100).toFixed(2) : "",
+      varianceKg,
+      difference: varianceKg.toFixed(2),
+    };
   }
 
   function feedTotalKg() {
@@ -284,56 +352,31 @@ export default function Production() {
     return String(materialType || "").toUpperCase().includes("BATTERY");
   }
 
-  const washLoss =
-    n(form.dustKg) +
-    n(form.sinkMaterialKg) +
-    n(form.microPlasticKg) +
-    n(form.wrappersKg) +
-    n(form.sludgeKg) +
-    n(form.raffiaKg);
+  const washOutputKg = outputTotalKg(washOutputRows);
+  const washSummary = processSummary(washFeedTotalKg(), washOutputKg);
+  const washRecovery = washSummary.recoveryPercent;
+  const washVariance = washSummary.varianceKg;
 
-  const washRecovery =
-    washFeedTotalKg() > 0
-      ? ((n(form.washedOutputKg) / washFeedTotalKg()) * 100).toFixed(2)
-      : "";
-
-  const washVariance =
-    washFeedTotalKg() - n(form.washedOutputKg) - washLoss;
-
-  const sorterRecoverable =
-    n(form.whiteSortedKg) +
-    n(form.allMixSortedKg) +
-    n(form.commodityKg) +
-    n(form.whiteGreyKg);
-
-  const sorterRecovery =
-    sorterFeedTotalKg() > 0
-      ? ((sorterRecoverable / sorterFeedTotalKg()) * 100).toFixed(2)
-      : "";
-
-  const sorterVariance =
-    sorterFeedTotalKg() - sorterRecoverable - n(form.sorterRejectKg);
+  const sorterOutputKg = outputTotalKg(sorterOutputRows);
+  const sorterSummary = processSummary(sorterFeedTotalKg(), sorterOutputKg);
+  const sorterRecovery = sorterSummary.recoveryPercent;
+  const sorterVariance = sorterSummary.varianceKg;
 
   const totalFeedKg = feedTotalKg();
 
   const extrusionRecoverable =
-    n(form.fgOutputKg) +
-    n(form.lumpsKg) +
-    n(form.purgingKg) +
-    n(form.reworkGranulesKg);
+    outputKgByName(extrusionOutputRows, ["E1", "E2", "E3", "E4", "E5"]) +
+    outputKgByName(extrusionOutputRows, ["LUMPS", "PURGING", "REWORK"]);
 
   const extrusionNonRecoverable =
-    n(form.rejectKg) +
-    n(form.vacuumRejectKg) +
-    n(form.meshRejectKg) +
-    n(form.floorSpillageKg);
+    outputKgByName(extrusionOutputRows, ["WASTE", "REJECT", "DUST"]);
 
-  const extrusionTotalOutput = extrusionRecoverable + extrusionNonRecoverable;
+  const extrusionTotalOutput = outputTotalKg(extrusionOutputRows);
   const extrusionVariance = totalFeedKg - extrusionTotalOutput;
 
   const extrusionRecovery =
     totalFeedKg > 0
-      ? ((n(form.fgOutputKg) / totalFeedKg) * 100).toFixed(2)
+      ? ((extrusionTotalOutput / totalFeedKg) * 100).toFixed(2)
       : "";
 
   const recoveryFeedKg = cleanFeedRows()
@@ -376,10 +419,12 @@ export default function Production() {
       let sortingBatchId = "";
       const finalWashRows = cleanWashRows();
       const washTotalKg = washFeedTotalKg();
+      const finalWashOutputRows = cleanOutputRows(washOutputRows);
       const finalSorterRows = cleanSorterRows();
       const sorterTotalKg = sorterFeedTotalKg();
+      const finalSorterOutputRows = cleanOutputRows(sorterOutputRows);
 
-      if (washTotalKg > 0 || n(form.washedOutputKg) > 0 || washLoss > 0) {
+      if (washTotalKg > 0 || washOutputKg > 0) {
         if (finalWashRows.length === 0 || washTotalKg <= 0) {
           setMessage("Wash: add at least one input material with consume quantity.");
           setSaving(false);
@@ -401,13 +446,15 @@ export default function Production() {
           inputMaterial: washFeedSummary(),
           inputWeightKg: washTotalKg,
           feedComposition: JSON.stringify(finalWashRows),
-          washedOutputKg: form.washedOutputKg,
-          dustKg: form.dustKg,
-          sinkMaterialKg: form.sinkMaterialKg,
-          microPlasticKg: form.microPlasticKg,
-          wrappersKg: form.wrappersKg,
-          sludgeKg: form.sludgeKg,
-          raffiaKg: form.raffiaKg,
+          outputComposition: JSON.stringify(finalWashOutputRows),
+          washedOutputKg: outputKgByName(washOutputRows, ["WASHED"]),
+          dustKg: outputKgByName(washOutputRows, ["DUST"]),
+          sinkMaterialKg: outputKgByName(washOutputRows, ["SINK"]),
+          microPlasticKg: 0,
+          wrappersKg: 0,
+          sludgeKg: 0,
+          raffiaKg: 0,
+          otherColorKg: outputKgByName(washOutputRows, ["OTHER COLOUR", "OTHER COLOR"]),
           estimatedRecoveryPercent: washRecovery,
           washVarianceKg: washVariance,
           sortingRequired: sorterTotalKg > 0 ? "YES" : "NO",
@@ -426,7 +473,7 @@ export default function Production() {
         washBatchId = wash.washBatchId || "";
       }
 
-      if (sorterTotalKg > 0 || sorterRecoverable > 0 || n(form.sorterRejectKg) > 0) {
+      if (sorterTotalKg > 0 || sorterOutputKg > 0) {
         if (finalSorterRows.length === 0 || sorterTotalKg <= 0) {
           setMessage("Colour Sorter: add at least one input material with consume quantity.");
           setSaving(false);
@@ -449,12 +496,13 @@ export default function Production() {
           inputMaterial: sorterFeedSummary(),
           inputWeightKg: sorterTotalKg,
           feedComposition: JSON.stringify(finalSorterRows),
-          acceptedQtyKg: sorterRecoverable,
-          whiteSortedKg: form.whiteSortedKg,
-          allMixSortedKg: form.allMixSortedKg,
-          commodityKg: form.commodityKg,
-          whiteGreyKg: form.whiteGreyKg,
-          rejectedQtyKg: form.sorterRejectKg,
+          outputComposition: JSON.stringify(finalSorterOutputRows),
+          acceptedQtyKg: sorterOutputKg - outputKgByName(sorterOutputRows, ["REJECT", "DUST"]),
+          whiteSortedKg: outputKgByName(sorterOutputRows, ["WHITE SORTED"]),
+          allMixSortedKg: outputKgByName(sorterOutputRows, ["MIXED SORTED"]),
+          commodityKg: outputKgByName(sorterOutputRows, ["COMMODITY"]),
+          whiteGreyKg: 0,
+          rejectedQtyKg: outputKgByName(sorterOutputRows, ["REJECT", "DUST"]),
           sorterVarianceKg: sorterVariance,
           recoveryPercent: sorterRecovery,
           status: "READY_FOR_EXTRUSION",
@@ -470,8 +518,11 @@ export default function Production() {
       }
 
       const finalFeedRows = cleanFeedRows();
+      const finalExtrusionOutputRows = cleanOutputRows(extrusionOutputRows);
+      const extrusionFgOutputKg = outputKgByName(extrusionOutputRows, ["E1", "E2", "E3", "E4", "E5"]);
+      const extrusionGrade = firstFgOutputMaterial(extrusionOutputRows) || "Mixed FG";
 
-      if (totalFeedKg > 0 || n(form.fgOutputKg) > 0) {
+      if (totalFeedKg > 0 || extrusionTotalOutput > 0) {
         if (finalFeedRows.length === 0) {
           setMessage("Add at least one inventory lot in extruder feed.");
           setSaving(false);
@@ -485,14 +536,18 @@ export default function Production() {
           return;
         }
 
-        if (!form.productionGrade) {
-          setMessage("Select Production Grade before saving extrusion.");
+        if (!extrusionGrade) {
+          setMessage("Add at least one extrusion output material.");
           setSaving(false);
           return;
         }
 
-        const finalExtrusionBatchId =
-          form.extrusionBatchId || buildExtrusionBatchId(form);
+        const finalExtrusionBatchId = generateExtrusionBatchId(
+          form.date,
+          form.shift,
+          extrusionGrade,
+          extrusionRows
+        );
 
         if (!finalExtrusionBatchId) {
           setMessage("Production Batch ID could not be generated.");
@@ -513,15 +568,16 @@ export default function Production() {
           inputMaterial: feedSummary(),
           inputWeightKg: totalFeedKg,
           feedComposition: JSON.stringify(finalFeedRows),
+          outputComposition: JSON.stringify(finalExtrusionOutputRows),
           totalInputKg: totalFeedKg,
-          fgOutputKg: form.fgOutputKg,
-          lumpsKg: form.lumpsKg,
-          purgingKg: form.purgingKg,
-          reworkGranulesKg: form.reworkGranulesKg,
-          rejectKg: form.rejectKg,
-          vacuumRejectKg: form.vacuumRejectKg,
-          meshRejectKg: form.meshRejectKg,
-          floorSpillageKg: form.floorSpillageKg,
+          fgOutputKg: extrusionFgOutputKg,
+          lumpsKg: outputKgByName(extrusionOutputRows, ["LUMPS"]),
+          purgingKg: outputKgByName(extrusionOutputRows, ["PURGING"]),
+          reworkGranulesKg: outputKgByName(extrusionOutputRows, ["REWORK"]),
+          rejectKg: outputKgByName(extrusionOutputRows, ["WASTE", "REJECT"]),
+          vacuumRejectKg: 0,
+          meshRejectKg: 0,
+          floorSpillageKg: 0,
           totalRecoverableKg: extrusionRecoverable,
           totalNonRecoverableKg: extrusionNonRecoverable,
           totalOutputKg: extrusionTotalOutput,
@@ -531,7 +587,7 @@ export default function Production() {
           virginRatioPercent,
           batteryRatioPercent,
           additiveRatioPercent,
-          productionGrade: form.productionGrade,
+          productionGrade: extrusionGrade,
           operatorName: form.extruderOperatorName,
           supervisorName: form.extruderSupervisorName,
           remarks: form.remarks,
@@ -546,7 +602,7 @@ export default function Production() {
         washTotalKg <= 0 &&
         sorterTotalKg <= 0 &&
         totalFeedKg <= 0 &&
-        n(form.fgOutputKg) <= 0
+        extrusionTotalOutput <= 0
       ) {
         setMessage("Enter wash, sorting or extrusion data before saving.");
         setSaving(false);
@@ -632,7 +688,7 @@ export default function Production() {
             }}
           />
 
-          <InventoryFeedTable
+          <ManufacturingInputTable
             title="Wash Input Materials"
             rows={washFeedRows}
             setRows={setWashFeedRows}
@@ -642,16 +698,21 @@ export default function Production() {
             filterCategories={["RM", "WIP", "REWORK", "ADDITIVE"]}
           />
 
-          <Field label="Total Wash Input Kg" value={washFeedTotalKg().toFixed(2)} readOnly />
-          <Field label="Washed Output Kg" name="washedOutputKg" value={form.washedOutputKg} onChange={onChange} />
-          <Field label="Dust Kg" name="dustKg" value={form.dustKg} onChange={onChange} />
-          <Field label="Sink Material Kg" name="sinkMaterialKg" value={form.sinkMaterialKg} onChange={onChange} />
-          <Field label="Micro Plastic Kg" name="microPlasticKg" value={form.microPlasticKg} onChange={onChange} />
-          <Field label="Wrappers Kg" name="wrappersKg" value={form.wrappersKg} onChange={onChange} />
-          <Field label="Sludge Kg" name="sludgeKg" value={form.sludgeKg} onChange={onChange} />
-          <Field label="Raffia Kg" name="raffiaKg" value={form.raffiaKg} onChange={onChange} />
-          <Field label="Wash Recovery %" value={washRecovery} readOnly />
-          <Field label="Wash Variance Kg" value={washVariance.toFixed(2)} readOnly />
+          <ManufacturingOutputTable
+            title="Wash Output Materials"
+            rows={washOutputRows}
+            setRows={setWashOutputRows}
+            materialPlaceholder="Select Output Material"
+            filterCategories={["WIP", "WASTE", "REWORK"]}
+          />
+
+          <ManufacturingSummary
+            totalInputKg={washSummary.totalInputKg}
+            totalOutputKg={washSummary.totalOutputKg}
+            recoveryPercent={washSummary.recoveryPercent}
+            varianceKg={washSummary.varianceKg}
+            difference={washSummary.difference}
+          />
         </FormSection>
 
         <FormSection title="Colour Sorter">
@@ -672,7 +733,7 @@ export default function Production() {
             }}
           />
 
-          <InventoryFeedTable
+          <ManufacturingInputTable
             title="Colour Sorter Input Materials"
             rows={sorterFeedRows}
             setRows={setSorterFeedRows}
@@ -682,14 +743,21 @@ export default function Production() {
             filterCategories={["RM", "WIP", "REWORK", "ADDITIVE"]}
           />
 
-          <Field label="Total Sorter Input Kg" value={sorterFeedTotalKg().toFixed(2)} readOnly />
-          <Field label="White Kg" name="whiteSortedKg" value={form.whiteSortedKg} onChange={onChange} />
-          <Field label="All Mix Kg" name="allMixSortedKg" value={form.allMixSortedKg} onChange={onChange} />
-          <Field label="Commodity Kg" name="commodityKg" value={form.commodityKg} onChange={onChange} />
-          <Field label="White Grey Kg" name="whiteGreyKg" value={form.whiteGreyKg} onChange={onChange} />
-          <Field label="Reject Kg" name="sorterRejectKg" value={form.sorterRejectKg} onChange={onChange} />
-          <Field label="Sorter Recovery %" value={sorterRecovery} readOnly />
-          <Field label="Sorter Variance Kg" value={sorterVariance.toFixed(2)} readOnly />
+          <ManufacturingOutputTable
+            title="Colour Sorter Output Materials"
+            rows={sorterOutputRows}
+            setRows={setSorterOutputRows}
+            materialPlaceholder="Select Output Material"
+            filterCategories={["WIP", "WASTE", "REWORK", "FG"]}
+          />
+
+          <ManufacturingSummary
+            totalInputKg={sorterSummary.totalInputKg}
+            totalOutputKg={sorterSummary.totalOutputKg}
+            recoveryPercent={sorterSummary.recoveryPercent}
+            varianceKg={sorterSummary.varianceKg}
+            difference={sorterSummary.difference}
+          />
         </FormSection>
 
         <FormSection title="Extrusion">
@@ -710,29 +778,7 @@ export default function Production() {
             }}
           />
 
-          <FactorySelectField
-            label="Production Grade"
-            masterType="material"
-            name="productionGrade"
-            value={form.productionGrade}
-            onChange={onChange}
-            placeholder="Select Grade"
-            approvalRequired
-            defaults={{ category: "FG", unit: "Kg" }}
-            filter={(item) =>
-              ["FG", "WIP", "WASTE", "REWORK"].includes(
-                String(item.category || item.materialType || "").toUpperCase()
-              )
-            }
-          />
-
-          <Field
-            label="Production Batch ID"
-            value={form.extrusionBatchId}
-            readOnly
-          />
-
-          <InventoryFeedTable
+          <ManufacturingInputTable
             title="Extruder Feed Materials"
             rows={feedRows}
             setRows={setFeedRows}
@@ -742,23 +788,26 @@ export default function Production() {
             filterCategories={["RM", "WIP", "REWORK", "ADDITIVE"]}
           />
 
-          <Field label="Total Feed Kg" value={totalFeedKg.toFixed(2)} readOnly />
           <Field label="Recovery / Rework %" value={recoveryMaterialPercent} readOnly />
           <Field label="Virgin %" value={virginRatioPercent} readOnly />
           <Field label="Battery %" value={batteryRatioPercent} readOnly />
           <Field label="Additive %" value={additiveRatioPercent} readOnly />
-          <TextAreaField label="Feed Summary" value={feedSummary()} readOnly />
 
-          <Field label="FG Output Kg" name="fgOutputKg" value={form.fgOutputKg} onChange={onChange} />
-          <Field label="Lumps Kg" name="lumpsKg" value={form.lumpsKg} onChange={onChange} />
-          <Field label="Purging Kg" name="purgingKg" value={form.purgingKg} onChange={onChange} />
-          <Field label="Rework Granules Kg" name="reworkGranulesKg" value={form.reworkGranulesKg} onChange={onChange} />
-          <Field label="Reject Kg" name="rejectKg" value={form.rejectKg} onChange={onChange} />
-          <Field label="Vacuum Reject Kg" name="vacuumRejectKg" value={form.vacuumRejectKg} onChange={onChange} />
-          <Field label="Mesh Reject Kg" name="meshRejectKg" value={form.meshRejectKg} onChange={onChange} />
-          <Field label="Floor Spillage Kg" name="floorSpillageKg" value={form.floorSpillageKg} onChange={onChange} />
-          <Field label="FG Recovery %" value={extrusionRecovery} readOnly />
-          <Field label="Extrusion Variance Kg" value={extrusionVariance.toFixed(2)} readOnly />
+          <ManufacturingOutputTable
+            title="Extrusion Output Materials"
+            rows={extrusionOutputRows}
+            setRows={setExtrusionOutputRows}
+            materialPlaceholder="Select Output Material"
+            filterCategories={["FG", "WIP", "WASTE", "REWORK"]}
+          />
+
+          <ManufacturingSummary
+            totalInputKg={totalFeedKg}
+            totalOutputKg={extrusionTotalOutput}
+            recoveryPercent={extrusionRecovery}
+            varianceKg={extrusionVariance}
+            difference={extrusionVariance.toFixed(2)}
+          />
         </FormSection>
 
 
@@ -800,6 +849,24 @@ export default function Production() {
         </div>
       </form>
     </PageLayout>
+  );
+}
+
+function ManufacturingSummary({
+  totalInputKg,
+  totalOutputKg,
+  recoveryPercent,
+  varianceKg,
+  difference,
+}) {
+  return (
+    <div style={summaryGrid}>
+      <Field label="Total Input" value={`${Number(totalInputKg || 0).toFixed(2)} Kg`} readOnly />
+      <Field label="Total Output" value={`${Number(totalOutputKg || 0).toFixed(2)} Kg`} readOnly />
+      <Field label="Recovery %" value={recoveryPercent || ""} readOnly />
+      <Field label="Variance Kg" value={Number(varianceKg || 0).toFixed(2)} readOnly />
+      <Field label="Difference" value={`${difference || "0.00"} Kg`} readOnly />
+    </div>
   );
 }
 
@@ -903,6 +970,17 @@ const messageBox = {
   border: "1px solid #86efac",
   color: "#166534",
   fontWeight: 700,
+};
+
+const summaryGrid = {
+  gridColumn: "1 / -1",
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+  gap: 12,
+  padding: 12,
+  border: "1px solid #dbeafe",
+  borderRadius: 10,
+  background: "#f8fafc",
 };
 
 const inputStyle = {

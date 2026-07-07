@@ -81,11 +81,24 @@ The new diagnostic route returns `directFlowDiagnosis` with:
 
 ## Direct-flow rule proposed
 
-If June sorting output is missing or zero, extrusion should not be forced to consume `White Sorted`.
+If June sorting output is missing or zero, extrusion should not be forced to consume `White Sorted` or `White Sorted Flakes`.
 
 Rule:
 
-> If `Sorting_Batches` has no matching sorted output for the month and extrusion input material is blank or generic, treat extrusion base input as `Washed White Flakes`.
+> If `Sorting_Batches` has no matching sorted output for the month and extrusion input material is blank, generic, sorted-feed recipe text, or feed-composition text, treat extrusion base input as washed material.
+
+Washed material selection:
+
+- Use `Washed White Flakes` when June wash output is mainly white.
+- Use `Washed Mixed` when June wash output is mainly mixed.
+
+Never write recipe/feed text as `Inventory_Ledger.itemName`.
+
+Examples that must be removed from inventory material names:
+
+- `WHITE FLAKES: + ANTIOXIDANT: + MASTERBATCH:`
+- `SORTED FLAKES: + ANTIOXIDANT: + MASTERBATCH:`
+- `ANTIOXIDANT: + MASTERBATCH:`
 
 This supports the actual physical flow:
 
@@ -140,6 +153,18 @@ Live run, only if manually called with `dryRun=false`:
 - Adds `legacyMaterialName` on rebuilt ledger rows.
 - Uses `legacySourceSheet` and `legacySourceId` for traceability.
 - Prevents duplicate June ledger rows by replacing the June ledger slice.
+- Excludes `STORE` materials from the manufacturing material-flow dry-run and manufacturing Month Close audit.
+- Returns `whiteSortedReconciliation` showing whether negative White Sorted/White Sorted Flakes is removed.
+
+Month Close manufacturing grouping after normalization:
+
+- RM: White Flakes, White Regrind, Mixed Material, approved RM inputs
+- WIP: Washed White Flakes, Washed Mixed, White Sorted Flakes when sorting really occurred
+- FG: E1, E2, E3, E4, E5
+- WASTE: Sink Material, Dust, Wrapper Reject, Micro Plastic, Color Reject
+- REWORK: Lumps, Purging, Rework Material
+
+Stores are excluded from manufacturing material close unless closing Stores specifically.
 
 ## db.runMigrations requirement
 

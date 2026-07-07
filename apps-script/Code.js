@@ -7007,6 +7007,7 @@ function auditJuneMaterialFlowV1(data = {}) {
   movements.forEach((move) => {
     const key = move.originalName || "UNKNOWN";
     const normalized = materialFlowNormalizeMaterial_(move.originalName, move.category);
+    if (!materialFlowIsManufacturingCategory_(normalized.category)) return;
 
     if (!materialIndex[key]) {
       materialIndex[key] = {
@@ -7092,6 +7093,13 @@ function migrateJuneMaterialFlowToV1(dryRun) {
     rowsAfter: rebuiltRows.length,
     beforeBalances,
     afterBalances,
+    whiteSortedReconciliation: {
+      beforeWhiteSorted: num(beforeBalances["White Sorted"] || 0) + num(beforeBalances["White Sorted Flakes"] || 0),
+      afterWhiteSorted: num(afterBalances["White Sorted"] || 0) + num(afterBalances["White Sorted Flakes"] || 0),
+      negativeWhiteSortedRemoved:
+        num(beforeBalances["White Sorted"] || 0) + num(beforeBalances["White Sorted Flakes"] || 0) < -0.01 &&
+        num(afterBalances["White Sorted"] || 0) + num(afterBalances["White Sorted Flakes"] || 0) >= -0.01,
+    },
     proposedNormalizationMap: proposedJuneMaterialNormalizationMap_(),
     warnings: [
       "Live migration rewrites June Inventory_Ledger rows from source sheets only.",
@@ -7145,6 +7153,10 @@ function buildJuneV1MaterialMovements_(periodMonth) {
 function pushMaterialFlowMove_(moves, payload) {
   const originalName = materialFlowCleanName_(payload.originalName || payload.material || payload.itemName);
   if (!originalName) return;
+  const normalized = materialFlowNormalizeMaterial_(originalName, payload.category);
+  if (!materialFlowIsManufacturingCategory_(normalized.category)) return;
+  if (normalized.name === "Recipe Text") return;
+
   moves.push({
     sourceSheet: payload.sourceSheet || "",
     sourceId: payload.sourceId || "",
@@ -7193,11 +7205,12 @@ function collectJuneSortingMoves_(moves, periodMonth) {
 }
 
 function collectJuneExtrusionMoves_(moves, periodMonth) {
+  const washContext = juneWashOutputContext_(periodMonth);
   const sortingOutputKg = safeRows_("Sorting_Batches").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).reduce((sum, row) => sum + num(row.whiteSortedKg || row.acceptedQtyKg), 0);
   safeRows_("Extrusion_Batches").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row, index) => {
     const sourceId = row.extrusionBatchId || row.batchId || "EXT-" + (index + 1);
     const explicitInput = materialFlowCleanName_(row.inputMaterial);
-    const inputMaterial = explicitInput || (sortingOutputKg > 0 ? "White Sorted" : "Washed White Flakes");
+    const inputMaterial = juneExtrusionInputMaterial_(explicitInput, sortingOutputKg, washContext);
     const grade = normalizeFgMaterialName_(row.productionGrade || row.grade || "E1");
     pushMaterialFlowMove_(moves, { sourceSheet: "Extrusion_Batches", sourceId, field: "inputMaterial", originalName: inputMaterial, category: "WIP", qtyOut: row.inputWeightKg || row.totalInputKg, date: row.date });
     [["virginMaterialKg", "Virgin PP", "ADDITIVE"], ["masterBatchKg", "Masterbatch", "ADDITIVE"], ["antiOxidantKg", "Antioxidant", "ADDITIVE"], ["batteryFlakesKg", "Battery Scrap", "RM"], ["lumpsReusedKg", "Lumps", "REWORK"], ["purgingReusedKg", "Purging", "REWORK"], ["reworkGranulesKg", "Rework Material", "REWORK"]].forEach(([field, name, category]) => {
@@ -7268,6 +7281,9 @@ function movementsToJuneLedgerRows_(movements, periodMonth) {
   const ctx = { rows: [], sourceCounts: {}, warnings: [], rebuildAt: new Date() };
   movements.filter((move) => ["RM_Inward", "Wash_Batches", "Sorting_Batches", "Extrusion_Batches", "Dispatches", "Inventory_Adjustments"].indexOf(move.sourceSheet) !== -1).forEach((move, index) => {
     const normalized = materialFlowNormalizeMaterial_(move.originalName, move.category);
+    if (!materialFlowIsManufacturingCategory_(normalized.category)) return;
+    if (normalized.name === "Recipe Text") return;
+
     pushRebuiltLedgerRow_(ctx, move.sourceSheet, move.sourceId || index + 1, {
       date: move.date || periodMonth + "-01",
       module: move.sourceSheet.replace(/_Batches|_Inward|es$/g, "").toUpperCase(),
@@ -7296,13 +7312,16 @@ function materialFlowNormalizeMaterial_(name, category) {
     "WASHED FLAKES": ["Washed White Flakes", "WIP", "Washed White Flakes"],
     "WHITE WASHED FLAKES": ["Washed White Flakes", "WIP", "Washed White Flakes"],
     "SORTED MATERIAL": ["White Sorted Flakes", "WIP", "White Sorted Flakes"],
+    "SORTED FLAKES": ["White Sorted Flakes", "WIP", "White Sorted Flakes"],
     "WHITE SORTED": ["White Sorted Flakes", "WIP", "White Sorted Flakes"],
+    "WHITE SORTED FLAKES": ["White Sorted Flakes", "WIP", "White Sorted Flakes"],
     "WHITE SORTED MATERIAL": ["White Sorted Flakes", "WIP", "White Sorted Flakes"],
     "REWORK GRANULES": ["Rework Material", "REWORK", "Rework Material"],
     "VIRGIN MATERIAL": ["Virgin PP", "ADDITIVE", "Virgin PP"],
     "ANTI OXIDANT": ["Antioxidant", "ADDITIVE", "Antioxidant"],
     "MASTER BATCH": ["Masterbatch", "ADDITIVE", "Masterbatch"],
     "BATTERY FLAKES": ["Battery Scrap", "RM", "Battery Scrap"],
+    "RECIPE TEXT": ["Recipe Text", "UNKNOWN", "Do not store as inventory material"],
   };
   if (map[upper]) return { name: map[upper][0], category: map[upper][1], mergeInto: map[upper][2] };
   return { name: clean, category: normalizeMaterialCategoryForLedger_(category || materialCategory_(clean)) || "UNKNOWN", mergeInto: "" };
@@ -7314,8 +7333,59 @@ function materialFlowCleanName_(value) {
   text = text.replace(/\bE([1-5])\s*:\s*[\d,]+(?:\.\d+)?\s*(KG|KGS|KILOGRAMS)?/gi, "E$1");
   text = text.replace(/\b\d+(?:\.\d+)?\s*(kg|kgs|kilogram|kilograms|mt|tons?|tonnes?)\b/gi, " ");
   text = text.replace(/\s+/g, " ").trim();
-  if (/FEED\s*COMPOSITION|RECIPE|DOSING/i.test(text)) return "Recipe Text";
+  if (materialFlowIsRecipeText_(text)) return "Recipe Text";
   return text;
+}
+
+function materialFlowIsRecipeText_(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  if (/FEED\s*COMPOSITION|RECIPE|DOSING/i.test(text)) return true;
+  if (/:/.test(text) && /\+/.test(text)) return true;
+  if (/(ANTIOXIDANT|MASTER\s*BATCH|MASTERBATCH|SORTED\s*FLAKES|WHITE\s*FLAKES)\s*:/i.test(text)) return true;
+  return false;
+}
+
+function juneWashOutputContext_(periodMonth) {
+  const context = {
+    whiteWashedKg: 0,
+    mixedWashedKg: 0,
+    defaultWashedMaterial: "Washed White Flakes",
+  };
+
+  safeRows_("Wash_Batches")
+    .filter((row) => materialFlowRowInPeriod_(row, periodMonth))
+    .forEach((row) => {
+      const inputMaterial = materialName_(row.inputMaterial, "White Flakes");
+      const washedKg = num(row.washedOutputKg);
+      if (inputMaterial.toUpperCase().indexOf("WHITE") !== -1) {
+        context.whiteWashedKg += washedKg;
+      } else {
+        context.mixedWashedKg += washedKg;
+      }
+    });
+
+  context.defaultWashedMaterial =
+    context.mixedWashedKg > context.whiteWashedKg ? "Washed Mixed" : "Washed White Flakes";
+  return context;
+}
+
+function juneExtrusionInputMaterial_(explicitInput, sortingProducedKg, washContext) {
+  const clean = materialFlowCleanName_(explicitInput);
+  const upper = clean.toUpperCase();
+  const directFlowInput = washContext.defaultWashedMaterial || "Washed White Flakes";
+
+  if (sortingProducedKg <= 0.01) {
+    if (!clean || clean === "Recipe Text" || /SORTED|WHITE\s*SORTED|SORTED\s*FLAKES/i.test(upper)) {
+      return directFlowInput;
+    }
+  }
+
+  if (!clean || clean === "Recipe Text") {
+    return sortingProducedKg > 0.01 ? "White Sorted" : directFlowInput;
+  }
+
+  return clean;
 }
 
 function safeRows_(sheetName) {
@@ -7343,6 +7413,9 @@ function addMasterOnlyMaterials_(materialIndex, rows, sourceSheet) {
     const name = materialFlowCleanName_(row.materialName || row.itemName || row.gradeName || row.material || "");
     if (!name || materialIndex[name]) return;
     const normalized = materialFlowNormalizeMaterial_(name, row.category || row.materialType);
+    if (!materialFlowIsManufacturingCategory_(normalized.category)) return;
+    if (normalized.name === "Recipe Text") return;
+
     materialIndex[name] = {
       originalName: name,
       sources: { [sourceSheet]: true },
@@ -7406,9 +7479,14 @@ function materialFlowBalancesFromLedger_(rows, periodMonth) {
   const balances = {};
   rows.filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row) => {
     const normalized = materialFlowNormalizeMaterial_(row.itemName, row.itemType);
+    if (!materialFlowIsManufacturingCategory_(normalized.category)) return;
     balances[normalized.name] = (balances[normalized.name] || 0) + num(row.qtyIn) - num(row.qtyOut);
   });
   return balances;
+}
+
+function materialFlowIsManufacturingCategory_(category) {
+  return ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE", "UNKNOWN"].indexOf(String(category || "").toUpperCase()) !== -1;
 }
 
 function proposedJuneMaterialNormalizationMap_() {

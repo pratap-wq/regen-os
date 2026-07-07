@@ -221,13 +221,23 @@ export default function MonthlyAudit() {
     );
   }, [materialGroupView, rows.materials, rows.adjustments, physicalMaterialLines, month]);
 
+  const monthClosed = useMemo(
+    () =>
+      rows.closeRows.some(
+        (r) => String(r.periodMonth || "") === String(month) && String(r.status || "").toUpperCase() === "CLOSED"
+      ),
+    [rows.closeRows, month]
+  );
+
   const readiness = useMemo(() => {
-    const closed = rows.closeRows.some(
-      (r) => String(r.periodMonth || "") === String(month) && String(r.status || "").toUpperCase() === "CLOSED"
-    );
     const physicalPending = materialLines.filter((line) => !line.hasPhysical).length;
     const investigation = materialLines.filter((line) => line.statusType === "danger").length;
     const adjustmentPending = materialLines.filter((line) => line.statusType === "warning").length;
+    const productionDone = close.production.washInputKg > 0 && close.production.fgProducedKg > 0;
+    const dispatchDone = close.production.dispatchKg > 0;
+    const expensesEntered = close.costs.factoryExpenseValue > 0 || close.costs.storesIssueValue > 0;
+    const physicalDone = materialLines.length > 0 && physicalPending === 0;
+    const differencesResolved = physicalDone && adjustmentPending === 0 && investigation === 0;
     const signoffsComplete = [
       physical.productionSignoff,
       physical.storesSignoff,
@@ -238,27 +248,27 @@ export default function MonthlyAudit() {
     return [
       {
         title: "Production Done?",
-        ok: close.production.fgProducedKg > 0,
-        next: close.production.fgProducedKg > 0 ? "Production entries found" : "Enter production first",
+        ok: productionDone,
+        next: productionDone ? "Production entries found" : "Enter wash/extrusion production",
       },
       {
         title: "Dispatch Done?",
-        ok: close.production.dispatchKg > 0,
-        next: close.production.dispatchKg > 0 ? "Dispatch entries found" : "Enter dispatch first",
+        ok: dispatchDone,
+        next: dispatchDone ? "Dispatch entries found" : "Enter dispatch first",
       },
       {
         title: "Expenses Entered?",
-        ok: rows.factoryExpenses.length > 0 || close.costs.factoryExpenseValue > 0,
-        next: rows.factoryExpenses.length > 0 ? "Expenses found" : "Enter expenses if any",
+        ok: expensesEntered,
+        next: expensesEntered ? "Costs found" : "Enter factory/stores costs",
       },
       {
         title: "Physical Stock Entered?",
-        ok: physicalPending === 0,
-        next: physicalPending === 0 ? "Actual stock entered" : `${physicalPending} material(s) pending`,
+        ok: physicalDone,
+        next: physicalDone ? "Actual stock entered" : `${physicalPending || materialLines.length || 0} material(s) pending`,
       },
       {
         title: "Differences Resolved?",
-        ok: adjustmentPending === 0 && investigation === 0,
+        ok: differencesResolved,
         next:
           adjustmentPending > 0
             ? `${adjustmentPending} approval pending`
@@ -268,14 +278,13 @@ export default function MonthlyAudit() {
       },
       {
         title: "Sign-Off Done?",
-        ok: physicalPending === 0 && investigation === 0 && adjustmentPending === 0 && signoffsComplete,
-        next: signoffsComplete ? "Sign-off complete" : "Complete sign-off",
+        ok: signoffsComplete,
+        next: monthClosed ? "Month closed" : signoffsComplete ? "Sign-off complete" : "Complete sign-off",
       },
-      { title: "Can Close?", ok: closed || (physicalPending === 0 && investigation === 0 && adjustmentPending === 0 && signoffsComplete), next: closed ? "Month closed" : "Close when all cards are OK" },
     ];
-  }, [rows.closeRows, rows.factoryExpenses, close, materialLines, physical, month]);
+  }, [close, materialLines, physical, monthClosed]);
 
-  const readyToClose = readiness.find((card) => card.title === "Can Close?")?.ok;
+  const readyToClose = !monthClosed && readiness.every((card) => card.ok);
 
   function onPhysicalChange(lineKey, value) {
     setPhysicalMaterialLines((prev) => ({ ...prev, [lineKey]: value }));
@@ -378,6 +387,10 @@ export default function MonthlyAudit() {
   }
 
   async function closeMonth() {
+    if (monthClosed) {
+      setStatus("This month is already closed.");
+      return;
+    }
     if (!readyToClose) {
       setStatus("Month cannot be closed yet. Enter actual stock, clear differences, and complete sign-off.");
       return;
@@ -565,7 +578,9 @@ export default function MonthlyAudit() {
           <h2 style={{ margin: 0 }}>Close Month</h2>
           <div style={muted}>Close is allowed only after actual stock, differences, and sign-off are complete.</div>
         </div>
-        <button onClick={closeMonth} style={readyToClose ? closeButton : disabledButton}>Close Month</button>
+        <button onClick={closeMonth} style={readyToClose ? closeButton : disabledButton}>
+          {monthClosed ? "Month Closed" : "Close Month"}
+        </button>
       </div>
 
       {status && <div style={statusBox}>{status}</div>}

@@ -86,10 +86,6 @@ export default function Production() {
   const [form, setForm] = useState(blank);
   const [feedRows, setFeedRows] = useState([{ ...blankFeedRow }]);
 
-  const [machines, setMachines] = useState([]);
-  const [categories, setCategories] = useState([]);
-  const [productionMaterials, setProductionMaterials] = useState([]);
-
   const [rmRows, setRmRows] = useState([]);
   const [washRows, setWashRows] = useState([]);
   const [sortingRows, setSortingRows] = useState([]);
@@ -116,18 +112,12 @@ export default function Production() {
   async function loadMasters() {
     try {
       const [
-        machineRows,
-        categoryRows,
-        prodMatRows,
         rmData,
         washData,
         sortingData,
         extrusionData,
         dispatchData,
       ] = await Promise.all([
-        safeList("machines.list"),
-        safeList("categories.list"),
-        safeList("productionMaterials.list"),
         safeList("rm.list"),
         safeList("wash.list"),
         safeList("sorting.list"),
@@ -135,59 +125,15 @@ export default function Production() {
         safeList("dispatch.list"),
       ]);
 
-      setMachines(machineRows);
-      setCategories(categoryRows);
       setRmRows(rmData);
       setWashRows(washData);
       setSortingRows(sortingData);
       setExtrusionRows(extrusionData);
       setDispatchRows(dispatchData);
-
-      setProductionMaterials(
-        prodMatRows
-          .filter((r) => String(r.status || "").toUpperCase() !== "DELETED")
-          .filter((r) => String(r.isActive || "TRUE").toUpperCase() === "TRUE")
-          .sort(
-            (a, b) =>
-              Number(a.sortOrder || 999) - Number(b.sortOrder || 999)
-          )
-      );
     } catch (err) {
       setMessage(err.message);
     }
   }
-
-  function uniqueList(list) {
-    return (list || []).filter((v, i, arr) => v && arr.indexOf(v) === i);
-  }
-
-  function productionMaterialOptions(stage = "") {
-    const requestedStage = String(stage || "").toUpperCase();
-
-    const filtered = productionMaterials.filter((m) => {
-      const materialStage = String(m.stage || "All").toUpperCase();
-
-      return (
-        materialStage === "ALL" ||
-        materialStage === "PRODUCTION" ||
-        materialStage === requestedStage
-      );
-    });
-
-    return filtered.map((m) => m.materialName).filter(Boolean);
-  }
-
-  const washMaterialOptions = useMemo(() => {
-    const master = productionMaterialOptions("Wash");
-    const fallback = categories.map((c) => c.categoryName).filter(Boolean);
-    return uniqueList([...master, ...fallback]);
-  }, [productionMaterials, categories]);
-
-  const sortingMaterialOptions = useMemo(() => {
-    const master = productionMaterialOptions("Sorting");
-    const fallback = categories.map((c) => c.categoryName).filter(Boolean);
-    return uniqueList([...master, ...fallback]);
-  }, [productionMaterials, categories]);
 
   const inventoryLots = useMemo(() => {
     return buildInventoryLots({
@@ -609,7 +555,7 @@ export default function Production() {
             approvalRequired
             defaults={{ category: "RM", unit: "Kg" }}
             filter={(item) =>
-              ["RM", "WIP", "REWORK"].includes(
+              ["RM", "WIP", "REWORK", "ADDITIVE"].includes(
                 String(item.category || item.materialType || "").toUpperCase()
               )
             }
@@ -655,7 +601,7 @@ export default function Production() {
             approvalRequired
             defaults={{ category: "WIP", unit: "Kg" }}
             filter={(item) =>
-              ["WIP", "REWORK"].includes(
+              ["RM", "WIP", "REWORK", "ADDITIVE"].includes(
                 String(item.category || item.materialType || "").toUpperCase()
               )
             }
@@ -699,7 +645,9 @@ export default function Production() {
             approvalRequired
             defaults={{ category: "FG", unit: "Kg" }}
             filter={(item) =>
-              String(item.category || item.materialType || "").toUpperCase() === "FG"
+              ["FG", "WIP", "WASTE", "REWORK"].includes(
+                String(item.category || item.materialType || "").toUpperCase()
+              )
             }
           />
 

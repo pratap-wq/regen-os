@@ -52,13 +52,18 @@ export function toggleFavoriteMasterItem(masterType, item) {
 }
 
 export async function listFactoryMaster(masterType, search = "") {
+  const type = String(masterType || "").toLowerCase();
   const res = await apiCall({
     fn: "factoryMaster.list",
     masterType,
     search,
     includeDisabled: "TRUE",
   });
-  const rows = normalizeMasterRows(masterType, res.rows || []);
+  let rows = normalizeMasterRows(masterType, res.rows || []);
+
+  if (type === "material" && materialMasterNeedsFallback(rows)) {
+    rows = mergeMasterRows(rows, await listMaterialFallbackRows());
+  }
 
   return rows;
 }
@@ -146,4 +151,104 @@ function normalizeMasterRows(masterType, rows = []) {
       name: row.name || row.supplierName || row.customerName || row.machineName || row.recipeName || row.itemName || row.testName || row.categoryName || "",
     };
   });
+}
+
+function materialMasterNeedsFallback(rows = []) {
+  if (!rows.length) return true;
+
+  const categories = new Set(
+    rows.map((row) => String(row.category || row.materialType || "").toUpperCase())
+  );
+
+  const hasInputMaterial = ["RM", "WIP", "REWORK", "ADDITIVE"].some((x) =>
+    categories.has(x)
+  );
+  const hasOutputMaterial = ["FG", "WIP", "WASTE", "REWORK"].some((x) =>
+    categories.has(x)
+  );
+
+  return !hasInputMaterial || !hasOutputMaterial;
+}
+
+async function listMaterialFallbackRows() {
+  const results = await Promise.allSettled([
+    apiCall({ fn: "productionMaterials.list" }),
+    apiCall({ fn: "categories.list" }),
+    apiCall({ fn: "inventoryLedger.balance" }),
+  ]);
+
+  const [productionMaterials, categories, ledgerBalances] = results.map((result) =>
+    result.status === "fulfilled"
+      ? result.value?.rows || result.value?.balances || []
+      : []
+  );
+
+  return [
+    ...productionMaterials.map((row) =>
+      fallbackMaterialRow(row.materialName || row.name, row.category || row.materialType || row.stage)
+    ),
+    ...categories.map((row) =>
+      fallbackMaterialRow(row.categoryName || row.name, row.category || "RM")
+    ),
+    ...ledgerBalances.map((row) =>
+      fallbackMaterialRow(row.itemName || row.materialName, row.itemType || row.category)
+    ),
+  ].filter((row) => row.name);
+}
+
+function fallbackMaterialRow(name, categoryHint = "") {
+  const cleanName = String(name || "").trim();
+  if (!cleanName) return { name: "" };
+
+  const category = inferMaterialCategory(cleanName, categoryHint);
+
+  return {
+    id: cleanName,
+    code: materialCode(cleanName),
+    name: cleanName,
+    materialName: cleanName,
+    materialCode: materialCode(cleanName),
+    category,
+    materialType: category,
+    unit: "Kg",
+    status: "ACTIVE",
+    source: "Fallback",
+  };
+}
+
+function inferMaterialCategory(name, hint = "") {
+  const text = `${hint} ${name}`.toUpperCase();
+
+  if (/\b(E[1-5])\b/.test(text) || text.includes("FINISHED")) return "FG";
+  if (text.includes("WASTE") || text.includes("REJECT") || text.includes("DUST") || text.includes("SINK")) return "WASTE";
+  if (text.includes("REWORK") || text.includes("LUMP") || text.includes("PURGING")) return "REWORK";
+  if (text.includes("ADDITIVE") || text.includes("MASTERBATCH") || text.includes("ANTIOXIDANT") || text.includes("VIRGIN")) return "ADDITIVE";
+  if (text.includes("WASHED") || text.includes("SORTED") || text.includes("WIP") || text.includes("COMMODITY")) return "WIP";
+  if (text.includes("STORE")) return "STORE";
+
+  return "RM";
+}
+
+function mergeMasterRows(primaryRows = [], fallbackRows = []) {
+  const map = new Map();
+
+  [...primaryRows, ...fallbackRows].forEach((row) => {
+    const key = String(row.name || row.materialName || row.code || "").trim().toUpperCase();
+    if (!key || map.has(key)) return;
+    map.set(key, row);
+  });
+
+  return Array.from(map.values()).sort((a, b) =>
+    String(a.name || "").localeCompare(String(b.name || ""), undefined, {
+      numeric: true,
+    })
+  );
+}
+
+function materialCode(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }

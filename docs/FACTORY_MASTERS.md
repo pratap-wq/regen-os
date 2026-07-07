@@ -31,6 +31,25 @@ Supported `masterType` values:
 - `qualityTest`
 - `expenseCategory`
 
+## Master storage map
+
+| Dropdown / master | `masterType` | Google Sheet source of truth |
+| --- | --- | --- |
+| Material | `material` | `Material_Master` |
+| Machine | `machine` | `Machine_Master` |
+| Supplier | `supplier` | `Suppliers` |
+| Customer | `customer` | `Customers` |
+| Store Item | `storeItem` | `Stores_Master` |
+| Expense Category | `expenseCategory` | `Expense_Category_Master` |
+| Quality Test | `qualityTest` | `Quality_Test_Master` |
+
+Production material dropdowns must use `Material_Master` as the primary source:
+
+- Input material filters: `RM`, `WIP`, `REWORK`, `ADDITIVE`
+- Output material filters: `FG`, `WIP`, `WASTE`, `REWORK`
+
+If `Material_Master` is empty or missing input/output categories during transition, `FactoryMasterService` may temporarily merge categorized fallback rows from legacy material/category/ledger routes. This fallback must remain secondary and must not replace `Material_Master` as the source of truth.
+
 ## Required dropdown behavior
 
 `FactoryDropdown` supports:
@@ -78,7 +97,6 @@ Only these screens were converted:
    - Sorting machine
    - Sorting material
    - Extrusion machine
-   - Recipe
    - Production grade/material
    - Feed material rows
 3. Dispatch

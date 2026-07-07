@@ -63,7 +63,7 @@ export default function InventoryFeedTable({ rows, setRows }) {
                   approvalRequired
                   defaults={{ category: "RM", unit: "Kg" }}
                   filter={(item) =>
-                    ["RM", "WIP", "REWORK", "ADDITIVE", "WASTE"].includes(
+                    ["RM", "WIP", "REWORK", "ADDITIVE"].includes(
                       String(item.category || item.materialType || "").toUpperCase()
                     )
                   }

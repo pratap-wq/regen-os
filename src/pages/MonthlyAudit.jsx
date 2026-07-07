@@ -154,11 +154,44 @@ export default function MonthlyAudit() {
     [rows, month]
   );
 
+  const effectiveMovementSourceSummary = useMemo(() => {
+    const backend = materialGroupView?.movementSourceSummary || {};
+    const backendHasSource =
+      num(backend.rmReceivedKg) > 0 ||
+      num(backend.rmUsedKg) > 0 ||
+      num(backend.fgMadeKg) > 0 ||
+      num(backend.dispatchedKg) > 0 ||
+      num(backend.mappedKg) > 0 ||
+      num(backend.unmappedKg) > 0;
+
+    if (backendHasSource) return backend;
+
+    const fallback = {
+      rmReceivedKg: close.rm.purchasedKg,
+      rmUsedKg: close.rm.consumedKg,
+      fgMadeKg: close.production.fgProducedKg,
+      dispatchedKg: close.production.dispatchKg,
+      mappedKg: 0,
+      unmappedKg: close.rm.purchasedKg + close.rm.consumedKg + close.production.fgProducedKg + close.production.dispatchKg,
+      mappingWarnings: [],
+      source: "frontend operational fallback",
+    };
+
+    fallback.mappingWarnings = [
+      fallback.rmReceivedKg ? `Unmapped RM Received: ${formatKg(fallback.rmReceivedKg)}` : "",
+      fallback.rmUsedKg ? `Unmapped RM Used: ${formatKg(fallback.rmUsedKg)}` : "",
+      fallback.fgMadeKg ? `Unmapped FG Made: ${formatKg(fallback.fgMadeKg)}` : "",
+      fallback.dispatchedKg ? `Unmapped Dispatch: ${formatKg(fallback.dispatchedKg)}` : "",
+    ].filter(Boolean);
+
+    return fallback;
+  }, [materialGroupView, close]);
+
   const materialLines = useMemo(() => {
     const groups = hasMaterialGroupRows(materialGroupView?.groups)
       ? materialGroupView.groups
       : buildMaterialGroupsFromMaster(rows.materials);
-    const movementSummary = materialGroupView?.movementSourceSummary || {};
+    const movementSummary = effectiveMovementSourceSummary;
     const monthHasMovement =
       num(movementSummary.rmReceivedKg) > 0 ||
       num(movementSummary.rmUsedKg) > 0 ||
@@ -235,7 +268,13 @@ export default function MonthlyAudit() {
       })
     );
 
-    const exceptionRows = (materialGroupView?.exceptionRows || []).map((material) => {
+    const backendExceptions = materialGroupView?.exceptionRows || [];
+    const fallbackExceptions =
+      backendExceptions.length === 0 && monthHasMovement && num(movementSummary.mappedKg) === 0
+        ? buildFallbackExceptionRows(movementSummary)
+        : [];
+
+    const exceptionRows = backendExceptions.concat(fallbackExceptions).map((material) => {
       const key = `${material.category || "CHECK"}|${material.materialId || material.materialName}`;
       const physicalValue = physicalMaterialLines[key] ?? "";
       const systemClosing = num(material.systemStock ?? material.balance);
@@ -269,7 +308,7 @@ export default function MonthlyAudit() {
     });
 
     return stockRows.concat(exceptionRows);
-  }, [materialGroupView, rows.materials, rows.adjustments, physicalMaterialLines, month, close]);
+  }, [materialGroupView, rows.materials, rows.adjustments, physicalMaterialLines, month, close, effectiveMovementSourceSummary]);
 
   const monthClosed = useMemo(
     () =>
@@ -602,17 +641,17 @@ export default function MonthlyAudit() {
       <Section title="Mapping Check">
         <ReconTable
           rows={[
-            ["RM Received Source", materialGroupView?.movementSourceSummary?.rmReceivedKg || 0],
-            ["RM Used Source", materialGroupView?.movementSourceSummary?.rmUsedKg || 0],
-            ["FG Made Source", materialGroupView?.movementSourceSummary?.fgMadeKg || 0],
-            ["Dispatched Source", materialGroupView?.movementSourceSummary?.dispatchedKg || 0],
-            ["Mapped Movement", materialGroupView?.movementSourceSummary?.mappedKg || 0],
-            ["Unmapped Movement", materialGroupView?.movementSourceSummary?.unmappedKg || 0],
+            ["RM Received Source", effectiveMovementSourceSummary.rmReceivedKg || 0],
+            ["RM Used Source", effectiveMovementSourceSummary.rmUsedKg || 0],
+            ["FG Made Source", effectiveMovementSourceSummary.fgMadeKg || 0],
+            ["Dispatched Source", effectiveMovementSourceSummary.dispatchedKg || 0],
+            ["Mapped Movement", effectiveMovementSourceSummary.mappedKg || 0],
+            ["Unmapped Movement", effectiveMovementSourceSummary.unmappedKg || 0],
           ]}
         />
-        {(materialGroupView?.movementSourceSummary?.mappingWarnings || []).length > 0 && (
+        {(effectiveMovementSourceSummary.mappingWarnings || []).length > 0 && (
           <div style={warningBox}>
-            {(materialGroupView?.movementSourceSummary?.mappingWarnings || []).slice(0, 8).map((warning) => (
+            {(effectiveMovementSourceSummary.mappingWarnings || []).slice(0, 8).map((warning) => (
               <div key={warning}>{warning}</div>
             ))}
           </div>
@@ -755,6 +794,65 @@ function buildMaterialGroupsFromMaster(rows = []) {
     });
   });
   return groups;
+}
+
+function buildFallbackExceptionRows(summary = {}) {
+  const rows = [];
+  if (num(summary.rmReceivedKg) > 0) {
+    rows.push({
+      materialId: "FRONTEND-UNMAPPED-RM-IN",
+      materialCode: "CHECK",
+      materialName: "Unmapped RM Received",
+      category: "RM",
+      inward: summary.rmReceivedKg,
+      balance: summary.rmReceivedKg,
+      systemStock: summary.rmReceivedKg,
+    });
+  }
+  if (num(summary.rmUsedKg) > 0) {
+    rows.push({
+      materialId: "FRONTEND-UNMAPPED-RM-USED",
+      materialCode: "CHECK",
+      materialName: "Unmapped RM Used",
+      category: "RM",
+      consumed: summary.rmUsedKg,
+      balance: -num(summary.rmUsedKg),
+      systemStock: -num(summary.rmUsedKg),
+    });
+  }
+  if (num(summary.fgMadeKg) > 0) {
+    rows.push({
+      materialId: "FRONTEND-UNMAPPED-FG-MADE",
+      materialCode: "CHECK",
+      materialName: "Unmapped FG Made",
+      category: "FG",
+      produced: summary.fgMadeKg,
+      balance: summary.fgMadeKg,
+      systemStock: summary.fgMadeKg,
+    });
+  }
+  if (num(summary.dispatchedKg) > 0) {
+    rows.push({
+      materialId: "FRONTEND-UNMAPPED-DISPATCH",
+      materialCode: "CHECK",
+      materialName: "Unmapped Dispatch",
+      category: "FG",
+      dispatched: summary.dispatchedKg,
+      balance: -num(summary.dispatchedKg),
+      systemStock: -num(summary.dispatchedKg),
+    });
+  }
+  return rows.map((row) => ({
+    opening: 0,
+    inward: 0,
+    consumed: 0,
+    produced: 0,
+    dispatched: 0,
+    issued: 0,
+    approvedAdjustments: 0,
+    status: "CHECK_MAPPING",
+    ...row,
+  }));
 }
 
 function hasMaterialGroupRows(groups = {}) {

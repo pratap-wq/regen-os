@@ -222,6 +222,8 @@ function addMonthClose(data = {}) {
 
   const closeId = data.closeId || generateBatchId("MCLOSE");
   const periodMonth = data.periodMonth || getPeriodMonth(todayYmd());
+  const duplicateClose = existingCreateResponse_("Month_Close", "closeId", closeId, { periodMonth });
+  if (duplicateClose) return duplicateClose;
 
   if (isMonthClosed_(periodMonth)) {
     return output({
@@ -2905,6 +2907,26 @@ function appendObjectRow(sheet, payload) {
   sheet.appendRow(row);
 }
 
+function existingCreateResponse_(sheetName, idField, idValue, extra = {}) {
+  const id = String(idValue || "").trim();
+  if (!id) return null;
+  const existing = getRowsAsObjects(sheetName).find(
+    (row) => String(row[idField] || "").trim() === id && !isDeleted_(row)
+  );
+  if (!existing) return null;
+  const response = {
+    ok: true,
+    duplicate: true,
+    existing: true,
+    message: "Duplicate submit ignored. Existing record returned.",
+  };
+  response[idField] = id;
+  Object.keys(extra || {}).forEach((key) => {
+    response[key] = extra[key];
+  });
+  return output(response);
+}
+
 function getRowsAsObjects(sheetName) {
   const sh = getSheet(sheetName);
   const values = sh.getDataRange().getValues();
@@ -4419,6 +4441,8 @@ function addRM(data = {}) {
 
   const date = normalizeDateOnly_(data.date || todayYmd());
   const inwardId = data.inwardId || data.batchId || generateRmReceivingRef_(date, data.supplier);
+  const duplicateInward = existingCreateResponse_("RM_Inward", "inwardId", inwardId);
+  if (duplicateInward) return duplicateInward;
   const lines = parseRmMaterialLines_(data.materialLines, data.material, data.netWeight || data.quantityKg);
   const totalQty = lines.reduce(function(sum, line) { return sum + num(line.quantityKg); }, 0);
   const taxableValue = num(data.taxableValue) || lines.reduce(function(sum, line) { return sum + num(line.amount); }, 0);
@@ -5076,6 +5100,8 @@ function addWashBatch(data = {}) {
     data.washBatchId ||
     data.batchId ||
     generateBatchId("WB");
+  const duplicateWash = existingCreateResponse_("Wash_Batches", "washBatchId", washBatchId, { batchId: washBatchId });
+  if (duplicateWash) return duplicateWash;
 
   const inputWeightKg = num(data.inputWeightKg);
   const washedOutputKg = num(data.washedOutputKg);
@@ -5291,6 +5317,8 @@ function addSortingBatch(data={}){
     const sortingBatchId=
         data.sortingBatchId||
         generateBatchId("SB");
+    const duplicateSorting = existingCreateResponse_("Sorting_Batches", "sortingBatchId", sortingBatchId);
+    if (duplicateSorting) return duplicateSorting;
 
     appendObjectRow(sh,{
 
@@ -5483,6 +5511,8 @@ function addExtrusionBatch(data = {}) {
 
   const extrusionBatchId =
     data.extrusionBatchId || data.batchId || generateBatchId("EX");
+  const duplicateExtrusion = existingCreateResponse_("Extrusion_Batches", "extrusionBatchId", extrusionBatchId, { batchId: extrusionBatchId });
+  if (duplicateExtrusion) return duplicateExtrusion;
 
   const date = normalizeDateOnly_(data.date || todayYmd());
 
@@ -5841,6 +5871,8 @@ function addDispatch(data = {}) {
   ensureDispatchHeaders_();
 
   const dispatchId = data.dispatchId || generateBatchId("DIS");
+  const duplicateDispatch = existingCreateResponse_("Dispatches", "dispatchId", dispatchId);
+  if (duplicateDispatch) return duplicateDispatch;
   const date = normalizeDateOnly_(data.date || todayYmd());
   const sourceId = data.sourceExtrusionBatchId || data.linkedFgBatchId || "";
   const dispatchLines = normalizeDispatchLines_(data);
@@ -6086,6 +6118,8 @@ function addStoresInward(data={}){
       data.inwardId ||
       data.storesInwardId ||
       generateBatchId("SIN");
+  const duplicateStoresInward = existingCreateResponse_("Stores_Inward", "inwardId", inwardId, { storesInwardId: inwardId });
+  if (duplicateStoresInward) return duplicateStoresInward;
 
   const qty=num(data.qty);
   const rate=num(data.rate);
@@ -6212,6 +6246,8 @@ function addStoresIssue(data={}){
   ]);
 
   const issueId=data.issueId||generateBatchId("ISS");
+  const duplicateIssue = existingCreateResponse_("Stores_Issue", "issueId", issueId);
+  if (duplicateIssue) return duplicateIssue;
   const qty=num(data.qty);
   const issueRate=num(data.issueRate || data.rate);
   const issueValue =
@@ -10841,6 +10877,8 @@ function addInventoryAdjustment(data = {}) {
   const sh = getSheet("Inventory_Adjustments");
   const adjustmentId =
     data.adjustmentId || generateBatchId("IA");
+  const duplicateAdjustment = existingCreateResponse_("Inventory_Adjustments", "adjustmentId", adjustmentId, { periodMonth });
+  if (duplicateAdjustment) return duplicateAdjustment;
 
   appendObjectRow(sh, {
     adjustmentId,

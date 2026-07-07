@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiCall } from "../api/api";
 import DataTable from "../components/DataTable";
 import FormSection from "../components/FormSection";
@@ -109,6 +109,10 @@ export default function WashBatches() {
 
   const [message, setMessage] =
     useState("");
+  const [saving, setSaving] =
+    useState(false);
+  const submitLockRef =
+    useRef(false);
 
   useEffect(() => {
 
@@ -358,8 +362,11 @@ export default function WashBatches() {
   async function submit(e) {
 
     e.preventDefault();
+    if (submitLockRef.current) return;
 
     try {
+      submitLockRef.current = true;
+      setSaving(true);
 
       let res;
 
@@ -400,6 +407,8 @@ export default function WashBatches() {
         setForm(
           blankForm
         );
+        submitLockRef.current = false;
+        setSaving(false);
 
         setEditing(
           false
@@ -408,12 +417,19 @@ export default function WashBatches() {
         loadRows();
 
       }
+      else {
+        setMessage(res.error || "Save failed");
+        submitLockRef.current = false;
+        setSaving(false);
+      }
 
     } catch (err) {
 
       setMessage(
         err.message
       );
+      submitLockRef.current = false;
+      setSaving(false);
 
     }
 
@@ -1108,10 +1124,13 @@ export default function WashBatches() {
 
           <button
             type="submit"
+            disabled={saving}
             style={buttonStyle}
           >
 
-            {editing
+            {saving
+              ? "Saving..."
+              : editing
               ? "Update Batch"
               : "Save Batch"}
 

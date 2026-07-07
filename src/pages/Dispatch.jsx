@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 
@@ -59,6 +59,8 @@ export default function Dispatch() {
   const [editingRow, setEditingRow] = useState(null);
   const [form, setForm] = useState(blankForm);
   const [dispatchLines, setDispatchLines] = useState([{ ...blankLine }]);
+  const [saving, setSaving] = useState(false);
+  const submitLockRef = useRef(false);
 
   useEffect(() => {
     loadData();
@@ -367,15 +369,22 @@ export default function Dispatch() {
   }
   async function submit(e) {
     e.preventDefault();
+    if (submitLockRef.current) return;
 
     try {
+      submitLockRef.current = true;
+      setSaving(true);
       if (!form.material) {
         setStatus("Select material.");
+        submitLockRef.current = false;
+        setSaving(false);
         return;
       }
 
       if (Number(form.quantityKg || 0) <= 0) {
         setStatus("Enter dispatch quantity.");
+        submitLockRef.current = false;
+        setSaving(false);
         return;
       }
 
@@ -387,6 +396,8 @@ export default function Dispatch() {
             2
           )} Kg`
         );
+        submitLockRef.current = false;
+        setSaving(false);
         return;
       }
 
@@ -420,6 +431,8 @@ export default function Dispatch() {
 
       if (res.ok === false) {
         setStatus(res.error || "Error saving dispatch");
+        submitLockRef.current = false;
+        setSaving(false);
         return;
       }
 
@@ -427,9 +440,13 @@ export default function Dispatch() {
       setEditingRow(null);
       setForm(blankForm);
       setDispatchLines([{ ...blankLine }]);
+      submitLockRef.current = false;
+      setSaving(false);
       loadData();
     } catch (err) {
       setStatus(err.message);
+      submitLockRef.current = false;
+      setSaving(false);
     }
   }
 
@@ -503,6 +520,8 @@ export default function Dispatch() {
     setEditingRow(null);
     setForm(blankForm);
     setDispatchLines([{ ...blankLine }]);
+    submitLockRef.current = false;
+    setSaving(false);
     setStatus("Ready for new dispatch");
   }
 
@@ -834,8 +853,8 @@ export default function Dispatch() {
             Clear / New Dispatch
           </button>
 
-          <button type="submit" style={editingRow ? updateButton : saveButton}>
-            {editingRow ? "Update Dispatch" : "Save Dispatch"}
+          <button type="submit" disabled={saving} style={editingRow ? updateButton : saveButton}>
+            {saving ? "Saving..." : editingRow ? "Update Dispatch" : "Save Dispatch"}
           </button>
         </div>
       </form>

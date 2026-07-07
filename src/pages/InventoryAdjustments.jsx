@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   addInventoryAdjustment,
   approveInventoryAdjustment,
@@ -73,6 +73,8 @@ export default function InventoryAdjustments() {
   const [masters, setMasters] = useState({ grades: [], materials: [] });
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [actionId, setActionId] = useState("");
+  const submitLockRef = useRef(false);
 
   const [form, setForm] = useState({
     periodMonth: getCurrentMonth(),
@@ -174,6 +176,8 @@ export default function InventoryAdjustments() {
   }
 
   function resetForm() {
+    submitLockRef.current = false;
+    setSaving(false);
     setForm({
       periodMonth,
       date: getToday(),
@@ -191,17 +195,20 @@ export default function InventoryAdjustments() {
   }
 
   async function saveAdjustment(nextStatus) {
+    if (submitLockRef.current) return;
     if (!form.itemCode) return setMessage("Select Item Code / Material / Grade");
     if (num(form.quantityKg) === 0) return setMessage("Quantity cannot be zero");
 
+    submitLockRef.current = true;
     setSaving(true);
-    setMessage("Saving...");
+    setMessage(nextStatus === "SUBMITTED" ? "Submitting..." : "Saving...");
 
     const res = await addInventoryAdjustment({ ...form, status: nextStatus });
 
     setSaving(false);
 
     if (!res?.ok) {
+      submitLockRef.current = false;
       setMessage(res?.error || "Failed to save adjustment");
       return;
     }
@@ -212,17 +219,31 @@ export default function InventoryAdjustments() {
   }
 
   async function handleApprove(id) {
-    const res = await approveInventoryAdjustment(id, "System");
-    if (!res?.ok) return setMessage(res?.error || "Approval failed");
-    setMessage("Adjustment approved");
-    loadData();
+    if (actionId) return;
+    setActionId(id);
+    setMessage("Approving...");
+    try {
+      const res = await approveInventoryAdjustment(id, "System");
+      if (!res?.ok) return setMessage(res?.error || "Approval failed");
+      setMessage("Adjustment approved");
+      loadData();
+    } finally {
+      setActionId("");
+    }
   }
 
   async function handleReject(id) {
-    const res = await rejectInventoryAdjustment(id, "System", "Rejected from Inventory Adjustments");
-    if (!res?.ok) return setMessage(res?.error || "Reject failed");
-    setMessage("Adjustment rejected");
-    loadData();
+    if (actionId) return;
+    setActionId(id);
+    setMessage("Rejecting...");
+    try {
+      const res = await rejectInventoryAdjustment(id, "System", "Rejected from Inventory Adjustments");
+      if (!res?.ok) return setMessage(res?.error || "Reject failed");
+      setMessage("Adjustment rejected");
+      loadData();
+    } finally {
+      setActionId("");
+    }
   }
 
   return (
@@ -337,8 +358,8 @@ export default function InventoryAdjustments() {
         </div>
 
         <div style={buttonRow}>
-          <button style={primaryBtn} disabled={saving} onClick={() => saveAdjustment("DRAFT")}>Save Draft</button>
-          <button style={greenBtn} disabled={saving} onClick={() => saveAdjustment("SUBMITTED")}>Submit for Approval</button>
+          <button style={primaryBtn} disabled={saving} onClick={() => saveAdjustment("DRAFT")}>{saving ? "Saving..." : "Save Draft"}</button>
+          <button style={greenBtn} disabled={saving} onClick={() => saveAdjustment("SUBMITTED")}>{saving ? "Submitting..." : "Submit for Approval"}</button>
           <button style={secondaryBtn} onClick={resetForm}>Clear</button>
         </div>
       </div>
@@ -379,8 +400,8 @@ export default function InventoryAdjustments() {
                     <td style={td}>
                       {canAct ? (
                         <div style={smallBtnRow}>
-                          <button style={miniGreenBtn} onClick={() => handleApprove(r.adjustmentId)}>Approve</button>
-                          <button style={miniRedBtn} onClick={() => handleReject(r.adjustmentId)}>Reject</button>
+                          <button style={miniGreenBtn} disabled={Boolean(actionId)} onClick={() => handleApprove(r.adjustmentId)}>{actionId === r.adjustmentId ? "Approving..." : "Approve"}</button>
+                          <button style={miniRedBtn} disabled={Boolean(actionId)} onClick={() => handleReject(r.adjustmentId)}>{actionId === r.adjustmentId ? "Rejecting..." : "Reject"}</button>
                         </div>
                       ) : "-"}
                     </td>

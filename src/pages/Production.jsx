@@ -69,7 +69,6 @@ export default function Production() {
     sorterRejectKg: "",
 
     extrusionBatchId: "",
-    recipeName: "",
     fgOutputKg: "",
     lumpsKg: "",
     purgingKg: "",
@@ -688,16 +687,6 @@ export default function Production() {
               const process = String(item.processType || item.machineType || "").toUpperCase();
               return !process || process.includes("EXTRUSION") || process.includes("EXTRUDER");
             }}
-          />
-
-          <FactorySelectField
-            label="Recipe"
-            masterType="recipe"
-            name="recipeName"
-            value={form.recipeName}
-            onChange={onChange}
-            placeholder="Select Recipe"
-            defaults={{ processType: "EXTRUSION" }}
           />
 
           <FactorySelectField

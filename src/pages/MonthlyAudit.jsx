@@ -183,6 +183,7 @@ export default function MonthlyAudit() {
         module: "RM",
         itemType: "RM",
         itemCode: "White Flakes",
+        physicalField: "rmPhysicalKg",
         systemKg: close.inventory.rmClosingKg,
         physicalKg: physical.rmPhysicalKg,
       },
@@ -192,6 +193,7 @@ export default function MonthlyAudit() {
         module: "Wash",
         itemType: "WASHED",
         itemCode: "Washed White Flakes",
+        physicalField: "washPhysicalKg",
         systemKg: close.inventory.washClosingKg,
         physicalKg: physical.washPhysicalKg,
       },
@@ -201,6 +203,7 @@ export default function MonthlyAudit() {
         module: "Color Sorter",
         itemType: "SORTED",
         itemCode: "White Sorted",
+        physicalField: "sortingPhysicalKg",
         systemKg: close.inventory.sortingClosingKg,
         physicalKg: physical.sortingPhysicalKg,
       },
@@ -210,6 +213,7 @@ export default function MonthlyAudit() {
         module: "FG",
         itemType: "FG",
         itemCode: "E1",
+        physicalField: "fgPhysicalKg",
         systemKg: close.inventory.fgClosingKg,
         physicalKg: physical.fgPhysicalKg,
       },
@@ -335,7 +339,7 @@ export default function MonthlyAudit() {
       if (line.statusType === "warning") {
         list.push({
           type: "warning",
-          text: `${line.stage} has pending adjustment approval.`,
+          text: `${line.stage} difference approval is pending.`,
         });
       }
     });
@@ -380,6 +384,15 @@ export default function MonthlyAudit() {
   function onPhysicalChange(e) {
     const { name, value } = e.target;
     setPhysical((p) => ({ ...p, [name]: value }));
+  }
+
+  async function savePhysicalFromRow() {
+    try {
+      setStatus("Saving physical closing stock...");
+      await savePhysicalStockSnapshot();
+    } catch (err) {
+      setStatus(err.message || "Failed to save physical closing stock.");
+    }
   }
 
   function onAdjustmentReasonChange(lineKey, value) {
@@ -602,7 +615,7 @@ export default function MonthlyAudit() {
             <thead>
               <tr>
                 {[
-                  "Stage",
+                  "Material",
                   "System Closing Qty",
                   "Physical Closing Qty",
                   "Difference Qty",
@@ -618,9 +631,22 @@ export default function MonthlyAudit() {
             <tbody>
               {materialLines.map((line) => (
                 <tr key={line.key}>
-                  <td style={td}><b>{line.stage}</b></td>
+                  <td style={td}>
+                    <b>{line.stage}</b>
+                    <div style={mutedCell}>{line.itemCode}</div>
+                  </td>
                   <td style={td}>{formatKg(line.systemKg)}</td>
-                  <td style={td}>{line.hasPhysical ? formatKg(line.physicalKg) : "Enter below"}</td>
+                  <td style={td}>
+                    <input
+                      name={line.physicalField}
+                      value={physical[line.physicalField] ?? ""}
+                      onChange={onPhysicalChange}
+                      onBlur={savePhysicalFromRow}
+                      type="number"
+                      placeholder="Enter kg"
+                      style={qtyInput}
+                    />
+                  </td>
                   <td style={td}>{line.hasPhysical ? formatKg(line.varianceKg) : "-"}</td>
                   <td style={td}>{line.hasPhysical ? formatCurrency(getDifferenceValue(line, close)) : "-"}</td>
                   <td style={td}>
@@ -658,7 +684,7 @@ export default function MonthlyAudit() {
         </div>
 
         <div style={hintBox}>
-          Enter physical closing stock here. If a difference appears, approve the adjustment in this table; Month Close will create the approved inventory adjustment, post it to the inventory ledger, and keep the physical count as an audit snapshot.
+          Enter physical closing stock directly in the material rows. Differences calculate immediately; approving a row creates the approved correction and posts it to the inventory ledger automatically.
         </div>
       </Panel>
 
@@ -680,12 +706,8 @@ export default function MonthlyAudit() {
         </div>
       </Panel>
 
-      <Panel title="Physical Stock & Sign-Off">
+      <Panel title="Sign-Off">
         <div style={approvalGrid}>
-          <InputBox label="Physical Material Kg" name="rmPhysicalKg" value={physical.rmPhysicalKg} onChange={onPhysicalChange} type="number" />
-          <InputBox label="Physical Washed Material Kg" name="washPhysicalKg" value={physical.washPhysicalKg} onChange={onPhysicalChange} type="number" />
-          <InputBox label="Physical Sorted Material Kg" name="sortingPhysicalKg" value={physical.sortingPhysicalKg} onChange={onPhysicalChange} type="number" />
-          <InputBox label="Physical Dispatch Material Kg" name="fgPhysicalKg" value={physical.fgPhysicalKg} onChange={onPhysicalChange} type="number" />
           <InputBox label="Production Manager" name="productionSignoff" value={physical.productionSignoff} onChange={onPhysicalChange} />
           <InputBox label="Stores" name="storesSignoff" value={physical.storesSignoff} onChange={onPhysicalChange} />
           <InputBox label="Accounts" name="accountsSignoff" value={physical.accountsSignoff} onChange={onPhysicalChange} />
@@ -706,7 +728,7 @@ export default function MonthlyAudit() {
 
         <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
           <button onClick={savePhysicalStock} style={closeButton}>
-            SAVE / UPDATE PHYSICAL STOCK
+            SAVE / UPDATE SIGN-OFFS
           </button>
 
           <button onClick={loadPhysicalCount} style={secondaryButton}>
@@ -763,13 +785,13 @@ function MonthCloseWorkflow({
       label: "Physical Stock",
       status: hasPhysicalStock ? "Complete" : "Pending",
       type: hasPhysicalStock ? "success" : "warning",
-      action: hasPhysicalStock ? "None" : "Enter and save physical stock below",
+      action: hasPhysicalStock ? "None" : "Enter physical stock in material rows",
     },
     {
       label: "Material Reconciliation",
       status: materialReady ? "Reconciled" : needsAction > 0 ? "Difference Found" : "Pending Approval",
       type: materialReady ? "success" : needsAction > 0 ? "danger" : "warning",
-      action: materialReady ? "None" : needsAction > 0 ? "Approve difference below" : "Pending adjustment approval",
+      action: materialReady ? "None" : needsAction > 0 ? "Approve difference in row" : "Difference approval pending",
     },
     {
       label: "Critical Exceptions",
@@ -819,11 +841,11 @@ function MonthCloseWorkflow({
       <div style={nextActionBox}>
         <b>Next Action: </b>
         {physicalPending > 0
-          ? "Enter physical stock and click SAVE / UPDATE PHYSICAL STOCK."
+          ? "Enter physical closing stock in the material rows."
           : needsAction > 0
           ? "Enter a reason and approve the difference rows below."
           : pendingAdjustments > 0
-          ? "Wait for pending adjustment approval or refresh after approval."
+          ? "Refresh after the pending row is approved."
           : !approvalsDone
           ? "Complete Production, Stores, Accounts, QC and CEO sign-offs."
           : readyToClose
@@ -854,8 +876,8 @@ function MonthCloseWorkflow({
       {pendingAdjustments > 0 && (
         <div style={actionRow}>
           <div>
-            <b>Adjustment approval pending</b>
-            <div style={actionSub}>Approve or reject pending adjustment entries.</div>
+            <b>Difference approval pending</b>
+            <div style={actionSub}>Refresh after the row approval is completed.</div>
           </div>
           <span style={{ color: "#b45309", fontWeight: 900 }}>Pending</span>
         </div>
@@ -965,6 +987,8 @@ const panel = { background: "white", padding: 18, borderRadius: 16, boxShadow: "
 const panelTitle = { margin: "0 0 14px", color: "#0f172a" };
 const input = { width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #cbd5e1", boxSizing: "border-box", background: "white" };
 const smallInput = { ...input, minWidth: 190, padding: "8px 10px", fontSize: 12 };
+const qtyInput = { ...input, width: 140, padding: "8px 10px", fontSize: 12, textAlign: "right" };
+const mutedCell = { color: "#64748b", fontSize: 12, marginTop: 3 };
 const textarea = { ...input, minHeight: 95, resize: "vertical" };
 const label = { display: "block", fontWeight: 800, marginBottom: 8, color: "#334155" };
 const labelStyle = { ...label, fontSize: 13 };

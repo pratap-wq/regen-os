@@ -7886,6 +7886,7 @@ function migrateQualityLegacyCleanup(dryRun) {
     needsReview: 0,
     skippedCurrent: 0,
     skippedAlreadyMigrated: 0,
+    legacyCompleted: 0,
     updates: [],
   };
 
@@ -7908,7 +7909,11 @@ function migrateQualityLegacyCleanup(dryRun) {
       result.skippedCurrent++;
       return;
     }
-    if (String(row.migrationStatus || "").toUpperCase() === "LEGACY_AUTO_COMPLETED") {
+    if (
+      String(row.migrationStatus || "").toUpperCase() === "LEGACY_COMPLETED" &&
+      String(row.qcStatus || "").toUpperCase() === "APPROVED" &&
+      String(row.decision || "").toUpperCase() === "LEGACY_COMPLETED"
+    ) {
       result.skippedAlreadyMigrated++;
       return;
     }
@@ -7917,11 +7922,11 @@ function migrateQualityLegacyCleanup(dryRun) {
     const oldRef = String(row.rmInwardId || row.sourceRef || row.qualityRef || row.legacyQualityRef || row.qualityId || "").trim();
     const rmMatch = oldRef ? rmIndex[oldRef] : null;
     const newRef = rmMatch ? qualityRmReferenceFromRow_(oldRef, rmMatch) : "";
-    const displayRef = newRef || row.qualityRef || oldRef || "RMQ-" + String(index + 1).padStart(3, "0");
-    const migrationStatus = newRef ? "LEGACY_AUTO_COMPLETED" : "NEEDS_REVIEW";
+    const displayRef = row.qualityRef || oldRef || "RMQ-" + String(index + 1).padStart(3, "0");
+    const migrationStatus = "LEGACY_COMPLETED";
 
     if (newRef) result.convertible++;
-    else result.needsReview++;
+    result.legacyCompleted++;
 
     result.updates.push({
       sheet: "RM_Quality",
@@ -7929,19 +7934,19 @@ function migrateQualityLegacyCleanup(dryRun) {
       qualityId: row.qualityId || "",
       oldRef,
       qualityRef: displayRef,
+      legacyQualityRef: row.legacyQualityRef || "",
+      qcStatus: "APPROVED",
+      decision: "LEGACY_COMPLETED",
       migrationStatus,
     });
 
     if (!isDryRun) {
-      setCell(rmData, row.__rowNumber, "legacyQualityRef", row.legacyQualityRef || oldRef);
-      setCell(rmData, row.__rowNumber, "qualityRef", displayRef);
-      setCell(rmData, row.__rowNumber, "sourceType", "INCOMING_MATERIAL");
-      setCell(rmData, row.__rowNumber, "sourceRef", oldRef);
-      setCell(rmData, row.__rowNumber, "qcStatus", "COMPLETED");
+      setCell(rmData, row.__rowNumber, "qcStatus", "APPROVED");
       setCell(rmData, row.__rowNumber, "decision", "LEGACY_COMPLETED");
-      setCell(rmData, row.__rowNumber, "status", row.status || "APPROVED");
       setCell(rmData, row.__rowNumber, "migrationStatus", migrationStatus);
-      setCell(rmData, row.__rowNumber, "dustPercent", row.dustPercent || row.moisturePercent || "");
+      if (!String(row.testedBy || "").trim()) {
+        setCell(rmData, row.__rowNumber, "testedBy", "Legacy Migration");
+      }
     }
   });
 
@@ -7950,7 +7955,11 @@ function migrateQualityLegacyCleanup(dryRun) {
       result.skippedCurrent++;
       return;
     }
-    if (String(row.migrationStatus || "").toUpperCase() === "LEGACY_AUTO_COMPLETED") {
+    if (
+      String(row.migrationStatus || "").toUpperCase() === "LEGACY_COMPLETED" &&
+      String(row.qcStatus || "").toUpperCase() === "APPROVED" &&
+      String(row.decision || "").toUpperCase() === "LEGACY_COMPLETED"
+    ) {
       result.skippedAlreadyMigrated++;
       return;
     }
@@ -7959,11 +7968,11 @@ function migrateQualityLegacyCleanup(dryRun) {
     const oldRef = String(row.extrusionBatchId || row.fgBatchCode || row.sourceRef || row.qualityRef || row.legacyQualityRef || row.qualityId || "").trim();
     const fgMatch = oldRef ? fgIndex[oldRef] : null;
     const newRef = fgMatch ? qualityFgReferenceFromRow_(oldRef, fgMatch, row) : "";
-    const displayRef = newRef || row.qualityRef || oldRef || "FGQ-" + String(index + 1).padStart(3, "0");
-    const migrationStatus = newRef ? "LEGACY_AUTO_COMPLETED" : "NEEDS_REVIEW";
+    const displayRef = row.qualityRef || oldRef || "FGQ-" + String(index + 1).padStart(3, "0");
+    const migrationStatus = "LEGACY_COMPLETED";
 
     if (newRef) result.convertible++;
-    else result.needsReview++;
+    result.legacyCompleted++;
 
     result.updates.push({
       sheet: "FG_Quality",
@@ -7971,18 +7980,19 @@ function migrateQualityLegacyCleanup(dryRun) {
       qualityId: row.qualityId || "",
       oldRef,
       qualityRef: displayRef,
+      legacyQualityRef: row.legacyQualityRef || "",
+      qcStatus: "APPROVED",
+      decision: "LEGACY_COMPLETED",
       migrationStatus,
     });
 
     if (!isDryRun) {
-      setCell(fgData, row.__rowNumber, "legacyQualityRef", row.legacyQualityRef || oldRef);
-      setCell(fgData, row.__rowNumber, "qualityRef", displayRef);
-      setCell(fgData, row.__rowNumber, "sourceType", "FG_PRODUCTION");
-      setCell(fgData, row.__rowNumber, "sourceRef", oldRef);
-      setCell(fgData, row.__rowNumber, "qcStatus", "COMPLETED");
+      setCell(fgData, row.__rowNumber, "qcStatus", "APPROVED");
       setCell(fgData, row.__rowNumber, "decision", "LEGACY_COMPLETED");
-      setCell(fgData, row.__rowNumber, "status", row.status || "APPROVED");
       setCell(fgData, row.__rowNumber, "migrationStatus", migrationStatus);
+      if (!String(row.testedBy || "").trim()) {
+        setCell(fgData, row.__rowNumber, "testedBy", "Legacy Migration");
+      }
     }
   });
 

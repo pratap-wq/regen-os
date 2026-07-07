@@ -15,6 +15,14 @@ function doGet(e) {
       });
     }
 
+    if (p.fn === "health") {
+      return output({
+        ok: true,
+        message: "Regen OS API running",
+        timestamp: new Date(),
+      });
+    }
+
     // Masters
     if (p.fn === "machines.list") return listMaster("Machine_Master");
     if (p.fn === "categories.list") return listMaster("Material_Categories");

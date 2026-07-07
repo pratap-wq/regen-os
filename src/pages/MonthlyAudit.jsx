@@ -188,10 +188,10 @@ export default function MonthlyAudit() {
           rowStatus = "Reconciled";
           statusType = "success";
         } else if (hasPhysical && Math.abs(pendingAdjustmentKg) > 0.01) {
-          rowStatus = "Adjustment Pending";
+          rowStatus = "Approval Pending";
           statusType = "warning";
         } else if (hasPhysical) {
-          rowStatus = "Investigation Required";
+          rowStatus = "Check Difference";
           statusType = "danger";
         }
 
@@ -237,49 +237,45 @@ export default function MonthlyAudit() {
 
     return [
       {
-        title: "Production Complete",
+        title: "Production Done?",
         ok: close.production.fgProducedKg > 0,
-        next: close.production.fgProducedKg > 0 ? "Production data loaded" : "Complete production entries",
+        next: close.production.fgProducedKg > 0 ? "Production entries found" : "Enter production first",
       },
       {
-        title: "Dispatch Complete",
+        title: "Dispatch Done?",
         ok: close.production.dispatchKg > 0,
-        next: close.production.dispatchKg > 0 ? "Dispatch data loaded" : "Complete dispatch entries",
+        next: close.production.dispatchKg > 0 ? "Dispatch entries found" : "Enter dispatch first",
       },
       {
-        title: "Expenses Complete",
+        title: "Expenses Entered?",
         ok: rows.factoryExpenses.length > 0 || close.costs.factoryExpenseValue > 0,
-        next: rows.factoryExpenses.length > 0 ? "Expenses loaded" : "Enter factory expenses if applicable",
+        next: rows.factoryExpenses.length > 0 ? "Expenses found" : "Enter expenses if any",
       },
       {
-        title: "Physical Stock Pending",
+        title: "Physical Stock Entered?",
         ok: physicalPending === 0,
-        next: physicalPending === 0 ? "Physical stock entered" : `${physicalPending} material(s) need physical stock`,
+        next: physicalPending === 0 ? "Actual stock entered" : `${physicalPending} material(s) pending`,
       },
       {
-        title: "Inventory Adjustment Pending",
+        title: "Differences Resolved?",
         ok: adjustmentPending === 0 && investigation === 0,
         next:
           adjustmentPending > 0
-            ? `${adjustmentPending} adjustment(s) pending`
+            ? `${adjustmentPending} approval pending`
             : investigation > 0
-            ? `${investigation} material(s) need reason/approval`
-            : "No pending adjustments",
+            ? `${investigation} difference(s) to check`
+            : "All differences resolved",
       },
       {
-        title: "Ready To Close",
+        title: "Sign-Off Done?",
         ok: physicalPending === 0 && investigation === 0 && adjustmentPending === 0 && signoffsComplete,
-        next: signoffsComplete ? "Ready when all variances reconcile" : "Complete sign-off",
+        next: signoffsComplete ? "Sign-off complete" : "Complete sign-off",
       },
-      {
-        title: "Closed",
-        ok: closed,
-        next: closed ? "Month is closed" : "Not closed yet",
-      },
+      { title: "Can Close?", ok: closed || (physicalPending === 0 && investigation === 0 && adjustmentPending === 0 && signoffsComplete), next: closed ? "Month closed" : "Close when all cards are OK" },
     ];
   }, [rows.closeRows, rows.factoryExpenses, close, materialLines, physical, month]);
 
-  const readyToClose = readiness.find((card) => card.title === "Ready To Close")?.ok;
+  const readyToClose = readiness.find((card) => card.title === "Can Close?")?.ok;
 
   function onPhysicalChange(lineKey, value) {
     setPhysicalMaterialLines((prev) => ({ ...prev, [lineKey]: value }));
@@ -339,7 +335,7 @@ export default function MonthlyAudit() {
       setStatus("Enter a reason before approving the adjustment.");
       return;
     }
-    if (!window.confirm(`Approve ${formatKg(line.remainingKg)} adjustment for ${line.materialName}?`)) return;
+    if (!window.confirm(`Approve ${formatKg(line.remainingKg)} difference for ${line.materialName}?`)) return;
 
     await savePhysicalSnapshot({ silent: true });
     const res = await apiCall({
@@ -364,10 +360,10 @@ export default function MonthlyAudit() {
       approvedBy: physical.accountsSignoff || physical.ceoSignoff || "Month Close",
     });
     if (!res?.ok) {
-      setStatus(res?.error || "Adjustment approval failed.");
+      setStatus(res?.error || "Difference approval failed.");
       return;
     }
-    setStatus("Adjustment approved and posted.");
+    setStatus("Difference approved.");
     await loadAll();
   }
 
@@ -383,7 +379,7 @@ export default function MonthlyAudit() {
 
   async function closeMonth() {
     if (!readyToClose) {
-      setStatus("Month cannot be closed yet. Complete physical stock, reconcile differences, and sign off.");
+      setStatus("Month cannot be closed yet. Enter actual stock, clear differences, and complete sign-off.");
       return;
     }
     if (!window.confirm(`Close ${monthLabel(month)}?`)) return;
@@ -432,9 +428,9 @@ export default function MonthlyAudit() {
     <div style={page}>
       <div style={header}>
         <div>
-          <div style={eyebrow}>Operational Month Close</div>
-          <h1 style={title}>Month Close + Reconciliation</h1>
-          <div style={subtitle}>Where is my stock? Where is my money? What is preventing close?</div>
+          <div style={eyebrow}>Factory Month Close</div>
+          <h1 style={title}>Month Close</h1>
+          <div style={subtitle}>Check stock, money, differences, and sign-off in one place.</div>
         </div>
         <div style={headerActions}>
           <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={input} />
@@ -442,7 +438,12 @@ export default function MonthlyAudit() {
         </div>
       </div>
 
-      <Section title="Close Readiness Dashboard">
+      <div style={monthBanner}>
+        <b>{monthLabel(month)} Status:</b>{" "}
+        {formatTon(close.production.fgProducedKg)} Produced | {formatTon(close.production.dispatchKg)} Dispatched | {formatMoney(close.profitability.manufacturingProfit)} Profit | {materialLines.filter((x) => x.statusType === "danger" || x.statusType === "warning").length} Differences Pending
+      </div>
+
+      <Section title="Can We Close This Month?">
         <div style={cardGrid}>
           {readiness.map((card) => (
             <div key={card.title} style={readinessCard(card.ok)}>
@@ -454,82 +455,14 @@ export default function MonthlyAudit() {
         </div>
       </Section>
 
-      <Section title="RM Reconciliation">
-        <ReconTable
-          rows={[
-            ["Opening RM", 0],
-            ["+ RM Inward", close.rm.purchasedKg],
-            ["- RM Consumed", close.rm.consumedKg],
-            ["+ Approved Adjustments", sumByGroup(materialLines, "RM", "approvedAdjustments")],
-            ["= System Closing", sumByGroup(materialLines, "RM", "systemClosing")],
-            ["Physical Closing", sumByGroup(materialLines, "RM", "physicalKg")],
-            ["Difference", sumByGroup(materialLines, "RM", "remainingKg")],
-          ]}
-        />
-      </Section>
-
-      <Section title="Production Reconciliation">
-        <ReconTable
-          rows={[
-            ["Wash Input", close.production.washInputKg],
-            ["Wash Output", close.production.washedOutputKg],
-            ["Sorting Input", close.production.sortingInputKg],
-            ["Sorting Output", close.production.sortingAcceptedKg],
-            ["Extrusion Input", close.production.extrusionInputKg],
-            ["Extrusion Output / FG Produced", close.production.fgProducedKg],
-            ["Rework", close.materialFlow.recoveryReuseKg],
-            ["Waste", close.materialFlow.wasteSaleKg + close.materialFlow.trueLossKg],
-            ["Recovery %", close.production.overallRecovery, "percent"],
-          ]}
-        />
-      </Section>
-
-      <Section title="Finished Goods Reconciliation">
-        <ReconTable
-          rows={[
-            ["Opening FG", 0],
-            ["+ FG Produced", close.production.fgProducedKg],
-            ["- Dispatch", close.production.dispatchKg],
-            ["+ Adjustments", sumByGroup(materialLines, "FG", "approvedAdjustments")],
-            ["= System Closing", sumByGroup(materialLines, "FG", "systemClosing")],
-            ["Physical Closing", sumByGroup(materialLines, "FG", "physicalKg")],
-            ["Difference", sumByGroup(materialLines, "FG", "remainingKg")],
-          ]}
-        />
-      </Section>
-
-      <Section title="Stores Reconciliation">
-        <ReconTable
-          rows={[
-            ["Opening Stores", 0],
-            ["+ Stores Inward", sum(rows.storesInward, "qty")],
-            ["- Stores Issue", sum(rows.storesIssue, "qty")],
-            ["= System Closing", sum(rows.storesInward, "qty") - sum(rows.storesIssue, "qty")],
-            ["Physical Value", physical.storesPhysicalValue || 0, "currency"],
-          ]}
-        />
-      </Section>
-
-      <Section title="Cost Reconciliation">
-        <ReconTable
-          rows={[
-            ["RM Cost", close.costs.estimatedRmConsumedValue, "currency"],
-            ["Stores Cost", close.costs.storesIssueValue, "currency"],
-            ["Factory Expenses", close.costs.factoryExpenseValue, "currency"],
-            ["Sales", close.profitability.salesValue, "currency"],
-            ["Manufacturing Profit", close.profitability.manufacturingProfit, "currency"],
-          ]}
-        />
-      </Section>
-
-      <Section title="Material Accountability">
+      <Section title="Stock Check">
         <div style={summaryRow}>
           <StatusPill label="Reconciled" count={materialLines.filter((x) => x.statusType === "success").length} type="success" />
           <StatusPill label="Pending" count={materialLines.filter((x) => x.statusType === "pending" || x.statusType === "warning").length} type="warning" />
-          <StatusPill label="Investigation" count={materialLines.filter((x) => x.statusType === "danger").length} type="danger" />
+          <StatusPill label="Check Difference" count={materialLines.filter((x) => x.statusType === "danger").length} type="danger" />
         </div>
         {materialLines.length === 0 && (
-          <div style={warningBox}>No active manufacturing materials found. Check Material Master categories.</div>
+          <div style={warningBox}>No active manufacturing materials found. Check material setup.</div>
         )}
         <div style={tableWrap}>
           <table style={table}>
@@ -537,16 +470,10 @@ export default function MonthlyAudit() {
               <tr>
                 {[
                   "Material Code",
-                  "Material Name",
-                  "Group",
-                  "Opening",
-                  "Inward",
-                  "Consumed",
-                  "Produced",
-                  "Dispatched",
-                  "Approved Adjustments",
-                  "System Closing",
-                  "Physical Closing",
+                  "Material",
+                  "Type",
+                  "System Stock",
+                  "Actual Stock",
                   "Difference",
                   "Reason",
                   "Status",
@@ -560,12 +487,6 @@ export default function MonthlyAudit() {
                   <td style={td}>{line.materialCode || "-"}</td>
                   <td style={td}><b>{line.materialName}</b></td>
                   <td style={td}>{line.group}</td>
-                  <td style={td}>{formatKg(line.opening)}</td>
-                  <td style={td}>{formatKg(line.inward)}</td>
-                  <td style={td}>{formatKg(line.consumed)}</td>
-                  <td style={td}>{formatKg(line.produced)}</td>
-                  <td style={td}>{formatKg(line.dispatched)}</td>
-                  <td style={td}>{formatKg(line.approvedAdjustments)}</td>
                   <td style={td}>{formatKg(line.systemClosing)}</td>
                   <td style={td}>
                     <input
@@ -591,7 +512,7 @@ export default function MonthlyAudit() {
                   <td style={td}><span style={pill(line.statusType)}>{line.status}</span></td>
                   <td style={td}>
                     {line.statusType === "danger" ? (
-                      <button onClick={() => approveAdjustment(line)} style={miniButton}>Approve Adjustment</button>
+                      <button onClick={() => approveAdjustment(line)} style={miniButton}>Approve Difference</button>
                     ) : line.status}
                   </td>
                 </tr>
@@ -600,6 +521,33 @@ export default function MonthlyAudit() {
           </table>
         </div>
       </Section>
+
+      <div style={twoColumn}>
+        <Section title="Production Summary">
+          <ReconTable
+            rows={[
+              ["RM Received", close.rm.purchasedKg],
+              ["RM Used", close.rm.consumedKg],
+              ["FG Made", close.production.fgProducedKg],
+              ["Dispatched", close.production.dispatchKg],
+              ["Waste / Rework", close.materialFlow.wasteSaleKg + close.materialFlow.trueLossKg + close.materialFlow.recoveryReuseKg],
+              ["Recovery %", close.production.overallRecovery, "percent"],
+            ]}
+          />
+        </Section>
+
+        <Section title="Money Summary">
+          <ReconTable
+            rows={[
+              ["Sales", close.profitability.salesValue, "currency"],
+              ["RM Cost", close.costs.estimatedRmConsumedValue, "currency"],
+              ["Stores Cost", close.costs.storesIssueValue, "currency"],
+              ["Factory Expenses", close.costs.factoryExpenseValue, "currency"],
+              ["Profit", close.profitability.manufacturingProfit, "currency"],
+            ]}
+          />
+        </Section>
+      </div>
 
       <Section title="Sign Off">
         <div style={formGrid}>
@@ -615,7 +563,7 @@ export default function MonthlyAudit() {
       <div style={closePanel}>
         <div>
           <h2 style={{ margin: 0 }}>Close Month</h2>
-          <div style={muted}>Close is allowed only after physical stock, differences and sign-off are complete.</div>
+          <div style={muted}>Close is allowed only after actual stock, differences, and sign-off are complete.</div>
         </div>
         <button onClick={closeMonth} style={readyToClose ? closeButton : disabledButton}>Close Month</button>
       </div>
@@ -642,7 +590,7 @@ function ReconTable({ rows }) {
           {rows.map(([label, value, type]) => (
             <tr key={label}>
               <td style={td}><b>{label}</b></td>
-              <td style={td}>{type === "currency" ? formatCurrency(value) : type === "percent" ? formatPercent(value) : formatKg(value)}</td>
+              <td style={td}>{type === "currency" ? formatMoney(value) : type === "percent" ? formatPercent(value) : formatKg(value)}</td>
             </tr>
           ))}
         </tbody>
@@ -743,8 +691,16 @@ function formatKg(value) {
   return `${num(value).toLocaleString("en-IN", { maximumFractionDigits: 2 })} kg`;
 }
 
+function formatTon(value) {
+  return `${(num(value) / 1000).toLocaleString("en-IN", { maximumFractionDigits: 1 })} T`;
+}
+
 function formatCurrency(value) {
   return `₹${num(value).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+}
+
+function formatMoney(value) {
+  return `\u20B9${num(value).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 }
 
 function formatPercent(value) {
@@ -765,6 +721,8 @@ const title = { margin: "4px 0", fontSize: 30, fontWeight: 900 };
 const subtitle = { color: "#64748b", fontWeight: 700 };
 const panel = { background: "white", border: "1px solid #e5e7eb", borderRadius: 16, padding: 18, marginBottom: 18, boxShadow: "0 10px 30px rgba(15,23,42,0.06)" };
 const panelTitle = { margin: "0 0 14px", fontSize: 20, fontWeight: 900 };
+const monthBanner = { background: "#0f766e", color: "white", borderRadius: 16, padding: 18, marginBottom: 18, fontSize: 18, boxShadow: "0 10px 30px rgba(15,118,110,0.2)" };
+const twoColumn = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 18 };
 const cardGrid = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 };
 const readinessCard = (ok) => ({ background: ok ? "#ecfdf5" : "#fff7ed", border: `1px solid ${ok ? "#bbf7d0" : "#fed7aa"}`, borderRadius: 14, padding: 14 });
 const cardLabel = { color: "#475569", fontWeight: 800, fontSize: 12 };

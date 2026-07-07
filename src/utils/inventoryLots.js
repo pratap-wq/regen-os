@@ -12,6 +12,13 @@ export function buildInventoryLots({
   const lots = [];
 
   rmRows.forEach((r) => {
+    const qcStatus = String(r.qcStatus || "").toUpperCase();
+    const status = String(r.status || "").toUpperCase();
+    const isLegacyWithoutQc = !qcStatus && status !== "QC_PENDING";
+    const isApproved = qcStatus === "APPROVED" || isLegacyWithoutQc;
+
+    if (!isApproved || status === "REJECTED" || status === "HOLD") return;
+
     const qty = n(r.netWeight || r.quantityKg);
     if (qty > 0) {
       lots.push({

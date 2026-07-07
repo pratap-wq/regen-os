@@ -27,19 +27,14 @@ export default function RMInward() {
     grossWeight: "",
     tareWeight: "",
     netWeight: "",
+    sampleRequired: "YES",
+    qcStatus: "PENDING",
     transportPaidBy: "SUPPLIER",
     transportCost: "",
     transportRemarks: "",
     weightDifferenceKg: "",
     weightDifferencePercent: "",
     differenceType: "MATCH",
-    deductionRequired: "NO",
-    financeRemarks: "",
-    debitNoteStatus: "NOT_REQUIRED",
-    moisture: "",
-    contamination: "",
-    estimatedRecovery: "",
-    ratePerKg: "",
     remarks: "",
     createdBy: "Pratap",
   };
@@ -121,19 +116,10 @@ export default function RMInward() {
 
     if (referenceQty <= 0 || Math.abs(diff) < 0.01) {
       updated.differenceType = "MATCH";
-      updated.deductionRequired = "NO";
-      updated.debitNoteStatus = "NOT_REQUIRED";
     } else if (diff < 0) {
       updated.differenceType = "SHORTAGE";
-      updated.deductionRequired = "YES";
-      updated.debitNoteStatus =
-        updated.debitNoteStatus === "NOT_REQUIRED"
-          ? "PENDING"
-          : updated.debitNoteStatus || "PENDING";
     } else {
       updated.differenceType = "EXCESS";
-      updated.deductionRequired = "NO";
-      updated.debitNoteStatus = "NOT_REQUIRED";
     }
 
     return updated;
@@ -201,10 +187,12 @@ export default function RMInward() {
       const res = await apiCall({
         fn: "rm.add",
         ...payload,
+        status: "QC_PENDING",
+        qcStatus: "PENDING",
       });
 
       if (res.ok) {
-        setStatus("RM inward saved");
+        setStatus("RM inward saved. QC status is Pending.");
         setForm(blankForm);
         loadData();
       } else {
@@ -231,6 +219,7 @@ export default function RMInward() {
         ...payload,
         date: dateForInput(payload.date),
         inwardId: editingRow.inwardId,
+        qcStatus: editingRow.qcStatus || "PENDING",
       });
 
       if (res.ok === false) {
@@ -260,11 +249,6 @@ export default function RMInward() {
 
   const totalRM = filteredRows.reduce((sum, r) => sum + n(r.netWeight), 0);
 
-  const totalRMValue = filteredRows.reduce(
-    (sum, r) => sum + n(r.netWeight) * n(r.ratePerKg),
-    0
-  );
-
   const shortageKg = filteredRows
     .filter((r) => String(r.differenceType || "").toUpperCase() === "SHORTAGE")
     .reduce((s, r) => s + Math.abs(n(r.weightDifferenceKg)), 0);
@@ -273,13 +257,15 @@ export default function RMInward() {
     .filter((r) => String(r.differenceType || "").toUpperCase() === "EXCESS")
     .reduce((s, r) => s + n(r.weightDifferenceKg), 0);
 
-  const pendingDeductions = filteredRows.filter(
+  const qcPendingCount = filteredRows.filter(
     (r) =>
-      String(r.deductionRequired || "").toUpperCase() === "YES" &&
-      String(r.debitNoteStatus || "").toUpperCase() !== "CLOSED"
+      String(r.qcStatus || "PENDING").toUpperCase() === "PENDING" ||
+      String(r.status || "").toUpperCase() === "QC_PENDING"
   ).length;
 
-  const avgRMPrice = totalRM > 0 ? (totalRMValue / totalRM).toFixed(2) : 0;
+  const qcApprovedCount = filteredRows.filter(
+    (r) => String(r.qcStatus || "").toUpperCase() === "APPROVED"
+  ).length;
 
   const materialVolumes = useMemo(() => {
     const map = {};
@@ -290,20 +276,17 @@ export default function RMInward() {
         map[material] = {
           material,
           qtyKg: 0,
-          value: 0,
           entries: 0,
         };
       }
 
       map[material].qtyKg += n(r.netWeight);
-      map[material].value += n(r.netWeight) * n(r.ratePerKg);
       map[material].entries += 1;
     });
 
     return Object.values(map)
       .map((r) => ({
         ...r,
-        avgRate: r.qtyKg > 0 ? r.value / r.qtyKg : 0,
         sharePercent: totalRM > 0 ? (r.qtyKg / totalRM) * 100 : 0,
       }))
       .sort((a, b) => b.qtyKg - a.qtyKg);
@@ -340,11 +323,10 @@ export default function RMInward() {
 
       <div className="factory-kpi-grid">
         <KpiCard title="RM Qty" value={`${totalRM.toFixed(0)} Kg`} />
-        <Card title="RM Value" value={`₹ ${totalRMValue.toFixed(0)}`} />
-        <Card title="Avg RM Price" value={`₹ ${avgRMPrice}`} />
+        <KpiCard title="QC Pending" value={qcPendingCount} tone={qcPendingCount > 0 ? "warning" : "neutral"} />
+        <KpiCard title="QC Approved" value={qcApprovedCount} tone="positive" />
         <KpiCard title="Shortage" value={`${shortageKg.toFixed(0)} Kg`} tone={shortageKg > 0 ? "warning" : "neutral"} />
         <KpiCard title="Excess" value={`${excessKg.toFixed(0)} Kg`} tone="neutral" />
-        <KpiCard title="Pending Deductions" value={pendingDeductions} tone={pendingDeductions > 0 ? "warning" : "neutral"} />
       </div>
 
       <div style={materialBox}>
@@ -366,9 +348,7 @@ export default function RMInward() {
                 <div style={materialMeta}>
                   {(m.qtyKg / 1000).toFixed(1)} T | {m.sharePercent.toFixed(1)}% of RM
                 </div>
-                <div style={materialMeta}>
-                  ₹ {m.value.toFixed(0)} | Avg ₹ {m.avgRate.toFixed(2)}/kg | {m.entries} entries
-                </div>
+                <div style={materialMeta}>{m.entries} receiving entries</div>
               </div>
             ))}
           </div>
@@ -472,6 +452,18 @@ export default function RMInward() {
         <Field label="Factory Net Kg">
           <input name="netWeight" value={form.netWeight} readOnly style={readonlyStyle} />
         </Field>
+
+        <Field label="Sample Required">
+          <select name="sampleRequired" value={form.sampleRequired} onChange={onChange} style={inputStyle}>
+            <option>YES</option>
+            <option>NO</option>
+          </select>
+        </Field>
+
+        <Field label="QC Status">
+          <input value="PENDING" readOnly style={readonlyStyle} />
+        </Field>
+
         <Field label="Transport Paid By">
           <select
             name="transportPaidBy"
@@ -515,46 +507,6 @@ export default function RMInward() {
           <input value={form.differenceType} readOnly style={differenceStyle(form.differenceType)} />
         </Field>
 
-        <SectionTitle text="Quality & Commercials" />
-
-        <Field label="Moisture %">
-          <input type="number" name="moisture" value={form.moisture} onChange={onChange} style={inputStyle} />
-        </Field>
-
-        <Field label="Contamination %">
-          <input type="number" name="contamination" value={form.contamination} onChange={onChange} style={inputStyle} />
-        </Field>
-
-        <Field label="Recovery %">
-          <input type="number" name="estimatedRecovery" value={form.estimatedRecovery} onChange={onChange} style={inputStyle} />
-        </Field>
-
-        <Field label="Rate/Kg">
-          <input type="number" name="ratePerKg" value={form.ratePerKg} onChange={onChange} style={inputStyle} />
-        </Field>
-
-        <SectionTitle text="Finance Deduction Control" />
-
-        <Field label="Deduction Required">
-          <select name="deductionRequired" value={form.deductionRequired} onChange={onChange} style={inputStyle}>
-            <option>NO</option>
-            <option>YES</option>
-          </select>
-        </Field>
-
-        <Field label="Debit Note Status">
-          <select name="debitNoteStatus" value={form.debitNoteStatus} onChange={onChange} style={inputStyle}>
-            <option>NOT_REQUIRED</option>
-            <option>PENDING</option>
-            <option>RAISED</option>
-            <option>CLOSED</option>
-          </select>
-        </Field>
-
-        <Field label="Finance Remarks">
-          <textarea name="financeRemarks" value={form.financeRemarks} onChange={onChange} style={textareaStyle} />
-        </Field>
-
         <Field label="Operations Remarks">
           <textarea name="remarks" value={form.remarks} onChange={onChange} style={textareaStyle} />
         </Field>
@@ -577,7 +529,7 @@ export default function RMInward() {
           "material",
           "color",
           "differenceType",
-          "debitNoteStatus",
+          "qcStatus",
         ]}
         columns={[
           { key: "inwardId", label: "Inward ID" },
@@ -597,15 +549,8 @@ export default function RMInward() {
           },
           { key: "weightDifferenceKg", label: "Diff Kg" },
           { key: "differenceType", label: "Type" },
-          { key: "deductionRequired", label: "Deduction" },
-          { key: "debitNoteStatus", label: "Debit Note" },
-          { key: "ratePerKg", label: "Rate" },
-          {
-            key: "value",
-            label: "Value",
-            render: (r) => `₹ ${(n(r.netWeight) * n(r.ratePerKg)).toFixed(0)}`,
-            renderExport: (r) => (n(r.netWeight) * n(r.ratePerKg)).toFixed(0),
-          },
+          { key: "sampleRequired", label: "Sample Required" },
+          { key: "qcStatus", label: "QC Status", render: (r) => r.qcStatus || "PENDING" },
         ]}
         onEdit={editRow}
         onDelete={deleteRow}
@@ -708,6 +653,18 @@ export default function RMInward() {
               <Field label="Factory Net Kg">
                 <input value={editingRow.netWeight || ""} readOnly style={readonlyStyle} />
               </Field>
+
+              <Field label="Sample Required">
+                <select name="sampleRequired" value={editingRow.sampleRequired || "YES"} onChange={onEditChange} style={inputStyle}>
+                  <option>YES</option>
+                  <option>NO</option>
+                </select>
+              </Field>
+
+              <Field label="QC Status">
+                <input value={editingRow.qcStatus || "PENDING"} readOnly style={readonlyStyle} />
+              </Field>
+
               <Field label="Transport Paid By">
                 <select
                   name="transportPaidBy"
@@ -751,46 +708,6 @@ export default function RMInward() {
                 <input value={editingRow.differenceType || ""} readOnly style={differenceStyle(editingRow.differenceType)} />
               </Field>
 
-              <SectionTitle text="Quality & Commercials" />
-
-              <Field label="Moisture %">
-                <input type="number" name="moisture" value={editingRow.moisture || ""} onChange={onEditChange} style={inputStyle} />
-              </Field>
-
-              <Field label="Contamination %">
-                <input type="number" name="contamination" value={editingRow.contamination || ""} onChange={onEditChange} style={inputStyle} />
-              </Field>
-
-              <Field label="Recovery %">
-                <input type="number" name="estimatedRecovery" value={editingRow.estimatedRecovery || ""} onChange={onEditChange} style={inputStyle} />
-              </Field>
-
-              <Field label="Rate/Kg">
-                <input type="number" name="ratePerKg" value={editingRow.ratePerKg || ""} onChange={onEditChange} style={inputStyle} />
-              </Field>
-
-              <SectionTitle text="Finance Deduction Control" />
-
-              <Field label="Deduction Required">
-                <select name="deductionRequired" value={editingRow.deductionRequired || "NO"} onChange={onEditChange} style={inputStyle}>
-                  <option>NO</option>
-                  <option>YES</option>
-                </select>
-              </Field>
-
-              <Field label="Debit Note Status">
-                <select name="debitNoteStatus" value={editingRow.debitNoteStatus || "NOT_REQUIRED"} onChange={onEditChange} style={inputStyle}>
-                  <option>NOT_REQUIRED</option>
-                  <option>PENDING</option>
-                  <option>RAISED</option>
-                  <option>CLOSED</option>
-                </select>
-              </Field>
-
-              <Field label="Finance Remarks">
-                <textarea name="financeRemarks" value={editingRow.financeRemarks || ""} onChange={onEditChange} style={textareaStyle} />
-              </Field>
-
               <Field label="Operations Remarks">
                 <textarea name="remarks" value={editingRow.remarks || ""} onChange={onEditChange} style={textareaStyle} />
               </Field>
@@ -811,15 +728,6 @@ export default function RMInward() {
     </PageLayout>
   );
 }
-function Card({ title, value }) {
-  return (
-    <div style={card}>
-      <div style={cardTitle}>{title}</div>
-      <div style={cardValue}>{value}</div>
-    </div>
-  );
-}
-
 function SectionTitle({ text }) {
   return (
     <div

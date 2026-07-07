@@ -18,7 +18,7 @@ export default function Quality() {
     ppGm: "",
     sinkMaterialGm: "",
     remarks: "",
-    status: "QC_COMPLETED",
+    status: "APPROVED",
     createdBy: "Quality",
   };
 
@@ -436,7 +436,7 @@ export default function Quality() {
 
           <div style={twoCol}>
             <div style={card}>
-              <h2 style={sectionTitle}>Pending RM Quality</h2>
+              <h2 style={sectionTitle}>Incoming Material QC</h2>
 
               {pendingRmRows.length === 0 ? (
                 <div style={empty}>No pending RM quality.</div>
@@ -646,6 +646,14 @@ export default function Quality() {
 
               <Field label="Accept gm">
                 <input readOnly value={rmCalculated.acceptGm} style={readonly} />
+              </Field>
+
+              <Field label="QC Decision">
+                <select name="status" value={rmForm.status} onChange={onRmChange} style={input}>
+                  <option value="APPROVED">Approved</option>
+                  <option value="REJECTED">Rejected</option>
+                  <option value="HOLD">Hold</option>
+                </select>
               </Field>
 
               <Field label="Remarks">

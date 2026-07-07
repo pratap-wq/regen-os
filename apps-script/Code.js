@@ -762,6 +762,8 @@ const REGEN_DB_SCHEMA = {
     "grossWeight",
     "tareWeight",
     "netWeight",
+    "sampleRequired",
+    "qcStatus",
     "moisture",
     "contamination",
     "estimatedRecovery",
@@ -4180,6 +4182,40 @@ function validateManufacturingCutover(data = {}) {
 }
 // RM
 
+function postApprovedRmInventory_(inwardId, data = {}, dateValue) {
+  const existing = getRowsAsObjects("Inventory_Ledger").find(function(row) {
+    return (
+      String(row.module || "").toUpperCase() === "RM_INWARD" &&
+      String(row.targetRef || "") === String(inwardId || "") &&
+      String(row.status || "ACTIVE").toUpperCase() !== "DELETED"
+    );
+  });
+
+  if (existing) {
+    return { posted: false, reason: "ALREADY_POSTED", ledgerId: existing.ledgerId || "" };
+  }
+
+  addInventoryLedger({
+    date: dateValue || normalizeDateOnly_(data.date || todayYmd()),
+    module: "RM_INWARD",
+    movementType: "IN",
+    itemType: "RM",
+    itemName: data.material || "",
+    sourceRef: data.supplier || "",
+    targetRef: inwardId,
+    qtyIn: num(data.netWeight),
+    qtyOut: 0,
+    unit: "Kg",
+    remarks:
+      data.transportPaidBy === "REGEN"
+        ? String(data.remarks || "") + " | Transport by Regen"
+        : data.remarks || "",
+    createdBy: data.createdBy || "Quality",
+  });
+
+  return { posted: true };
+}
+
 function addRM(data = {}) {
   const sh = getSheet("RM_Inward");
 
@@ -4220,6 +4256,8 @@ function addRM(data = {}) {
     grossWeight: num(data.grossWeight),
     tareWeight: num(data.tareWeight),
     netWeight: num(data.netWeight),
+    sampleRequired: data.sampleRequired || "YES",
+    qcStatus: data.qcStatus || "PENDING",
 
     transportPaidBy: data.transportPaidBy || "SUPPLIER",
     transportCost: num(data.transportCost),
@@ -4230,30 +4268,16 @@ function addRM(data = {}) {
     estimatedRecovery: data.estimatedRecovery || "",
     ratePerKg: num(data.ratePerKg),
     remarks: data.remarks || "",
-    status: data.status || "ACTIVE",
+    status: data.status || "QC_PENDING",
     createdBy: data.createdBy || "System",
     createdAt: new Date(),
   });
 
-  addInventoryLedger({
-    date,
-    module: "RM_INWARD",
-    movementType: "IN",
-    itemType: "RM",
-    itemName: data.material || "",
-    sourceRef: data.supplier || "",
-    targetRef: inwardId,
-    qtyIn: num(data.netWeight),
-    qtyOut: 0,
-    unit: "Kg",
-    remarks:
-      data.transportPaidBy === "REGEN"
-        ? `${data.remarks || ""} | Transport by Regen ₹${num(data.transportCost)}`
-        : data.remarks || "",
-    createdBy: data.createdBy || "System",
-  });
-
-  return output({ ok: true, inwardId });
+  let ledger = { posted: false, reason: "QC_PENDING" };
+  if (String(data.qcStatus || "").toUpperCase() === "APPROVED") {
+    ledger = postApprovedRmInventory_(inwardId, data, date);
+  }
+  return output({ ok: true, inwardId, ledger });
 }
 
 function updateRM(data = {}) {
@@ -4265,6 +4289,8 @@ function updateRM(data = {}) {
 
   ensureHeaders_("RM_Inward", [
     "status",
+    "sampleRequired",
+    "qcStatus",
     "transportPaidBy",
     "transportCost",
     "transportRemarks",
@@ -4279,15 +4305,13 @@ function updateRM(data = {}) {
     grossWeight: num(data.grossWeight),
     tareWeight: num(data.tareWeight),
     netWeight: num(data.netWeight),
+    sampleRequired: data.sampleRequired || "YES",
+    qcStatus: data.qcStatus || "",
 
     transportPaidBy: data.transportPaidBy || "SUPPLIER",
     transportCost: num(data.transportCost),
     transportRemarks: data.transportRemarks || "",
 
-    moisture: data.moisture || "",
-    contamination: data.contamination || "",
-    estimatedRecovery: data.estimatedRecovery || "",
-    ratePerKg: num(data.ratePerKg),
     remarks: data.remarks || "",
     status: data.status || "",
   });
@@ -7037,7 +7061,41 @@ function addRmQuality(data = {}) {
     createdAt: new Date(),
   });
 
-  return output({ ok: true, qualityId });
+  const rmInwardId = data.rmInwardId || data.inwardId || "";
+  const decision = String(data.status || "APPROVED").toUpperCase();
+  let receivingUpdate = { updated: false };
+  let ledger = { posted: false, reason: "NOT_APPROVED" };
+
+  if (rmInwardId) {
+    const rmRow = getRowById_("RM_Inward", "inwardId", rmInwardId);
+    ensureHeaders_("RM_Inward", ["qcStatus", "status"]);
+    const receivingStatus =
+      decision === "APPROVED"
+        ? "APPROVED"
+        : decision === "REJECTED"
+        ? "REJECTED"
+        : "HOLD";
+
+    updateById("RM_Inward", "inwardId", rmInwardId, {
+      qcStatus: receivingStatus,
+      status: receivingStatus,
+    });
+
+    receivingUpdate = { updated: true, qcStatus: receivingStatus };
+
+    if (decision === "APPROVED" && rmRow) {
+      ledger = postApprovedRmInventory_(
+        rmInwardId,
+        {
+          ...rmRow,
+          createdBy: data.createdBy || "Quality",
+        },
+        normalizeDateOnly_(rmRow.date || data.date || todayYmd())
+      );
+    }
+  }
+
+  return output({ ok: true, qualityId, receivingUpdate, ledger });
 }
 
 function updateRmQuality(data = {}) {
@@ -7049,7 +7107,7 @@ function updateRmQuality(data = {}) {
 
   const percent = (v) => (sample > 0 ? round2((num(v) / sample) * 100) : 0);
 
-  return updateById("RM_Quality", "qualityId", data.qualityId, {
+  const result = updateById("RM_Quality", "qualityId", data.qualityId, {
     date: normalizeDateOnly_(data.date || todayYmd()),
     rmInwardId: data.rmInwardId || data.inwardId || "",
     formOfMaterial: data.formOfMaterial || "",
@@ -7068,6 +7126,38 @@ function updateRmQuality(data = {}) {
     remarks: data.remarks || "",
     status: data.status || "",
   });
+
+  const rmInwardId = data.rmInwardId || data.inwardId || "";
+  const decision = String(data.status || "").toUpperCase();
+
+  if (rmInwardId && decision) {
+    const rmRow = getRowById_("RM_Inward", "inwardId", rmInwardId);
+    ensureHeaders_("RM_Inward", ["qcStatus", "status"]);
+    const receivingStatus =
+      decision === "APPROVED"
+        ? "APPROVED"
+        : decision === "REJECTED"
+        ? "REJECTED"
+        : "HOLD";
+
+    updateById("RM_Inward", "inwardId", rmInwardId, {
+      qcStatus: receivingStatus,
+      status: receivingStatus,
+    });
+
+    if (decision === "APPROVED" && rmRow) {
+      postApprovedRmInventory_(
+        rmInwardId,
+        {
+          ...rmRow,
+          createdBy: data.createdBy || "Quality",
+        },
+        normalizeDateOnly_(rmRow.date || data.date || todayYmd())
+      );
+    }
+  }
+
+  return result;
 }
 
 function addFgQuality(data = {}) {

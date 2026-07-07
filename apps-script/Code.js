@@ -1215,6 +1215,7 @@ const REGEN_DB_SCHEMA = {
     "qualityId",
     "date",
     "rmInwardId",
+    "legacyQualityRef",
     "rubberPercent",
     "ppPercent",
     "sinkMaterialPercent",
@@ -1245,6 +1246,7 @@ const REGEN_DB_SCHEMA = {
     "date",
     "extrusionBatchId",
     "fgBatchCode",
+    "legacyQualityRef",
     "moisturePercent",
     "mfi",
     "izod",
@@ -7200,6 +7202,7 @@ function addRmQuality(data = {}) {
     "qualityId",
     "date",
     "rmInwardId",
+    "legacyQualityRef",
     "rubberPercent",
     "ppPercent",
     "sinkMaterialPercent",
@@ -7233,6 +7236,7 @@ function addRmQuality(data = {}) {
     qualityId,
     date,
     rmInwardId: data.rmInwardId || data.inwardId || "",
+    legacyQualityRef: data.legacyQualityRef || "",
     rubberPercent: num(data.rubberPercent),
     ppPercent: num(data.ppPercent),
     sinkMaterialPercent: num(data.sinkMaterialPercent),
@@ -7361,6 +7365,7 @@ function addFgQuality(data = {}) {
     "date",
     "extrusionBatchId",
     "fgBatchCode",
+    "legacyQualityRef",
     "moisturePercent",
     "mfi",
     "izod",
@@ -7387,6 +7392,7 @@ function addFgQuality(data = {}) {
     date,
     extrusionBatchId: data.extrusionBatchId || data.fgBatchCode || "",
     fgBatchCode: data.fgBatchCode || data.extrusionBatchId || "",
+    legacyQualityRef: data.legacyQualityRef || "",
     moisturePercent: num(data.moisturePercent),
     mfi: num(data.mfi),
     izod: num(data.izod),
@@ -7428,6 +7434,256 @@ function updateFgQuality(data = {}) {
     remarks: data.remarks || "",
     status: data.status || "",
   });
+}
+
+function qualityDateOnly_(value) {
+  if (!value) return "";
+  if (Object.prototype.toString.call(value) === "[object Date]" && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+
+  const text = String(value || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  if (/^\d{1,2}[/-]\d{1,2}[/-]\d{4}$/.test(text)) {
+    const parts = text.split(/[/-]/).map((part) => part.trim());
+    const first = Number(parts[0]);
+    const second = Number(parts[1]);
+    const year = Number(parts[2]);
+    const day = first > 12 ? first : second;
+    const month = first > 12 ? second : first;
+    if (year && month && day) {
+      return [
+        String(year).padStart(4, "0"),
+        String(month).padStart(2, "0"),
+        String(day).padStart(2, "0"),
+      ].join("-");
+    }
+  }
+
+  return "";
+}
+
+function qualityDateCompact_(value) {
+  return qualityDateOnly_(value).replace(/-/g, "");
+}
+
+function qualityTrailingSequence_(value, fallback) {
+  const match = String(value || "").match(/(\d+)\s*$/);
+  const parsed = match ? Number(match[1]) : 0;
+  return String(parsed || fallback || 1).padStart(3, "0");
+}
+
+function qualityIsNewReceivingRef_(value) {
+  return /^MR-\d{8}-[A-Z0-9]+-\d{3}$/i.test(String(value || "").trim());
+}
+
+function qualityIsNewFgRef_(value) {
+  return /^[A-Z0-9]+-\d{8}-[A-Z0-9]+-\d{3}$/i.test(String(value || "").trim());
+}
+
+function qualityCleanGrade_(value) {
+  const text = String(value || "").trim().toUpperCase();
+  const gradeMatch = text.match(/\bE[1-5]\b/);
+  if (gradeMatch) return gradeMatch[0];
+
+  return cleanCodePart_(text, "FG");
+}
+
+function qualityCleanShift_(value) {
+  const text = String(value || "").trim().toUpperCase();
+  const match = text.match(/[A-Z0-9]/);
+  return match ? match[0] : "A";
+}
+
+function qualityRowsWithIndex_(sheetName) {
+  const sheet = getSheet(sheetName);
+  const values = sheet.getDataRange().getValues();
+  if (!values.length) return { sheet, headers: [], rows: [] };
+
+  const headers = values[0].map((header) => String(header || "").trim());
+  const rows = values.slice(1).map((row, index) => {
+    const record = { __rowNumber: index + 2 };
+    headers.forEach((header, colIndex) => {
+      if (header) record[header] = row[colIndex];
+    });
+    return record;
+  });
+
+  return { sheet, headers, rows };
+}
+
+function qualityIndexRowsByRefs_(rows, fields) {
+  const map = {};
+  rows.forEach((row, index) => {
+    fields.forEach((field) => {
+      const value = String(row[field] || "").trim();
+      if (value && !map[value]) {
+        map[value] = { row, index };
+      }
+    });
+  });
+  return map;
+}
+
+function qualityRmReferenceFromRow_(oldRef, rmMatch) {
+  const row = rmMatch && rmMatch.row ? rmMatch.row : {};
+  const existing = String(row.inwardId || row.receivingRef || "").trim();
+  if (qualityIsNewReceivingRef_(existing)) return existing;
+
+  const date = qualityDateCompact_(row.date || row.invoiceDate);
+  const supplier = cleanCodePart_(row.supplier || row.supplierName || "SUP", "SUP");
+  if (!date || !supplier) return "";
+
+  return "MR-" + date + "-" + supplier + "-" + qualityTrailingSequence_(oldRef, (rmMatch && rmMatch.index ? rmMatch.index : 0) + 1);
+}
+
+function qualityFgReferenceFromRow_(oldRef, fgMatch, qualityRow) {
+  const row = fgMatch && fgMatch.row ? fgMatch.row : {};
+  const existing = String(row.fgBatchCode || row.extrusionBatchId || row.batchId || "").trim();
+  if (qualityIsNewFgRef_(existing)) return existing;
+
+  const grade = qualityCleanGrade_(row.productionGrade || row.grade || row.material || row.outputMaterial || qualityRow.fgBatchCode || qualityRow.grade);
+  const date = qualityDateCompact_(row.date || row.productionDate || qualityRow.date);
+  const shift = qualityCleanShift_(row.shift || qualityRow.shift);
+  if (!grade || !date || !shift) return "";
+
+  return grade + "-" + date + "-" + shift + "-" + qualityTrailingSequence_(oldRef, (fgMatch && fgMatch.index ? fgMatch.index : 0) + 1);
+}
+
+function migrateQualityReferences(dryRun) {
+  const isDryRun = dryRun === true || String(dryRun || "").toLowerCase() === "true";
+
+  if (!isDryRun) {
+    ensureHeaders_("RM_Quality", ["legacyQualityRef"]);
+    ensureHeaders_("FG_Quality", ["legacyQualityRef"]);
+  }
+
+  const rmQualityData = qualityRowsWithIndex_("RM_Quality");
+  const fgQualityData = qualityRowsWithIndex_("FG_Quality");
+  const rmInwardRows = getRowsAsObjects("RM_Inward");
+  const extrusionRows = getRowsAsObjects("Extrusion_Batches");
+  const rmIndex = qualityIndexRowsByRefs_(rmInwardRows, [
+    "inwardId",
+    "receivingRef",
+    "batchId",
+    "legacyQualityRef",
+    "legacySourceId",
+  ]);
+  const fgIndex = qualityIndexRowsByRefs_(extrusionRows, [
+    "extrusionBatchId",
+    "fgBatchCode",
+    "batchId",
+    "lotNo",
+    "legacyQualityRef",
+    "legacySourceId",
+  ]);
+
+  const summary = {
+    ok: true,
+    dryRun: isDryRun,
+    migrationFunction: "migrateQualityReferences",
+    oldRefsFound: 0,
+    refsConvertible: 0,
+    refsNeedingManualReview: 0,
+    skippedAlreadyMigrated: 0,
+    skippedAlreadyNew: 0,
+    converted: [],
+    manualReview: [],
+  };
+
+  const rmLegacyCol = rmQualityData.headers.indexOf("legacyQualityRef") + 1;
+  const rmRefCol = rmQualityData.headers.indexOf("rmInwardId") + 1;
+  const fgLegacyCol = fgQualityData.headers.indexOf("legacyQualityRef") + 1;
+  const fgExtrusionCol = fgQualityData.headers.indexOf("extrusionBatchId") + 1;
+  const fgBatchCol = fgQualityData.headers.indexOf("fgBatchCode") + 1;
+
+  rmQualityData.rows.forEach((row) => {
+    const oldRef = String(row.rmInwardId || row.inwardId || row.batchId || row.sourceRef || "").trim();
+    if (!oldRef) return;
+    if (row.legacyQualityRef) {
+      summary.skippedAlreadyMigrated++;
+      return;
+    }
+    if (qualityIsNewReceivingRef_(oldRef)) {
+      summary.skippedAlreadyNew++;
+      return;
+    }
+
+    summary.oldRefsFound++;
+    const rmMatch = rmIndex[oldRef];
+    const newRef = rmMatch ? qualityRmReferenceFromRow_(oldRef, rmMatch) : "";
+
+    if (!newRef || !rmMatch) {
+      summary.refsNeedingManualReview++;
+      summary.manualReview.push({
+        sheet: "RM_Quality",
+        qualityId: row.qualityId || "",
+        oldRef,
+        reason: rmMatch ? "Missing linked receiving date or supplier" : "No matching RM_Inward row",
+      });
+      return;
+    }
+
+    summary.refsConvertible++;
+    summary.converted.push({
+      sheet: "RM_Quality",
+      qualityId: row.qualityId || "",
+      oldRef,
+      newRef,
+      linkedSheet: "RM_Inward",
+    });
+
+    if (!isDryRun) {
+      rmQualityData.sheet.getRange(row.__rowNumber, rmLegacyCol).setValue(oldRef);
+      rmQualityData.sheet.getRange(row.__rowNumber, rmRefCol).setValue(newRef);
+    }
+  });
+
+  fgQualityData.rows.forEach((row) => {
+    const oldRef = String(row.extrusionBatchId || row.fgBatchCode || row.batchId || row.sourceRef || "").trim();
+    if (!oldRef) return;
+    if (row.legacyQualityRef) {
+      summary.skippedAlreadyMigrated++;
+      return;
+    }
+    if (qualityIsNewFgRef_(oldRef)) {
+      summary.skippedAlreadyNew++;
+      return;
+    }
+
+    summary.oldRefsFound++;
+    const fgMatch = fgIndex[oldRef];
+    const newRef = fgMatch ? qualityFgReferenceFromRow_(oldRef, fgMatch, row) : "";
+
+    if (!newRef || !fgMatch) {
+      summary.refsNeedingManualReview++;
+      summary.manualReview.push({
+        sheet: "FG_Quality",
+        qualityId: row.qualityId || "",
+        oldRef,
+        reason: fgMatch ? "Missing linked extrusion date, grade, or shift" : "No matching Extrusion_Batches row",
+      });
+      return;
+    }
+
+    summary.refsConvertible++;
+    summary.converted.push({
+      sheet: "FG_Quality",
+      qualityId: row.qualityId || "",
+      oldRef,
+      newRef,
+      linkedSheet: "Extrusion_Batches",
+    });
+
+    if (!isDryRun) {
+      fgQualityData.sheet.getRange(row.__rowNumber, fgLegacyCol).setValue(oldRef);
+      fgQualityData.sheet.getRange(row.__rowNumber, fgExtrusionCol).setValue(newRef);
+      fgQualityData.sheet.getRange(row.__rowNumber, fgBatchCol).setValue(newRef);
+    }
+  });
+
+  Logger.log(JSON.stringify(summary, null, 2));
+  return summary;
 }
 
 function syncOldQualityData() {
@@ -8107,6 +8363,7 @@ function setupRegenOSBackend() {
       "qualityId",
       "date",
       "rmInwardId",
+      "legacyQualityRef",
       "formOfMaterial",
       "conditionOfMaterial",
       "sampleQtyGm",
@@ -8130,6 +8387,7 @@ function setupRegenOSBackend() {
       "date",
       "extrusionBatchId",
       "fgBatchCode",
+      "legacyQualityRef",
       "moisturePercent",
       "mfi",
       "colour",

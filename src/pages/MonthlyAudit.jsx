@@ -192,128 +192,10 @@ export default function MonthlyAudit() {
     return fallback;
   }, [materialGroupView, close]);
 
-  const materialLines = useMemo(() => {
-    const groups = hasMaterialGroupRows(materialGroupView?.groups)
-      ? materialGroupView.groups
-      : buildMaterialGroupsFromMaster(rows.materials);
-    const movementSummary = effectiveMovementSourceSummary;
-    const monthHasMovement =
-      num(movementSummary.rmReceivedKg) > 0 ||
-      num(movementSummary.rmUsedKg) > 0 ||
-      num(movementSummary.fgMadeKg) > 0 ||
-      num(movementSummary.dispatchedKg) > 0 ||
-      close.rm.purchasedKg > 0 ||
-      close.production.washInputKg > 0 ||
-      close.production.fgProducedKg > 0 ||
-      close.production.dispatchKg > 0;
-
-    const stockRows = MANUFACTURING_GROUPS.flatMap((category) =>
-      (groups[category] || []).map((material) => {
-        const key = `${category}|${material.materialId || material.materialCode || material.materialName}`;
-        const physicalValue = physicalMaterialLines[key] ?? "";
-        const related = rows.adjustments.filter((a) => {
-          const sameMonth = String(a.periodMonth || "") === String(month);
-          const sameSource = String(a.sourceRef || "") === `MONTH_CLOSE:${month}:${key}`;
-          const sameMaterial =
-            String(a.materialId || "") === String(material.materialId || "") ||
-            String(a.itemCode || a.material || "").toUpperCase() ===
-              String(material.materialName || material.materialCode || "").toUpperCase();
-          return sameMonth && (sameSource || sameMaterial);
-        });
-        const approvedAdjustmentKg = num(material.approvedAdjustments ?? material.adjusted);
-        const pendingAdjustmentKg = related
-          .filter((a) => ["DRAFT", "SUBMITTED", "PENDING"].includes(String(a.status || "").toUpperCase()))
-          .reduce((sum, a) => sum + num(a.quantityKg), 0);
-        const systemClosing = num(material.systemStock ?? material.balance);
-        const hasPhysical = physicalValue !== "" || (!monthHasMovement && Math.abs(systemClosing) <= 0.01);
-        const physicalKg = hasPhysical ? num(physicalValue) : 0;
-        const differenceKg = hasPhysical ? physicalKg - systemClosing : 0;
-        const remainingKg = differenceKg;
-
-        let rowStatus = "Physical Pending";
-        let statusType = "pending";
-        if (hasPhysical && Math.abs(differenceKg) <= 0.01) {
-          rowStatus = "Reconciled";
-          statusType = "success";
-        } else if (hasPhysical && Math.abs(remainingKg) <= 0.01 && Math.abs(approvedAdjustmentKg) > 0.01) {
-          rowStatus = "Reconciled";
-          statusType = "success";
-        } else if (hasPhysical && Math.abs(pendingAdjustmentKg) > 0.01) {
-          rowStatus = "Approval Pending";
-          statusType = "warning";
-        } else if (hasPhysical) {
-          rowStatus = "Check Difference";
-          statusType = "danger";
-        }
-
-        return {
-          key,
-          materialId: material.materialId || "",
-          materialCode: material.materialCode || "",
-          materialName: material.materialName || material.name || "",
-          group: category,
-          isException: Boolean(material.isException),
-          opening: num(material.opening),
-          inward: num(material.inward),
-          consumed: num(material.consumed),
-          produced: num(material.produced),
-          dispatched: num(material.dispatched),
-          issued: num(material.issued),
-          approvedAdjustments: approvedAdjustmentKg,
-          systemClosing,
-          physicalKg,
-          physicalValue,
-          hasPhysical,
-          differenceKg,
-          remainingKg,
-          pendingAdjustmentKg,
-          status: rowStatus,
-          statusType,
-        };
-      })
-    );
-
-    const backendExceptions = materialGroupView?.exceptionRows || [];
-    const fallbackExceptions =
-      backendExceptions.length === 0 && monthHasMovement && num(movementSummary.mappedKg) === 0
-        ? buildFallbackExceptionRows(movementSummary)
-        : [];
-
-    const exceptionRows = backendExceptions.concat(fallbackExceptions).map((material) => {
-      const key = `${material.category || "CHECK"}|${material.materialId || material.materialName}`;
-      const physicalValue = physicalMaterialLines[key] ?? "";
-      const systemClosing = num(material.systemStock ?? material.balance);
-      const hasPhysical = physicalValue !== "" || (!monthHasMovement && Math.abs(systemClosing) <= 0.01);
-      const physicalKg = hasPhysical ? num(physicalValue) : 0;
-      const differenceKg = hasPhysical ? physicalKg - systemClosing : 0;
-      return {
-        key,
-        materialId: material.materialId || "",
-        materialCode: material.materialCode || "CHECK",
-        materialName: material.materialName || "Unmapped Movement",
-        group: material.category || "CHECK",
-        isException: true,
-        opening: num(material.opening),
-        inward: num(material.inward),
-        consumed: num(material.consumed),
-        produced: num(material.produced),
-        dispatched: num(material.dispatched),
-        issued: num(material.issued),
-        approvedAdjustments: num(material.approvedAdjustments ?? material.adjusted),
-        systemClosing,
-        physicalKg,
-        physicalValue,
-        hasPhysical,
-        differenceKg,
-        remainingKg: differenceKg,
-        pendingAdjustmentKg: 0,
-        status: hasPhysical ? "Check Difference" : "Fix Mapping",
-        statusType: "danger",
-      };
-    });
-
-    return stockRows.concat(exceptionRows);
-  }, [materialGroupView, rows.materials, rows.adjustments, physicalMaterialLines, month, close, effectiveMovementSourceSummary]);
+  const materialLines = useMemo(
+    () => buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }),
+    [close, rows, physicalMaterialLines, month]
+  );
 
   const monthClosed = useMemo(
     () =>
@@ -358,7 +240,7 @@ export default function MonthlyAudit() {
       {
         title: "Physical Stock Entered?",
         ok: physicalDone,
-        next: physicalDone ? "Actual stock entered" : `${physicalPending || materialLines.length || 0} material(s) pending`,
+        next: physicalDone ? "Actual stock entered" : `${physicalPending || materialLines.length || 0} stock type(s) pending`,
       },
       {
         title: "Differences Resolved?",
@@ -395,10 +277,14 @@ export default function MonthlyAudit() {
 
   async function savePhysicalSnapshot({ silent = false } = {}) {
     const physicalRows = materialLines.map((line) => ({
+      key: line.key,
       materialId: line.materialId,
       materialCode: line.materialCode,
       materialName: line.materialName,
       category: line.group,
+      openingKg: line.opening,
+      flowInKg: line.flowIn,
+      flowOutKg: line.flowOut,
       systemKg: line.systemClosing,
       physicalKg: physicalMaterialLines[line.key] === "" ? "" : num(physicalMaterialLines[line.key]),
     }));
@@ -521,6 +407,18 @@ export default function MonthlyAudit() {
       storesIssueQty: close.costs.storesIssueValue,
       estimatedRmConsumedValue: close.costs.estimatedRmConsumedValue,
       manufacturingProfit: close.profitability.manufacturingProfit,
+      exceptions: JSON.stringify(materialLines.map((line) => ({
+        key: line.key,
+        stockType: line.materialName,
+        category: line.group,
+        openingKg: line.opening,
+        flowInKg: line.flowIn,
+        flowOutKg: line.flowOut,
+        systemKg: line.systemClosing,
+        physicalKg: line.physicalKg,
+        differenceKg: line.remainingKg,
+        status: line.status,
+      }))),
       productionSignoff: physical.productionSignoff,
       storesSignoff: physical.storesSignoff,
       accountsSignoff: physical.accountsSignoff,
@@ -576,10 +474,10 @@ export default function MonthlyAudit() {
             <thead>
               <tr>
                 {[
-                  "Material Code",
-                  "Material",
-                  "Type",
-                  "System Movement",
+                  "Stock Type",
+                  "Opening",
+                  "In",
+                  "Out",
                   "System Stock",
                   "Actual Stock",
                   "Difference",
@@ -592,10 +490,21 @@ export default function MonthlyAudit() {
             <tbody>
               {materialLines.map((line) => (
                 <tr key={line.key}>
-                  <td style={td}>{line.materialCode || "-"}</td>
                   <td style={td}><b>{line.materialName}</b></td>
-                  <td style={td}>{line.group}</td>
-                  <td style={td}>{movementSummary(line)}</td>
+                  <td style={td}>
+                    {line.openingEditable ? (
+                      <input
+                        value={physicalMaterialLines[openingKey(line.key)] ?? ""}
+                        onChange={(e) => onPhysicalChange(openingKey(line.key), e.target.value)}
+                        onBlur={() => savePhysicalSnapshot({ silent: true }).catch((err) => setStatus(err.message))}
+                        type="number"
+                        placeholder="Opening"
+                        style={qtyInput}
+                      />
+                    ) : formatKg(line.opening)}
+                  </td>
+                  <td style={td}>{formatKg(line.flowIn)}</td>
+                  <td style={td}>{formatKg(line.flowOut)}</td>
                   <td style={td}>{formatKg(line.systemClosing)}</td>
                   <td style={td}>
                     <input
@@ -609,7 +518,7 @@ export default function MonthlyAudit() {
                   </td>
                   <td style={td}>{line.hasPhysical ? formatKg(line.remainingKg) : "-"}</td>
                   <td style={td}>
-                    {line.statusType === "danger" && !line.isException ? (
+                    {line.statusType === "danger" ? (
                       <input
                         value={adjustmentReasons[line.key] || ""}
                         onChange={(e) => onReasonChange(line.key, e.target.value)}
@@ -620,9 +529,7 @@ export default function MonthlyAudit() {
                   </td>
                   <td style={td}><span style={pill(line.statusType)}>{line.status}</span></td>
                   <td style={td}>
-                    {line.isException ? (
-                      "Fix Mapping"
-                    ) : line.statusType === "danger" ? (
+                    {line.statusType === "danger" ? (
                       <button onClick={() => approveAdjustment(line)} style={miniButton}>Approve Difference</button>
                     ) : line.status}
                   </td>
@@ -786,13 +693,196 @@ function parsePhysicalMaterialLines(value) {
   try {
     const rows = typeof value === "string" ? JSON.parse(value || "[]") : value || [];
     return rows.reduce((map, row) => {
-      const key = `${row.category}|${row.materialId || row.materialCode || row.materialName}`;
+      const key = row.key || `${row.category}|${row.materialId || row.materialCode || row.materialName}`;
       map[key] = row.physicalKg === null || row.physicalKg === undefined ? "" : row.physicalKg;
+      if (row.openingKg !== null && row.openingKg !== undefined && row.openingKg !== "") {
+        map[openingKey(key)] = row.openingKg;
+      }
       return map;
     }, {});
   } catch {
     return {};
   }
+}
+
+function buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }) {
+  const previousClose = getPreviousClosedMonth(rows.closeRows, month);
+  const wasteReworkGenerated = getWasteReworkGenerated(close);
+  const storesPurchasedQty = sumAny(rowsInSelectedMonth(rows.storesInward, month), ["qty", "quantity", "quantityKg", "receivedQty", "inwardQty"]);
+  const storesIssuedQty = sumAny(rowsInSelectedMonth(rows.storesIssue, month), ["qty", "quantity", "quantityKg", "issuedQty", "issueQty"]);
+
+  return [
+    createFlowStockLine({
+      key: "FLOW|RM",
+      materialName: "RM Stock",
+      group: "RM",
+      flowIn: close.rm.purchasedKg,
+      flowOut: close.rm.consumedKg,
+      previousClose,
+      physicalMaterialLines,
+      month,
+      adjustments: rows.adjustments,
+    }),
+    createFlowStockLine({
+      key: "FLOW|WIP",
+      materialName: "WIP Stock",
+      group: "WIP",
+      flowIn: close.rm.consumedKg,
+      flowOut: close.production.fgProducedKg + wasteReworkGenerated,
+      previousClose,
+      physicalMaterialLines,
+      month,
+      adjustments: rows.adjustments,
+    }),
+    createFlowStockLine({
+      key: "FLOW|FG",
+      materialName: "FG Stock",
+      group: "FG",
+      flowIn: close.production.fgProducedKg,
+      flowOut: close.production.dispatchKg,
+      previousClose,
+      physicalMaterialLines,
+      month,
+      adjustments: rows.adjustments,
+    }),
+    createFlowStockLine({
+      key: "FLOW|WASTE_REWORK",
+      materialName: "Waste / Rework Stock",
+      group: "WASTE",
+      flowIn: wasteReworkGenerated,
+      flowOut: 0,
+      previousClose,
+      physicalMaterialLines,
+      month,
+      adjustments: rows.adjustments,
+    }),
+    createFlowStockLine({
+      key: "FLOW|STORES",
+      materialName: "Stores Stock",
+      group: "STORE",
+      flowIn: storesPurchasedQty,
+      flowOut: storesIssuedQty,
+      previousClose,
+      physicalMaterialLines,
+      month,
+      adjustments: rows.adjustments,
+    }),
+  ];
+}
+
+function createFlowStockLine({ key, materialName, group, flowIn, flowOut, previousClose, physicalMaterialLines, month, adjustments }) {
+  const openingEditable = !previousClose;
+  const opening = openingEditable
+    ? num(physicalMaterialLines[openingKey(key)])
+    : getPreviousClosingForFlow(previousClose, key, group);
+  const related = (adjustments || []).filter((a) => {
+    const sameMonth = String(a.periodMonth || a.closeMonth || "").slice(0, 7) === String(month);
+    const sameSource = String(a.sourceRef || "") === `MONTH_CLOSE:${month}:${key}`;
+    const sameItem =
+      String(a.itemCode || a.material || a.materialName || "").toUpperCase() === String(materialName).toUpperCase() ||
+      String(a.itemType || "").toUpperCase() === String(group).toUpperCase();
+    return sameMonth && (sameSource || sameItem);
+  });
+  const approvedAdjustments = related
+    .filter((a) => String(a.status || "").toUpperCase() === "APPROVED")
+    .reduce((total, a) => total + num(a.quantityKg), 0);
+  const pendingAdjustmentKg = related
+    .filter((a) => ["DRAFT", "SUBMITTED", "PENDING"].includes(String(a.status || "").toUpperCase()))
+    .reduce((total, a) => total + num(a.quantityKg), 0);
+  const systemClosing = num(opening) + num(flowIn) - num(flowOut) + num(approvedAdjustments);
+  const physicalValue = physicalMaterialLines[key] ?? "";
+  const hasPhysical = physicalValue !== "";
+  const physicalKg = hasPhysical ? num(physicalValue) : 0;
+  const differenceKg = hasPhysical ? physicalKg - systemClosing : 0;
+
+  let status = "Actual Stock Pending";
+  let statusType = "pending";
+  if (hasPhysical && Math.abs(differenceKg) <= 0.01) {
+    status = "Reconciled";
+    statusType = "success";
+  } else if (hasPhysical && Math.abs(pendingAdjustmentKg) > 0.01) {
+    status = "Approval Pending";
+    statusType = "warning";
+  } else if (hasPhysical) {
+    status = "Check Difference";
+    statusType = "danger";
+  }
+
+  return {
+    key,
+    materialId: key,
+    materialCode: group,
+    materialName,
+    group,
+    opening,
+    openingEditable,
+    flowIn: num(flowIn),
+    flowOut: num(flowOut),
+    inward: group === "RM" || group === "STORE" ? num(flowIn) : 0,
+    produced: group === "WIP" || group === "FG" || group === "WASTE" ? num(flowIn) : 0,
+    consumed: group === "RM" || group === "WIP" ? num(flowOut) : 0,
+    dispatched: group === "FG" ? num(flowOut) : 0,
+    issued: group === "STORE" ? num(flowOut) : 0,
+    approvedAdjustments,
+    systemClosing,
+    physicalKg,
+    physicalValue,
+    hasPhysical,
+    differenceKg,
+    remainingKg: differenceKg,
+    pendingAdjustmentKg,
+    status,
+    statusType,
+  };
+}
+
+function openingKey(lineKey) {
+  return `${lineKey}::opening`;
+}
+
+function getWasteReworkGenerated(close) {
+  return num(close.materialFlow.wasteSaleKg) + num(close.materialFlow.trueLossKg) + num(close.materialFlow.recoveryReuseKg);
+}
+
+function getPreviousClosedMonth(closeRows = [], month) {
+  return closeRows
+    .filter((row) => String(row.status || "").toUpperCase() === "CLOSED")
+    .filter((row) => String(row.periodMonth || "").slice(0, 7) < String(month))
+    .sort((a, b) => String(a.periodMonth || "").localeCompare(String(b.periodMonth || "")))
+    .pop() || null;
+}
+
+function getPreviousClosingForFlow(previousClose, key, group) {
+  const fromException = parsePreviousCloseStockJson(previousClose).find((row) => row.key === key);
+  if (fromException && fromException.physicalKg !== "" && fromException.physicalKg !== undefined) return num(fromException.physicalKg);
+  if (group === "RM") return num(previousClose?.rmPhysicalKg);
+  if (group === "WIP") return num(previousClose?.washPhysicalKg) + num(previousClose?.sortingPhysicalKg);
+  if (group === "FG") return num(previousClose?.fgPhysicalKg);
+  return 0;
+}
+
+function parsePreviousCloseStockJson(previousClose) {
+  try {
+    const rows = JSON.parse(previousClose?.exceptions || "[]");
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
+}
+
+function rowsInSelectedMonth(rows = [], month) {
+  return rows.filter((row) => {
+    if (String(row.status || "").toUpperCase() === "DELETED") return false;
+    if (String(row.inwardStatus || "").toUpperCase() === "DELETED") return false;
+    if (String(row.issueStatus || "").toUpperCase() === "DELETED") return false;
+    const pm = String(row.periodMonth || "").trim();
+    if (pm) return pm.slice(0, 7) === String(month);
+    const value = row.date || row.invoiceDate || row.createdAt || row.timestamp || "";
+    if (!value) return false;
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return String(value).slice(0, 7) === String(month);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` === String(month);
+  });
 }
 
 function buildMaterialGroupsFromMaster(rows = []) {
@@ -895,6 +985,13 @@ function normalizeMaterialCategory(value) {
 
 function sum(rows, key) {
   return rows.reduce((total, row) => total + num(row[key]), 0);
+}
+
+function sumAny(rows, keys) {
+  return rows.reduce((total, row) => {
+    const key = keys.find((candidate) => row[candidate] !== undefined && row[candidate] !== null && row[candidate] !== "");
+    return total + num(key ? row[key] : 0);
+  }, 0);
 }
 
 function sumByGroup(lines, group, key) {

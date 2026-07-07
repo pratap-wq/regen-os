@@ -3,7 +3,7 @@ import { apiCall } from "../api/api";
 import { calculateMonthClose } from "../services/monthCloseEngine";
 import { getPhysicalCount, savePhysicalCount } from "../services/physicalCountService";
 
-const MANUFACTURING_GROUPS = ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE", "STORE"];
+const MANUFACTURING_GROUPS = ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"];
 
 export default function MonthlyAudit() {
   const now = new Date();
@@ -159,7 +159,7 @@ export default function MonthlyAudit() {
       ? materialGroupView.groups
       : buildMaterialGroupsFromMaster(rows.materials);
 
-    return MANUFACTURING_GROUPS.flatMap((category) =>
+    const stockRows = MANUFACTURING_GROUPS.flatMap((category) =>
       (groups[category] || []).map((material) => {
         const key = `${category}|${material.materialId || material.materialCode || material.materialName}`;
         const physicalValue = physicalMaterialLines[key] ?? "";
@@ -204,6 +204,7 @@ export default function MonthlyAudit() {
           materialCode: material.materialCode || "",
           materialName: material.materialName || material.name || "",
           group: category,
+          isException: Boolean(material.isException),
           opening: num(material.opening),
           inward: num(material.inward),
           consumed: num(material.consumed),
@@ -223,6 +224,41 @@ export default function MonthlyAudit() {
         };
       })
     );
+
+    const exceptionRows = (materialGroupView?.exceptionRows || []).map((material) => {
+      const key = `${material.category || "CHECK"}|${material.materialId || material.materialName}`;
+      const physicalValue = physicalMaterialLines[key] ?? "";
+      const systemClosing = num(material.systemStock ?? material.balance);
+      const hasPhysical = Math.abs(systemClosing) <= 0.01 || physicalValue !== "";
+      const physicalKg = hasPhysical ? num(physicalValue) : 0;
+      const differenceKg = hasPhysical ? physicalKg - systemClosing : 0;
+      return {
+        key,
+        materialId: material.materialId || "",
+        materialCode: material.materialCode || "CHECK",
+        materialName: material.materialName || "Unmapped Movement",
+        group: material.category || "CHECK",
+        isException: true,
+        opening: num(material.opening),
+        inward: num(material.inward),
+        consumed: num(material.consumed),
+        produced: num(material.produced),
+        dispatched: num(material.dispatched),
+        issued: num(material.issued),
+        approvedAdjustments: num(material.approvedAdjustments ?? material.adjusted),
+        systemClosing,
+        physicalKg,
+        physicalValue,
+        hasPhysical,
+        differenceKg,
+        remainingKg: differenceKg,
+        pendingAdjustmentKg: 0,
+        status: hasPhysical ? "Check Difference" : "Fix Mapping",
+        statusType: "danger",
+      };
+    });
+
+    return stockRows.concat(exceptionRows);
   }, [materialGroupView, rows.materials, rows.adjustments, physicalMaterialLines, month]);
 
   const monthClosed = useMemo(
@@ -489,13 +525,7 @@ export default function MonthlyAudit() {
                   "Material Code",
                   "Material",
                   "Type",
-                  "Opening",
-                  "Inward",
-                  "Consumed",
-                  "Produced",
-                  "Dispatched",
-                  "Stores Issued",
-                  "Adjusted",
+                  "System Movement",
                   "System Stock",
                   "Actual Stock",
                   "Difference",
@@ -511,13 +541,7 @@ export default function MonthlyAudit() {
                   <td style={td}>{line.materialCode || "-"}</td>
                   <td style={td}><b>{line.materialName}</b></td>
                   <td style={td}>{line.group}</td>
-                  <td style={td}>{formatKg(line.opening)}</td>
-                  <td style={td}>{formatKg(line.inward)}</td>
-                  <td style={td}>{formatKg(line.consumed)}</td>
-                  <td style={td}>{formatKg(line.produced)}</td>
-                  <td style={td}>{formatKg(line.dispatched)}</td>
-                  <td style={td}>{formatKg(line.issued)}</td>
-                  <td style={td}>{formatKg(line.approvedAdjustments)}</td>
+                  <td style={td}>{movementSummary(line)}</td>
                   <td style={td}>{formatKg(line.systemClosing)}</td>
                   <td style={td}>
                     <input
@@ -531,7 +555,7 @@ export default function MonthlyAudit() {
                   </td>
                   <td style={td}>{line.hasPhysical ? formatKg(line.remainingKg) : "-"}</td>
                   <td style={td}>
-                    {line.statusType === "danger" ? (
+                    {line.statusType === "danger" && !line.isException ? (
                       <input
                         value={adjustmentReasons[line.key] || ""}
                         onChange={(e) => onReasonChange(line.key, e.target.value)}
@@ -542,7 +566,9 @@ export default function MonthlyAudit() {
                   </td>
                   <td style={td}><span style={pill(line.statusType)}>{line.status}</span></td>
                   <td style={td}>
-                    {line.statusType === "danger" ? (
+                    {line.isException ? (
+                      "Fix Mapping"
+                    ) : line.statusType === "danger" ? (
                       <button onClick={() => approveAdjustment(line)} style={miniButton}>Approve Difference</button>
                     ) : line.status}
                   </td>
@@ -551,6 +577,16 @@ export default function MonthlyAudit() {
             </tbody>
           </table>
         </div>
+      </Section>
+
+      <Section title="Stores Summary">
+        <div style={summaryRow}>
+          <StatusPill label="Store Items" count={materialGroupView?.storesSummary?.itemCount || 0} type="success" />
+          <StatusPill label="Inward" count={formatQtyCount(materialGroupView?.storesSummary?.inwardQty)} type="success" />
+          <StatusPill label="Issued" count={formatQtyCount(materialGroupView?.storesSummary?.issuedQty)} type="warning" />
+          <StatusPill label="Closing" count={formatQtyCount(materialGroupView?.storesSummary?.closingQty)} type="success" />
+        </div>
+        <div style={muted}>Stores are summarized here so consumable items do not crowd the manufacturing stock table.</div>
       </Section>
 
       <div style={twoColumn}>
@@ -669,7 +705,7 @@ function parsePhysicalMaterialLines(value) {
 }
 
 function buildMaterialGroupsFromMaster(rows = []) {
-  const groups = { RM: [], WIP: [], FG: [], REWORK: [], WASTE: [], ADDITIVE: [], STORE: [] };
+  const groups = { RM: [], WIP: [], FG: [], REWORK: [], WASTE: [], ADDITIVE: [] };
   rows.forEach((row) => {
     const status = String(row.status || "ACTIVE").toUpperCase();
     const category = normalizeMaterialCategory(row.category || row.materialType || row.materialCategory);
@@ -715,6 +751,22 @@ function sumByGroup(lines, group, key) {
   return lines.filter((line) => line.group === group).reduce((total, line) => total + num(line[key]), 0);
 }
 
+function movementSummary(line) {
+  return [
+    `Open ${formatKg(line.opening)}`,
+    `In ${formatKg(line.inward)}`,
+    `Made ${formatKg(line.produced)}`,
+    `Used ${formatKg(line.consumed)}`,
+    `Dispatch ${formatKg(line.dispatched)}`,
+    line.issued ? `Stores ${formatKg(line.issued)}` : "",
+    `Adj ${formatKg(line.approvedAdjustments)}`,
+  ].filter(Boolean).join(" | ");
+}
+
+function formatQtyCount(value) {
+  return num(value).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+}
+
 function getDifferenceValue(line, close) {
   const rate = line.group === "RM" ? close.rm.avgRate : close.profitability.manufacturingCostPerKg || close.rm.avgRate;
   return Math.abs(num(line.remainingKg)) * num(rate);
@@ -726,7 +778,7 @@ function num(value) {
 }
 
 function formatKg(value) {
-  return `${num(value).toLocaleString("en-IN", { maximumFractionDigits: 2 })} kg`;
+  return `${num(value).toLocaleString("en-IN", { maximumFractionDigits: 2 })}\u00a0kg`;
 }
 
 function formatTon(value) {

@@ -7440,18 +7440,7 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
     const category = monthCloseMaterialCategory_(row);
     return status !== "DELETED" && status !== "INACTIVE" && monthCloseIsStockCategory_(category);
   });
-  const storeMasterRows = safeRows_("Stores_Master").filter((row) => {
-    const status = String(row.status || row.isActive || "ACTIVE").toUpperCase();
-    return status !== "DELETED" && status !== "INACTIVE" && status !== "FALSE";
-  }).map((row) => ({
-    materialId: row.itemId || row.storesItemId || "",
-    materialCode: row.itemCode || row.itemId || row.storesItemId || row.itemName || "",
-    materialName: row.itemName || row.name || "",
-    category: "STORE",
-    unit: row.unit || row.uom || "Nos",
-    status: row.status || "ACTIVE",
-  }));
-  const masterRows = monthCloseUniqueMasterRows_(materialMasterRows.concat(storeMasterRows));
+  const masterRows = monthCloseUniqueMasterRows_(materialMasterRows);
   const masterIndex = monthCloseMaterialMasterIndex_(masterRows);
   const groups = {
     RM: [],
@@ -7460,7 +7449,6 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
     WASTE: [],
     REWORK: [],
     ADDITIVE: [],
-    STORE: [],
   };
   const groupTotals = {
     RM: 0,
@@ -7469,13 +7457,13 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
     WASTE: 0,
     REWORK: 0,
     ADDITIVE: 0,
-    STORE: 0,
   };
   const balances = {};
   const movementStats = {};
   const priorClosedOpening = monthClosePriorPhysicalOpening_(periodMonth, masterRows);
   const monthEndBalances = {};
-  const operationalStats = monthCloseOperationalStockStats_(periodMonth, masterIndex);
+  const operationalView = monthCloseOperationalStockStats_(periodMonth, masterIndex);
+  const operationalStats = operationalView.stats || {};
   const unmappedLedgerRows = [];
 
   masterRows.forEach((material) => {
@@ -7637,11 +7625,12 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
       wasteClosingKg: round2(groupTotals.WASTE),
       reworkClosingKg: round2(groupTotals.REWORK),
       additiveClosingKg: round2(groupTotals.ADDITIVE),
-      storesClosingQty: round2(groupTotals.STORE),
       totalWipClosingKg: round2(groupTotals.WIP),
     },
     groups,
     rows: monthCloseStockCategories_().reduce((list, category) => list.concat(groups[category]), []),
+    exceptionRows: monthCloseOperationalExceptionRows_(operationalView.unmappedMovements || []),
+    storesSummary: monthCloseStoresSummary_(periodMonth),
     materialCount: masterRows.length,
     unmappedLedgerRows,
     invalidLedgerRows,
@@ -7663,7 +7652,7 @@ function monthCloseMaterialCategory_(row) {
 }
 
 function monthCloseStockCategories_() {
-  return ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE", "STORE"];
+  return ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"];
 }
 
 function monthCloseIsStockCategory_(category) {
@@ -7809,6 +7798,7 @@ function monthCloseMaterialDebug_(groups, priorClosedOpening) {
 
 function monthCloseOperationalStockStats_(periodMonth, masterIndex) {
   const stats = {};
+  const unmappedMovements = {};
   const moves = [];
 
   collectJuneReceivingMoves_(moves, periodMonth);
@@ -7816,7 +7806,6 @@ function monthCloseOperationalStockStats_(periodMonth, masterIndex) {
   collectJuneSortingMoves_(moves, periodMonth);
   collectJuneExtrusionMoves_(moves, periodMonth);
   collectJuneDispatchMoves_(moves, periodMonth);
-  collectMonthCloseStoresMoves_(moves, periodMonth);
   collectJuneAdjustmentMoves_(moves, periodMonth);
 
   moves.forEach((move) => {
@@ -7826,7 +7815,10 @@ function monthCloseOperationalStockStats_(periodMonth, masterIndex) {
       normalized,
       masterIndex
     );
-    if (!material) return;
+    if (!material) {
+      monthCloseAddUnmappedMovement_(unmappedMovements, move, normalized);
+      return;
+    }
 
     const key = String(material.materialId || material.materialCode || material.materialName || "").trim();
     if (!key) return;
@@ -7855,7 +7847,69 @@ function monthCloseOperationalStockStats_(periodMonth, masterIndex) {
     }
   });
 
-  return stats;
+  return {
+    stats,
+    unmappedMovements: Object.values(unmappedMovements),
+  };
+}
+
+function monthCloseAddUnmappedMovement_(unmapped, move, normalized) {
+  if (!materialFlowIsManufacturingCategory_(normalized.category)) return;
+  if (normalized.name === "Recipe Text") return;
+  const key = normalized.category + "|" + normalized.name;
+  if (!unmapped[key]) {
+    unmapped[key] = {
+      materialName: normalized.name || move.originalName || "Unmapped Movement",
+      category: normalized.category || "UNKNOWN",
+      originalNames: {},
+      opening: 0,
+      inward: 0,
+      consumed: 0,
+      produced: 0,
+      dispatched: 0,
+      issued: 0,
+      approvedAdjustments: 0,
+    };
+  }
+  unmapped[key].originalNames[move.originalName || normalized.name] = true;
+  const qtyIn = num(move.qtyIn);
+  const qtyOut = num(move.qtyOut);
+  const bucket = monthCloseOperationalBucket_(move);
+  if (bucket === "approvedAdjustments") {
+    unmapped[key].approvedAdjustments = round2(num(unmapped[key].approvedAdjustments) + qtyIn - qtyOut);
+  } else if (bucket === "consumed" || bucket === "dispatched" || bucket === "issued") {
+    unmapped[key][bucket] = round2(num(unmapped[key][bucket]) + Math.abs(qtyOut || (qtyIn - qtyOut)));
+  } else {
+    unmapped[key][bucket] = round2(num(unmapped[key][bucket]) + Math.abs(qtyIn || (qtyIn - qtyOut)));
+  }
+}
+
+function monthCloseOperationalExceptionRows_(rows) {
+  return rows
+    .filter((row) => monthCloseStatsHasMovement_(row))
+    .map((row, index) => {
+      const balance = round2(num(row.opening) + num(row.inward) + num(row.produced) - num(row.consumed) - num(row.dispatched) - num(row.issued) + num(row.approvedAdjustments));
+      return {
+        materialId: "UNMAPPED-" + (index + 1),
+        materialCode: "CHECK",
+        materialName: "Unmapped Movement: " + row.materialName,
+        category: row.category || "CHECK",
+        unit: "Kg",
+        opening: round2(row.opening),
+        inward: round2(row.inward),
+        consumed: round2(row.consumed),
+        produced: round2(row.produced),
+        dispatched: round2(row.dispatched),
+        issued: round2(row.issued),
+        approvedAdjustments: round2(row.approvedAdjustments),
+        adjusted: round2(row.approvedAdjustments),
+        balance,
+        systemStock: balance,
+        systemStockSource: "operational sheets - unmapped",
+        status: "CHECK_MAPPING",
+        originalNames: Object.keys(row.originalNames || {}).join(", "),
+      };
+    });
 }
 
 function collectMonthCloseStoresMoves_(moves, periodMonth) {
@@ -7884,6 +7938,37 @@ function collectMonthCloseStoresMoves_(moves, periodMonth) {
       date: row.date,
     });
   });
+}
+
+function monthCloseStoresSummary_(periodMonth) {
+  const moves = [];
+  const byItem = {};
+  collectMonthCloseStoresMoves_(moves, periodMonth);
+
+  moves.forEach((move) => {
+    const name = materialFlowCleanName_(move.originalName || "Store Item");
+    if (!name) return;
+    if (!byItem[name]) {
+      byItem[name] = {
+        itemName: name,
+        inwardQty: 0,
+        issuedQty: 0,
+        closingQty: 0,
+      };
+    }
+    byItem[name].inwardQty = round2(num(byItem[name].inwardQty) + num(move.qtyIn));
+    byItem[name].issuedQty = round2(num(byItem[name].issuedQty) + num(move.qtyOut));
+    byItem[name].closingQty = round2(num(byItem[name].closingQty) + num(move.qtyIn) - num(move.qtyOut));
+  });
+
+  const rows = Object.values(byItem).sort((a, b) => Math.abs(num(b.issuedQty)) - Math.abs(num(a.issuedQty)));
+  return {
+    itemCount: rows.length,
+    inwardQty: round2(rows.reduce((sum, row) => sum + num(row.inwardQty), 0)),
+    issuedQty: round2(rows.reduce((sum, row) => sum + num(row.issuedQty), 0)),
+    closingQty: round2(rows.reduce((sum, row) => sum + num(row.closingQty), 0)),
+    topRows: rows.slice(0, 10),
+  };
 }
 
 function monthClosePushStoreMove_(moves, payload) {

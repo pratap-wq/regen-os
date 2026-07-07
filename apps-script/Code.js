@@ -793,8 +793,14 @@ const REGEN_DB_SCHEMA = {
     "gstPercent",
     "gstAmount",
     "invoiceTotal",
+    "grandTotal",
     "freight",
     "transportCharges",
+    "otherCharges",
+    "roundOff",
+    "paymentStatus",
+    "advancePaid",
+    "outstandingAmount",
     "commercialRemarks",
   ],
   Suppliers: [
@@ -4235,8 +4241,8 @@ function parseRmMaterialLines_(value, fallbackMaterial, fallbackQty) {
         material: String(row.material || row.materialName || "").trim(),
         quantityKg: num(row.quantityKg || row.qtyKg || row.quantity || row.netWeight),
         remarks: row.remarks || "",
-        rate: num(row.rate),
-        amount: num(row.amount),
+        rate: num(row.rate || row.ratePerKg),
+        amount: num(row.amount) || num(row.quantityKg || row.qtyKg || row.quantity || row.netWeight) * num(row.rate || row.ratePerKg),
       };
     })
     .filter(function(row) {
@@ -4357,8 +4363,14 @@ function addRM(data = {}) {
     "gstPercent",
     "gstAmount",
     "invoiceTotal",
+    "grandTotal",
     "freight",
     "transportCharges",
+    "otherCharges",
+    "roundOff",
+    "paymentStatus",
+    "advancePaid",
+    "outstandingAmount",
     "commercialRemarks",
   ]);
 
@@ -4366,6 +4378,14 @@ function addRM(data = {}) {
   const inwardId = data.inwardId || data.batchId || generateRmReceivingRef_(date, data.supplier);
   const lines = parseRmMaterialLines_(data.materialLines, data.material, data.netWeight || data.quantityKg);
   const totalQty = lines.reduce(function(sum, line) { return sum + num(line.quantityKg); }, 0);
+  const taxableValue = num(data.taxableValue) || lines.reduce(function(sum, line) { return sum + num(line.amount); }, 0);
+  const gstPercent = num(data.gstPercent);
+  const gstAmount = num(data.gstAmount) || (taxableValue > 0 && gstPercent > 0 ? taxableValue * gstPercent / 100 : 0);
+  const otherCharges = num(data.otherCharges || data.transportCharges);
+  const grandTotal =
+    num(data.grandTotal || data.invoiceTotal) ||
+    taxableValue + gstAmount + num(data.freight) + otherCharges + num(data.roundOff);
+  const outstandingAmount = Math.max(grandTotal - num(data.advancePaid), 0);
   validateOperationalWrite_({ ...data, date });
 
   appendObjectRow(sh, {
@@ -4391,18 +4411,24 @@ function addRM(data = {}) {
     transportPaidBy: data.transportPaidBy || "SUPPLIER",
     transportCost: num(data.transportCost),
     transportRemarks: data.transportRemarks || "",
-    taxableValue: num(data.taxableValue),
-    gstPercent: num(data.gstPercent),
-    gstAmount: num(data.gstAmount),
-    invoiceTotal: num(data.invoiceTotal),
+    taxableValue,
+    gstPercent,
+    gstAmount,
+    invoiceTotal: grandTotal,
+    grandTotal,
     freight: num(data.freight),
     transportCharges: num(data.transportCharges),
+    otherCharges,
+    roundOff: num(data.roundOff),
+    paymentStatus: data.paymentStatus || "Unpaid",
+    advancePaid: num(data.advancePaid),
+    outstandingAmount,
     commercialRemarks: data.commercialRemarks || "",
 
     moisture: data.moisture || "",
     contamination: data.contamination || "",
     estimatedRecovery: data.estimatedRecovery || "",
-    ratePerKg: num(data.ratePerKg),
+    ratePerKg: totalQty > 0 ? taxableValue / totalQty : num(data.ratePerKg),
     remarks: data.remarks || "",
     status: data.status || "QC_PENDING",
     createdBy: data.createdBy || "System",
@@ -4441,13 +4467,27 @@ function updateRM(data = {}) {
     "gstPercent",
     "gstAmount",
     "invoiceTotal",
+    "grandTotal",
     "freight",
     "transportCharges",
+    "otherCharges",
+    "roundOff",
+    "paymentStatus",
+    "advancePaid",
+    "outstandingAmount",
     "commercialRemarks",
   ]);
 
   const lines = parseRmMaterialLines_(data.materialLines, data.material, data.netWeight || data.quantityKg);
   const totalQty = lines.reduce(function(sum, line) { return sum + num(line.quantityKg); }, 0);
+  const taxableValue = num(data.taxableValue) || lines.reduce(function(sum, line) { return sum + num(line.amount); }, 0);
+  const gstPercent = num(data.gstPercent);
+  const gstAmount = num(data.gstAmount) || (taxableValue > 0 && gstPercent > 0 ? taxableValue * gstPercent / 100 : 0);
+  const otherCharges = num(data.otherCharges || data.transportCharges);
+  const grandTotal =
+    num(data.grandTotal || data.invoiceTotal) ||
+    taxableValue + gstAmount + num(data.freight) + otherCharges + num(data.roundOff);
+  const outstandingAmount = Math.max(grandTotal - num(data.advancePaid), 0);
 
   return updateById("RM_Inward", "inwardId", idValue, {
     date: normalizeDateOnly_(data.date || todayYmd()),
@@ -4471,12 +4511,18 @@ function updateRM(data = {}) {
     transportPaidBy: data.transportPaidBy || "SUPPLIER",
     transportCost: num(data.transportCost),
     transportRemarks: data.transportRemarks || "",
-    taxableValue: num(data.taxableValue),
-    gstPercent: num(data.gstPercent),
-    gstAmount: num(data.gstAmount),
-    invoiceTotal: num(data.invoiceTotal),
+    taxableValue,
+    gstPercent,
+    gstAmount,
+    invoiceTotal: grandTotal,
+    grandTotal,
     freight: num(data.freight),
     transportCharges: num(data.transportCharges),
+    otherCharges,
+    roundOff: num(data.roundOff),
+    paymentStatus: data.paymentStatus || "Unpaid",
+    advancePaid: num(data.advancePaid),
+    outstandingAmount,
     commercialRemarks: data.commercialRemarks || "",
 
     remarks: data.remarks || "",

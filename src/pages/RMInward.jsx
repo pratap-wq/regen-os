@@ -33,10 +33,14 @@ export default function RMInward() {
     gstPercent: "",
     gstAmount: "",
     invoiceTotal: "",
+    grandTotal: "",
     freight: "",
-    transportCharges: "",
+    otherCharges: "",
+    roundOff: "",
+    paymentStatus: "Unpaid",
+    advancePaid: "",
+    outstandingAmount: "",
     commercialRemarks: "",
-    sampleRequired: "YES",
     qcStatus: "PENDING",
     remarks: "",
     createdBy: "Accounts / Procurement",
@@ -112,7 +116,7 @@ export default function RMInward() {
         quantityKg: n(line.quantityKg),
         remarks: line.remarks || "",
         rate: n(line.rate),
-        amount: n(line.amount),
+        amount: n(line.quantityKg) * n(line.rate),
       }))
       .filter((line) => line.material && line.quantityKg > 0);
   }
@@ -121,27 +125,55 @@ export default function RMInward() {
     return cleanLines(lines).reduce((sum, line) => sum + n(line.quantityKg), 0);
   }
 
+  function totalLineAmount(lines = materialLines) {
+    return cleanLines(lines).reduce((sum, line) => sum + n(line.amount), 0);
+  }
+
   function materialSummary(lines = materialLines) {
     return cleanLines(lines)
       .map((line) => `${line.material}: ${line.quantityKg} Kg`)
       .join(" + ");
   }
 
-  function calculate(updated) {
+  function calculateCommercialTotals(sourceForm = form, lines = materialLines) {
+    const taxable = totalLineAmount(lines);
+    const gstPercent = n(sourceForm.gstPercent);
+    const gstAmount = taxable > 0 && gstPercent > 0 ? (taxable * gstPercent) / 100 : 0;
+    const grandTotal =
+      taxable +
+      gstAmount +
+      n(sourceForm.freight) +
+      n(sourceForm.otherCharges) +
+      n(sourceForm.roundOff);
+    const outstandingAmount = Math.max(grandTotal - n(sourceForm.advancePaid), 0);
+
+    return {
+      totalQuantity: totalQuantity(lines),
+      taxableValue: taxable,
+      gstAmount,
+      grandTotal,
+      outstandingAmount,
+    };
+  }
+
+  function calculateEdit(updated) {
     const taxable = n(updated.taxableValue);
     const gstPercent = n(updated.gstPercent);
     const gstAmount = taxable > 0 && gstPercent > 0 ? (taxable * gstPercent) / 100 : n(updated.gstAmount);
-    const invoiceTotal = taxable + gstAmount + n(updated.freight) + n(updated.transportCharges);
+    const grandTotal = taxable + gstAmount + n(updated.freight) + n(updated.otherCharges) + n(updated.roundOff);
+    const outstandingAmount = Math.max(grandTotal - n(updated.advancePaid), 0);
 
     return {
       ...updated,
       gstAmount: gstAmount > 0 ? gstAmount.toFixed(2) : "",
-      invoiceTotal: invoiceTotal > 0 ? invoiceTotal.toFixed(2) : "",
+      invoiceTotal: grandTotal > 0 ? grandTotal.toFixed(2) : "",
+      grandTotal: grandTotal > 0 ? grandTotal.toFixed(2) : "",
+      outstandingAmount: outstandingAmount > 0 ? outstandingAmount.toFixed(2) : "",
     };
   }
 
   function onChange(e) {
-    setForm(calculate({ ...form, [e.target.name]: e.target.value }));
+    setForm({ ...form, [e.target.name]: e.target.value });
   }
 
   function updateLine(index, key, value) {
@@ -179,6 +211,7 @@ export default function RMInward() {
     e.preventDefault();
 
     const lines = cleanLines();
+    const commercialTotals = calculateCommercialTotals(form, materialLines);
     if (!form.date) return alert("Date is mandatory");
     if (!form.supplier) return alert("Supplier is mandatory");
     if (!form.vehicleNo) return alert("Vehicle Number is mandatory");
@@ -189,9 +222,14 @@ export default function RMInward() {
         fn: "rm.add",
         ...form,
         material: lines[0].material,
-        netWeight: totalQuantity(lines),
-        quantityKg: totalQuantity(lines),
+        netWeight: commercialTotals.totalQuantity,
+        quantityKg: commercialTotals.totalQuantity,
         materialLines: JSON.stringify(lines),
+        taxableValue: commercialTotals.taxableValue,
+        gstAmount: commercialTotals.gstAmount,
+        invoiceTotal: commercialTotals.grandTotal,
+        grandTotal: commercialTotals.grandTotal,
+        outstandingAmount: commercialTotals.outstandingAmount,
         status: "QC_PENDING",
         qcStatus: "PENDING",
       });
@@ -215,6 +253,8 @@ export default function RMInward() {
       ...row,
       date: dateForInput(row.date) || today,
       invoiceDate: dateForInput(row.invoiceDate),
+      otherCharges: row.otherCharges || row.transportCharges || "",
+      grandTotal: row.grandTotal || row.invoiceTotal || "",
     });
   }
 
@@ -270,6 +310,7 @@ export default function RMInward() {
   const qcPending = filteredRows.filter((row) => String(row.qcStatus || "PENDING").toUpperCase() === "PENDING").length;
   const qcApproved = filteredRows.filter((row) => String(row.qcStatus || "").toUpperCase() === "APPROVED").length;
   const invoiceValue = filteredRows.reduce((sum, row) => sum + n(row.invoiceTotal), 0);
+  const commercialTotals = calculateCommercialTotals(form, materialLines);
 
   return (
     <PageLayout
@@ -370,7 +411,9 @@ export default function RMInward() {
             <thead>
               <tr style={head}>
                 <th style={th}>Material</th>
-                <th style={th}>Quantity</th>
+                <th style={th}>Quantity (Kg)</th>
+                <th style={th}>Rate/Kg</th>
+                <th style={th}>Amount</th>
                 <th style={th}>Remarks</th>
                 <th style={th}>Delete</th>
               </tr>
@@ -405,6 +448,21 @@ export default function RMInward() {
                   </td>
                   <td style={td}>
                     <input
+                      type="number"
+                      value={line.rate}
+                      onChange={(e) => updateLine(index, "rate", e.target.value)}
+                      style={inputStyle}
+                    />
+                  </td>
+                  <td style={td}>
+                    <input
+                      readOnly
+                      value={(n(line.quantityKg) * n(line.rate) || 0).toFixed(2)}
+                      style={readonlyStyle}
+                    />
+                  </td>
+                  <td style={td}>
+                    <input
                       value={line.remarks}
                       onChange={(e) => updateLine(index, "remarks", e.target.value)}
                       style={inputStyle}
@@ -420,13 +478,19 @@ export default function RMInward() {
             </tbody>
           </table>
           <button type="button" onClick={addLine} style={addButton}>+ Add Material</button>
-          <div style={lineTotal}>Total Quantity: {totalQuantity().toFixed(2)} Kg</div>
+          <div style={lineTotal}>
+            Total Quantity: {commercialTotals.totalQuantity.toFixed(2)} Kg · Taxable Value: ₹ {commercialTotals.taxableValue.toFixed(2)}
+          </div>
         </div>
 
         <SectionTitle text="Commercial Information" />
 
+        <Field label="Total Quantity">
+          <input readOnly value={`${commercialTotals.totalQuantity.toFixed(2)} Kg`} style={readonlyStyle} />
+        </Field>
+
         <Field label="Taxable Value">
-          <input type="number" name="taxableValue" value={form.taxableValue} onChange={onChange} style={inputStyle} />
+          <input readOnly value={commercialTotals.taxableValue.toFixed(2)} style={readonlyStyle} />
         </Field>
 
         <Field label="GST %">
@@ -434,19 +498,42 @@ export default function RMInward() {
         </Field>
 
         <Field label="GST Amount">
-          <input type="number" name="gstAmount" value={form.gstAmount} onChange={onChange} style={inputStyle} />
-        </Field>
-
-        <Field label="Invoice Total">
-          <input type="number" name="invoiceTotal" value={form.invoiceTotal} onChange={onChange} style={inputStyle} />
+          <input readOnly value={commercialTotals.gstAmount.toFixed(2)} style={readonlyStyle} />
         </Field>
 
         <Field label="Freight">
           <input type="number" name="freight" value={form.freight} onChange={onChange} style={inputStyle} />
         </Field>
 
-        <Field label="Transport Charges">
-          <input type="number" name="transportCharges" value={form.transportCharges} onChange={onChange} style={inputStyle} />
+        <Field label="Other Charges">
+          <input type="number" name="otherCharges" value={form.otherCharges} onChange={onChange} style={inputStyle} />
+        </Field>
+
+        <Field label="Round Off">
+          <input type="number" name="roundOff" value={form.roundOff} onChange={onChange} style={inputStyle} />
+        </Field>
+
+        <Field label="Grand Total">
+          <input readOnly value={commercialTotals.grandTotal.toFixed(2)} style={readonlyStyle} />
+        </Field>
+
+        <SectionTitle text="Payment" />
+
+        <Field label="Payment Status">
+          <select name="paymentStatus" value={form.paymentStatus} onChange={onChange} style={inputStyle}>
+            <option>Unpaid</option>
+            <option>Advance Paid</option>
+            <option>Partially Paid</option>
+            <option>Fully Paid</option>
+          </select>
+        </Field>
+
+        <Field label="Advance Paid">
+          <input type="number" name="advancePaid" value={form.advancePaid} onChange={onChange} style={inputStyle} />
+        </Field>
+
+        <Field label="Outstanding Amount">
+          <input readOnly value={commercialTotals.outstandingAmount.toFixed(2)} style={readonlyStyle} />
         </Field>
 
         <Field label="Commercial Remarks">
@@ -474,6 +561,7 @@ export default function RMInward() {
           "supplierGrnNumber",
           "supplierInvoiceNumber",
           "material",
+          "paymentStatus",
           "qcStatus",
         ]}
         columns={[
@@ -486,7 +574,10 @@ export default function RMInward() {
           { key: "supplierInvoiceNumber", label: "Invoice" },
           { key: "material", label: "Materials", render: (r) => r.materialSummary || r.material },
           { key: "netWeight", label: "Quantity Kg" },
+          { key: "taxableValue", label: "Taxable", render: (r) => `₹ ${n(r.taxableValue).toFixed(0)}` },
           { key: "invoiceTotal", label: "Invoice Total", render: (r) => `₹ ${n(r.invoiceTotal).toFixed(0)}` },
+          { key: "paymentStatus", label: "Payment", render: (r) => r.paymentStatus || "Unpaid" },
+          { key: "outstandingAmount", label: "Outstanding", render: (r) => `₹ ${n(r.outstandingAmount).toFixed(0)}` },
           { key: "qcStatus", label: "QC Status", render: (r) => r.qcStatus || "PENDING" },
         ]}
         onEdit={editRow}
@@ -510,9 +601,12 @@ export default function RMInward() {
                 ["Taxable Value", "taxableValue", "number"],
                 ["GST %", "gstPercent", "number"],
                 ["GST Amount", "gstAmount", "number"],
-                ["Invoice Total", "invoiceTotal", "number"],
                 ["Freight", "freight", "number"],
-                ["Transport Charges", "transportCharges", "number"],
+                ["Other Charges", "otherCharges", "number"],
+                ["Round Off", "roundOff", "number"],
+                ["Grand Total", "grandTotal", "number"],
+                ["Advance Paid", "advancePaid", "number"],
+                ["Outstanding Amount", "outstandingAmount", "number"],
               ].map(([label, key, type = "text", readOnly = false]) => (
                 <Field key={key} label={label}>
                   <input
@@ -520,11 +614,25 @@ export default function RMInward() {
                     type={type}
                     value={editingRow[key] || ""}
                     readOnly={readOnly}
-                    onChange={(e) => setEditingRow(calculate({ ...editingRow, [key]: e.target.value }))}
+                    onChange={(e) => setEditingRow(calculateEdit({ ...editingRow, [key]: e.target.value }))}
                     style={readOnly ? readonlyStyle : inputStyle}
                   />
                 </Field>
               ))}
+
+              <Field label="Payment Status">
+                <select
+                  name="paymentStatus"
+                  value={editingRow.paymentStatus || "Unpaid"}
+                  onChange={(e) => setEditingRow({ ...editingRow, paymentStatus: e.target.value })}
+                  style={inputStyle}
+                >
+                  <option>Unpaid</option>
+                  <option>Advance Paid</option>
+                  <option>Partially Paid</option>
+                  <option>Fully Paid</option>
+                </select>
+              </Field>
 
               <Field label="QC Status">
                 <input value={editingRow.qcStatus || "PENDING"} readOnly style={readonlyStyle} />

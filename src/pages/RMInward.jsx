@@ -399,6 +399,8 @@ export default function RMInward() {
             placeholder="Select Supplier"
             style={inputStyle}
             required
+            allowAddNew
+            defaults={{ supplierType: "RAW_MATERIAL" }}
           />
         </Field>
 
@@ -429,6 +431,9 @@ export default function RMInward() {
             placeholder="Select Material"
             style={inputStyle}
             required
+            allowAddNew
+            approvalRequired
+            defaults={{ category: "RM", unit: "Kg" }}
             filter={(item) =>
               ["RM", "WIP", "REWORK"].includes(
                 String(item.category || item.materialType || "").toUpperCase()
@@ -630,6 +635,8 @@ export default function RMInward() {
                   placeholder="Select Supplier"
                   style={inputStyle}
                   required
+                  allowAddNew
+                  defaults={{ supplierType: "RAW_MATERIAL" }}
                 />
               </Field>
 
@@ -660,6 +667,9 @@ export default function RMInward() {
                   placeholder="Select Material"
                   style={inputStyle}
                   required
+                  allowAddNew
+                  approvalRequired
+                  defaults={{ category: "RM", unit: "Kg" }}
                   filter={(item) =>
                     ["RM", "WIP", "REWORK"].includes(
                       String(item.category || item.materialType || "").toUpperCase()

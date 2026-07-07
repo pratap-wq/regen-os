@@ -622,6 +622,9 @@ export default function Dispatch() {
               placeholder="Select Material"
               style={inputStyle}
               required
+              allowAddNew
+              approvalRequired
+              defaults={{ category: "FG", unit: "Kg" }}
               filter={(item) =>
                 String(item.category || item.materialType || "").toUpperCase() === "FG"
               }
@@ -666,6 +669,7 @@ export default function Dispatch() {
               onChange={onChange}
               placeholder="Select Customer"
               style={inputStyle}
+              allowAddNew
             />
           </Field>
 

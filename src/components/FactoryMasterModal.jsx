@@ -12,13 +12,21 @@ const typeDefaults = {
   customer: {},
   machine: {},
   recipe: { processType: "EXTRUSION" },
+  storeItem: { unit: "Nos" },
+  qualityTest: { unit: "", testType: "" },
+  expenseCategory: {},
 };
+
+const emptyDefaults = {};
 
 export default function FactoryMasterModal({
   masterType,
   title,
   item,
   items = [],
+  defaults = emptyDefaults,
+  defaultStatus = "ACTIVE",
+  createdBy = "System",
   onClose,
   onSaved,
 }) {
@@ -31,14 +39,15 @@ export default function FactoryMasterModal({
   useEffect(() => {
     setForm({
       ...(typeDefaults[masterType] || {}),
+      ...(defaults || {}),
       ...(item || {}),
       name: item?.name || "",
-      status: item?.status || "PENDING_APPROVAL",
+      status: item?.status || defaultStatus,
     });
     setMode(item ? "edit" : "add");
     setMergeIntoId("");
     setMessage("");
-  }, [item, masterType]);
+  }, [item, masterType, defaults, defaultStatus]);
 
   const mergeTargets = useMemo(
     () => items.filter((x) => x.id && x.id !== item?.id),
@@ -72,7 +81,9 @@ export default function FactoryMasterModal({
       } else {
         saved = await addFactoryMaster(masterType, {
           ...form,
-          status: form.status || "PENDING_APPROVAL",
+          status: form.status || defaultStatus,
+          createdBy,
+          updatedBy: createdBy,
         });
       }
       onSaved?.(saved || { ...form, name: form.name });
@@ -189,6 +200,63 @@ export default function FactoryMasterModal({
                 <option>SORTING</option>
                 <option>EXTRUSION</option>
               </select>
+            </label>
+          )}
+
+          {masterType === "supplier" && (
+            <label style={field}>
+              <span style={label}>Supplier Type</span>
+              <input name="supplierType" value={form.supplierType || ""} onChange={onChange} style={input} />
+            </label>
+          )}
+
+          {masterType === "customer" && (
+            <>
+              <label style={field}>
+                <span style={label}>Customer Code</span>
+                <input name="customerCode" value={form.customerCode || ""} onChange={onChange} style={input} />
+              </label>
+              <label style={field}>
+                <span style={label}>Customer Unit</span>
+                <input name="customerUnit" value={form.customerUnit || ""} onChange={onChange} style={input} />
+              </label>
+            </>
+          )}
+
+          {masterType === "storeItem" && (
+            <>
+              <label style={field}>
+                <span style={label}>Category</span>
+                <input name="category" value={form.category || ""} onChange={onChange} style={input} />
+              </label>
+              <label style={field}>
+                <span style={label}>Unit</span>
+                <input name="unit" value={form.unit || "Nos"} onChange={onChange} style={input} />
+              </label>
+              <label style={field}>
+                <span style={label}>Reorder Level</span>
+                <input name="reorderLevel" value={form.reorderLevel || ""} onChange={onChange} style={input} />
+              </label>
+            </>
+          )}
+
+          {masterType === "qualityTest" && (
+            <>
+              <label style={field}>
+                <span style={label}>Test Type</span>
+                <input name="testType" value={form.testType || ""} onChange={onChange} style={input} />
+              </label>
+              <label style={field}>
+                <span style={label}>Unit</span>
+                <input name="unit" value={form.unit || ""} onChange={onChange} style={input} />
+              </label>
+            </>
+          )}
+
+          {masterType === "expenseCategory" && (
+            <label style={field}>
+              <span style={label}>Category Code</span>
+              <input name="categoryCode" value={form.categoryCode || ""} onChange={onChange} style={input} />
             </label>
           )}
         </div>

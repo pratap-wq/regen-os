@@ -593,6 +593,7 @@ export default function Production() {
             value={form.machineWash}
             onChange={onChange}
             placeholder="Select Machine"
+            defaults={{ processType: "WASH" }}
             filter={(item) => {
               const process = String(item.processType || item.machineType || "").toUpperCase();
               return !process || process.includes("WASH");
@@ -606,6 +607,8 @@ export default function Production() {
             value={form.washInputMaterial}
             onChange={onChange}
             placeholder="Select Material"
+            approvalRequired
+            defaults={{ category: "RM", unit: "Kg" }}
             filter={(item) =>
               ["RM", "WIP", "REWORK"].includes(
                 String(item.category || item.materialType || "").toUpperCase()
@@ -636,6 +639,7 @@ export default function Production() {
             value={form.machineSorter}
             onChange={onChange}
             placeholder="Select Machine"
+            defaults={{ processType: "SORTING" }}
             filter={(item) => {
               const process = String(item.processType || item.machineType || "").toUpperCase();
               return !process || process.includes("SORT");
@@ -649,6 +653,8 @@ export default function Production() {
             value={form.sorterInputMaterial}
             onChange={onChange}
             placeholder="Select Material"
+            approvalRequired
+            defaults={{ category: "WIP", unit: "Kg" }}
             filter={(item) =>
               ["WIP", "REWORK"].includes(
                 String(item.category || item.materialType || "").toUpperCase()
@@ -677,6 +683,7 @@ export default function Production() {
             value={form.machineExtruder}
             onChange={onChange}
             placeholder="Select Machine"
+            defaults={{ processType: "EXTRUSION" }}
             filter={(item) => {
               const process = String(item.processType || item.machineType || "").toUpperCase();
               return !process || process.includes("EXTRUSION") || process.includes("EXTRUDER");
@@ -690,6 +697,7 @@ export default function Production() {
             value={form.recipeName}
             onChange={onChange}
             placeholder="Select Recipe"
+            defaults={{ processType: "EXTRUSION" }}
           />
 
           <FactorySelectField
@@ -699,6 +707,8 @@ export default function Production() {
             value={form.productionGrade}
             onChange={onChange}
             placeholder="Select Grade"
+            approvalRequired
+            defaults={{ category: "FG", unit: "Kg" }}
             filter={(item) =>
               String(item.category || item.materialType || "").toUpperCase() === "FG"
             }
@@ -835,7 +845,17 @@ function SelectField({ label, name, value, onChange, options }) {
   );
 }
 
-function FactorySelectField({ label, masterType, name, value, onChange, placeholder, filter }) {
+function FactorySelectField({
+  label,
+  masterType,
+  name,
+  value,
+  onChange,
+  placeholder,
+  filter,
+  approvalRequired = false,
+  defaults,
+}) {
   return (
     <FactoryDropdown
       label={label}
@@ -846,6 +866,9 @@ function FactorySelectField({ label, masterType, name, value, onChange, placehol
       placeholder={placeholder || "Select"}
       style={selectStyle}
       filter={filter}
+      allowAddNew
+      approvalRequired={approvalRequired}
+      defaults={defaults}
     />
   );
 }

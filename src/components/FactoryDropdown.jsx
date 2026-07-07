@@ -5,6 +5,7 @@ import {
   listFactoryMaster,
   rememberMasterItem,
 } from "../services/FactoryMasterService";
+import { auth } from "../firebase";
 
 export default function FactoryDropdown({
   masterType,
@@ -17,6 +18,9 @@ export default function FactoryDropdown({
   filter,
   label,
   allowAddNew = false,
+  approvalRequired = false,
+  defaultStatus,
+  defaults = {},
 }) {
   const listId = useId();
   const [items, setItems] = useState([]);
@@ -156,6 +160,11 @@ export default function FactoryDropdown({
           title={`Add ${placeholder}`}
           item={null}
           items={items}
+          defaults={defaults}
+          defaultStatus={
+            defaultStatus || (approvalRequired ? "PENDING_APPROVAL" : "ACTIVE")
+          }
+          createdBy={auth.currentUser?.email || "System"}
           onClose={() => setModalOpen(false)}
           onSaved={onSaved}
         />

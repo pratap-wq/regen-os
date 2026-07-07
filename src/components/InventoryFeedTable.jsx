@@ -59,6 +59,9 @@ export default function InventoryFeedTable({ rows, setRows }) {
                   onChange={(e) => updateRow(i, "sourceType", e.target.value)}
                   placeholder="Select Material"
                   style={input}
+                  allowAddNew
+                  approvalRequired
+                  defaults={{ category: "RM", unit: "Kg" }}
                   filter={(item) =>
                     ["RM", "WIP", "REWORK", "ADDITIVE", "WASTE"].includes(
                       String(item.category || item.materialType || "").toUpperCase()

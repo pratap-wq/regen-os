@@ -112,6 +112,33 @@ function normalizeMasterRows(masterType, rows = []) {
       };
     }
 
+    if (type === "storeitem") {
+      return {
+        ...row,
+        id: row.id || row.itemId || row.itemName || "",
+        code: row.code || row.itemCode || "",
+        name: row.name || row.itemName || row.itemCode || "",
+      };
+    }
+
+    if (type === "qualitytest") {
+      return {
+        ...row,
+        id: row.id || row.testId || row.testCode || row.testName || "",
+        code: row.code || row.testCode || "",
+        name: row.name || row.testName || row.testCode || "",
+      };
+    }
+
+    if (type === "expensecategory") {
+      return {
+        ...row,
+        id: row.id || row.categoryId || row.categoryCode || row.categoryName || "",
+        code: row.code || row.categoryCode || "",
+        name: row.name || row.categoryName || row.categoryCode || "",
+      };
+    }
+
     return {
       ...row,
       id: row.id || row.supplierId || row.customerId || row.machineId || row.recipeId || row.itemId || row.testId || row.categoryId || "",

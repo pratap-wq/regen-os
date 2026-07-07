@@ -3,33 +3,20 @@ import { apiCall } from "../api/api";
 import FormSection from "../components/FormSection";
 import InventoryFeedTable from "../components/InventoryFeedTable";
 import FactoryDropdown from "../components/FactoryDropdown";
-import { KpiCard, PageLayout, SummaryPanel } from "../components/factoryDesignSystem";
+import { KpiCard, PageLayout } from "../components/factoryDesignSystem";
 import { generateExtrusionBatchId } from "../utils/idGenerator";
 import { buildInventoryLots } from "../utils/inventoryLots";
+import { buildAvailabilityMap, materialKey } from "../utils/materialInventory";
 
 export default function Production() {
   const today = new Date().toISOString().split("T")[0];
   const currentMonth = new Date().toISOString().slice(0, 7);
 
-  const productionGrades = [
-    "E1",
-    "E2",
-    "E3",
-    "E4",
-    "E5",
-    "E6",
-    "E7",
-    "REWORK",
-    "TRIAL",
-    "OTHER",
-  ];
-
   const blankFeedRow = {
-  sourceType: "",
-  materialType: "",
-  qtyKg: "",
-  remarks: "",
-};
+    sourceType: "",
+    materialType: "",
+    qtyKg: "",
+  };
 
   const blank = {
     date: today,
@@ -50,8 +37,6 @@ export default function Production() {
     machineSorter: "",
     machineExtruder: "",
 
-    washInputMaterial: "",
-    washInputKg: "",
     washedOutputKg: "",
     dustKg: "",
     sinkMaterialKg: "",
@@ -60,8 +45,6 @@ export default function Production() {
     sludgeKg: "",
     raffiaKg: "",
 
-    sorterInputMaterial: "",
-    sorterInputKg: "",
     whiteSortedKg: "",
     allMixSortedKg: "",
     commodityKg: "",
@@ -84,6 +67,8 @@ export default function Production() {
   };
 
   const [form, setForm] = useState(blank);
+  const [washFeedRows, setWashFeedRows] = useState([{ ...blankFeedRow }]);
+  const [sorterFeedRows, setSorterFeedRows] = useState([{ ...blankFeedRow }]);
   const [feedRows, setFeedRows] = useState([{ ...blankFeedRow }]);
 
   const [rmRows, setRmRows] = useState([]);
@@ -187,23 +172,86 @@ export default function Production() {
     fresh.extrusionBatchId = buildExtrusionBatchId(fresh);
 
     setForm(fresh);
+    setWashFeedRows([{ ...blankFeedRow }]);
+    setSorterFeedRows([{ ...blankFeedRow }]);
     setFeedRows([{ ...blankFeedRow }]);
   }
 
+  function cleanRows(rows) {
+    return rows.filter((r) => (r.materialType || r.sourceType) && n(r.qtyKg) > 0);
+  }
+
+  function cleanWashRows() {
+    return cleanRows(washFeedRows);
+  }
+
   function cleanFeedRows() {
-    return feedRows.filter((r) => r.materialType && n(r.qtyKg) > 0);
+    return cleanRows(feedRows);
   }
 
-  function feedTotalKg() {
-    return cleanFeedRows().reduce((s, r) => s + n(r.qtyKg), 0);
+  function cleanSorterRows() {
+    return cleanRows(sorterFeedRows);
   }
 
-  function feedSummary() {
-    return cleanFeedRows()
+  function rowsTotalKg(rows) {
+    return cleanRows(rows).reduce((s, r) => s + n(r.qtyKg), 0);
+  }
+
+  function rowsSummary(rows) {
+    return cleanRows(rows)
       .map((r) => {
         return `${r.materialType || r.sourceType}: ${r.qtyKg} Kg`;
       })
       .join(" + ");
+  }
+
+  function feedTotalKg() {
+    return rowsTotalKg(feedRows);
+  }
+
+  function feedSummary() {
+    return rowsSummary(feedRows);
+  }
+
+  function washFeedTotalKg() {
+    return rowsTotalKg(washFeedRows);
+  }
+
+  function washFeedSummary() {
+    return rowsSummary(washFeedRows);
+  }
+
+  function sorterFeedTotalKg() {
+    return rowsTotalKg(sorterFeedRows);
+  }
+
+  function sorterFeedSummary() {
+    return rowsSummary(sorterFeedRows);
+  }
+
+  function validateMaterialRows(rows, processName) {
+    const cleaned = cleanRows(rows);
+    const seen = new Set();
+    const availability = buildAvailabilityMap(inventoryLots);
+
+    for (const row of cleaned) {
+      const material = row.materialType || row.sourceType;
+      const key = materialKey(material);
+      const qty = n(row.qtyKg);
+      const available = availability[key] || 0;
+
+      if (seen.has(key)) {
+        return `${processName}: ${material} is selected more than once. Combine it into one row.`;
+      }
+
+      if (qty > available) {
+        return `${processName}: ${material} consume quantity exceeds available stock. Available: ${available.toFixed(2)} Kg.`;
+      }
+
+      seen.add(key);
+    }
+
+    return "";
   }
 
   function isRecoveryMaterial(materialType = "") {
@@ -245,12 +293,12 @@ export default function Production() {
     n(form.raffiaKg);
 
   const washRecovery =
-    n(form.washInputKg) > 0
-      ? ((n(form.washedOutputKg) / n(form.washInputKg)) * 100).toFixed(2)
+    washFeedTotalKg() > 0
+      ? ((n(form.washedOutputKg) / washFeedTotalKg()) * 100).toFixed(2)
       : "";
 
   const washVariance =
-    n(form.washInputKg) - n(form.washedOutputKg) - washLoss;
+    washFeedTotalKg() - n(form.washedOutputKg) - washLoss;
 
   const sorterRecoverable =
     n(form.whiteSortedKg) +
@@ -259,12 +307,12 @@ export default function Production() {
     n(form.whiteGreyKg);
 
   const sorterRecovery =
-    n(form.sorterInputKg) > 0
-      ? ((sorterRecoverable / n(form.sorterInputKg)) * 100).toFixed(2)
+    sorterFeedTotalKg() > 0
+      ? ((sorterRecoverable / sorterFeedTotalKg()) * 100).toFixed(2)
       : "";
 
   const sorterVariance =
-    n(form.sorterInputKg) - sorterRecoverable - n(form.sorterRejectKg);
+    sorterFeedTotalKg() - sorterRecoverable - n(form.sorterRejectKg);
 
   const totalFeedKg = feedTotalKg();
 
@@ -326,15 +374,33 @@ export default function Production() {
     try {
       let washBatchId = "";
       let sortingBatchId = "";
+      const finalWashRows = cleanWashRows();
+      const washTotalKg = washFeedTotalKg();
+      const finalSorterRows = cleanSorterRows();
+      const sorterTotalKg = sorterFeedTotalKg();
 
-      if (n(form.washInputKg) > 0) {
+      if (washTotalKg > 0 || n(form.washedOutputKg) > 0 || washLoss > 0) {
+        if (finalWashRows.length === 0 || washTotalKg <= 0) {
+          setMessage("Wash: add at least one input material with consume quantity.");
+          setSaving(false);
+          return;
+        }
+
+        const washValidation = validateMaterialRows(washFeedRows, "Wash");
+        if (washValidation) {
+          setMessage(washValidation);
+          setSaving(false);
+          return;
+        }
+
         const wash = await apiCall({
           fn: "wash.add",
           date: form.date,
           shift: form.shift,
           machine: form.machineWash,
-          inputMaterial: form.washInputMaterial,
-          inputWeightKg: form.washInputKg,
+          inputMaterial: washFeedSummary(),
+          inputWeightKg: washTotalKg,
+          feedComposition: JSON.stringify(finalWashRows),
           washedOutputKg: form.washedOutputKg,
           dustKg: form.dustKg,
           sinkMaterialKg: form.sinkMaterialKg,
@@ -344,10 +410,10 @@ export default function Production() {
           raffiaKg: form.raffiaKg,
           estimatedRecoveryPercent: washRecovery,
           washVarianceKg: washVariance,
-          sortingRequired: n(form.sorterInputKg) > 0 ? "YES" : "NO",
-          nextProcess: n(form.sorterInputKg) > 0 ? "Colour Sorting" : "Extrusion",
+          sortingRequired: sorterTotalKg > 0 ? "YES" : "NO",
+          nextProcess: sorterTotalKg > 0 ? "Colour Sorting" : "Extrusion",
           status:
-            n(form.sorterInputKg) > 0
+            sorterTotalKg > 0
               ? "READY_FOR_SORTING"
               : "WASH_COMPLETED",
           operatorName: form.washOperatorName,
@@ -360,15 +426,29 @@ export default function Production() {
         washBatchId = wash.washBatchId || "";
       }
 
-      if (n(form.sorterInputKg) > 0) {
+      if (sorterTotalKg > 0 || sorterRecoverable > 0 || n(form.sorterRejectKg) > 0) {
+        if (finalSorterRows.length === 0 || sorterTotalKg <= 0) {
+          setMessage("Colour Sorter: add at least one input material with consume quantity.");
+          setSaving(false);
+          return;
+        }
+
+        const sortingValidation = validateMaterialRows(sorterFeedRows, "Colour Sorter");
+        if (sortingValidation) {
+          setMessage(sortingValidation);
+          setSaving(false);
+          return;
+        }
+
         const sorting = await apiCall({
           fn: "sorting.add",
           sourceWashBatchId: washBatchId,
           date: form.date,
           shift: form.shift,
           machine: form.machineSorter,
-          inputMaterial: form.sorterInputMaterial || form.washInputMaterial,
-          inputWeightKg: form.sorterInputKg,
+          inputMaterial: sorterFeedSummary(),
+          inputWeightKg: sorterTotalKg,
+          feedComposition: JSON.stringify(finalSorterRows),
           acceptedQtyKg: sorterRecoverable,
           whiteSortedKg: form.whiteSortedKg,
           allMixSortedKg: form.allMixSortedKg,
@@ -394,6 +474,13 @@ export default function Production() {
       if (totalFeedKg > 0 || n(form.fgOutputKg) > 0) {
         if (finalFeedRows.length === 0) {
           setMessage("Add at least one inventory lot in extruder feed.");
+          setSaving(false);
+          return;
+        }
+
+        const extrusionValidation = validateMaterialRows(feedRows, "Extrusion");
+        if (extrusionValidation) {
+          setMessage(extrusionValidation);
           setSaving(false);
           return;
         }
@@ -456,8 +543,8 @@ export default function Production() {
       }
 
       if (
-        n(form.washInputKg) <= 0 &&
-        n(form.sorterInputKg) <= 0 &&
+        washTotalKg <= 0 &&
+        sorterTotalKg <= 0 &&
         totalFeedKg <= 0 &&
         n(form.fgOutputKg) <= 0
       ) {
@@ -545,23 +632,17 @@ export default function Production() {
             }}
           />
 
-          <FactorySelectField
-            label="Material"
-            masterType="material"
-            name="washInputMaterial"
-            value={form.washInputMaterial}
-            onChange={onChange}
-            placeholder="Select Material"
-            approvalRequired
-            defaults={{ category: "RM", unit: "Kg" }}
-            filter={(item) =>
-              ["RM", "WIP", "REWORK", "ADDITIVE"].includes(
-                String(item.category || item.materialType || "").toUpperCase()
-              )
-            }
+          <InventoryFeedTable
+            title="Wash Input Materials"
+            rows={washFeedRows}
+            setRows={setWashFeedRows}
+            inventoryLots={inventoryLots}
+            materialPlaceholder="Select Input Material"
+            quantityLabel="Consume Qty"
+            filterCategories={["RM", "WIP", "REWORK", "ADDITIVE"]}
           />
 
-          <Field label="Input Kg" name="washInputKg" value={form.washInputKg} onChange={onChange} />
+          <Field label="Total Wash Input Kg" value={washFeedTotalKg().toFixed(2)} readOnly />
           <Field label="Washed Output Kg" name="washedOutputKg" value={form.washedOutputKg} onChange={onChange} />
           <Field label="Dust Kg" name="dustKg" value={form.dustKg} onChange={onChange} />
           <Field label="Sink Material Kg" name="sinkMaterialKg" value={form.sinkMaterialKg} onChange={onChange} />
@@ -591,23 +672,17 @@ export default function Production() {
             }}
           />
 
-          <FactorySelectField
-            label="Sorter Input Material"
-            masterType="material"
-            name="sorterInputMaterial"
-            value={form.sorterInputMaterial}
-            onChange={onChange}
-            placeholder="Select Material"
-            approvalRequired
-            defaults={{ category: "WIP", unit: "Kg" }}
-            filter={(item) =>
-              ["RM", "WIP", "REWORK", "ADDITIVE"].includes(
-                String(item.category || item.materialType || "").toUpperCase()
-              )
-            }
+          <InventoryFeedTable
+            title="Colour Sorter Input Materials"
+            rows={sorterFeedRows}
+            setRows={setSorterFeedRows}
+            inventoryLots={inventoryLots}
+            materialPlaceholder="Select Input Material"
+            quantityLabel="Consume Qty"
+            filterCategories={["RM", "WIP", "REWORK", "ADDITIVE"]}
           />
 
-          <Field label="Input Kg" name="sorterInputKg" value={form.sorterInputKg} onChange={onChange} />
+          <Field label="Total Sorter Input Kg" value={sorterFeedTotalKg().toFixed(2)} readOnly />
           <Field label="White Kg" name="whiteSortedKg" value={form.whiteSortedKg} onChange={onChange} />
           <Field label="All Mix Kg" name="allMixSortedKg" value={form.allMixSortedKg} onChange={onChange} />
           <Field label="Commodity Kg" name="commodityKg" value={form.commodityKg} onChange={onChange} />
@@ -658,9 +733,13 @@ export default function Production() {
           />
 
           <InventoryFeedTable
+            title="Extruder Feed Materials"
             rows={feedRows}
             setRows={setFeedRows}
             inventoryLots={inventoryLots}
+            materialPlaceholder="Select Feed Material"
+            quantityLabel="Consume Qty"
+            filterCategories={["RM", "WIP", "REWORK", "ADDITIVE"]}
           />
 
           <Field label="Total Feed Kg" value={totalFeedKg.toFixed(2)} readOnly />
@@ -814,16 +893,6 @@ const labelStyle = {
   fontSize: 12,
   fontWeight: 700,
   color: "#334155",
-};
-
-const infoBox = {
-  background: "#ecfeff",
-  color: "#155e75",
-  border: "1px solid #a5f3fc",
-  padding: 12,
-  borderRadius: 10,
-  marginBottom: 16,
-  fontSize: 13,
 };
 
 const messageBox = {

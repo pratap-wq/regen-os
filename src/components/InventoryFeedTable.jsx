@@ -1,17 +1,33 @@
 import FactoryDropdown from "./FactoryDropdown";
+import { buildAvailabilityMap, materialKey } from "../utils/materialInventory";
 
-export default function InventoryFeedTable({ rows, setRows }) {
+export default function InventoryFeedTable({
+  rows,
+  setRows,
+  inventoryLots = [],
+  title = "Feed Materials",
+  materialPlaceholder = "Select Material",
+  quantityLabel = "Consume Qty",
+  filterCategories = ["RM", "WIP", "REWORK", "ADDITIVE"],
+}) {
+  const availability = buildAvailabilityMap(inventoryLots);
+
   function updateRow(index, key, value) {
     setRows(
-      rows.map((row, i) =>
-        i === index
-          ? {
-              ...row,
-              [key]: value,
-              materialType: key === "sourceType" ? value : row.materialType,
-            }
-          : row
-      )
+      rows.map((row, i) => {
+        if (i !== index) return row;
+
+        const next = {
+          ...row,
+          [key]: value,
+        };
+
+        if (key === "sourceType") {
+          next.materialType = value;
+        }
+
+        return next;
+      })
     );
   }
 
@@ -20,7 +36,6 @@ export default function InventoryFeedTable({ rows, setRows }) {
       sourceType: "",
       materialType: "",
       qtyKg: "",
-      remarks: "",
     };
   }
 
@@ -35,79 +50,73 @@ export default function InventoryFeedTable({ rows, setRows }) {
 
   return (
     <div style={{ gridColumn: "1 / -1", overflowX: "auto" }}>
-      <div style={miniTitle}>Extruder Feed Composition</div>
+      <div style={miniTitle}>{title}</div>
 
       <table style={table}>
         <thead>
           <tr style={head}>
-            <th style={th}>Source / Material</th>
-            <th style={th}>Material Type</th>
-            <th style={th}>Qty Kg</th>
-            <th style={th}>Remarks</th>
-            <th style={th}>Action</th>
+            <th style={th}>Material</th>
+            <th style={th}>Available Qty</th>
+            <th style={th}>{quantityLabel}</th>
+            <th style={th}>Remove Row</th>
           </tr>
         </thead>
 
         <tbody>
-          {(rows || []).map((r, i) => (
-            <tr key={i}>
-              <td style={td}>
-                <FactoryDropdown
-                  masterType="material"
-                  name="sourceType"
-                  value={r.sourceType || ""}
-                  onChange={(e) => updateRow(i, "sourceType", e.target.value)}
-                  placeholder="Select Material"
-                  style={input}
-                  allowAddNew
-                  approvalRequired
-                  defaults={{ category: "RM", unit: "Kg" }}
-                  filter={(item) =>
-                    ["RM", "WIP", "REWORK", "ADDITIVE"].includes(
-                      String(item.category || item.materialType || "").toUpperCase()
-                    )
-                  }
-                />
-              </td>
+          {(rows || []).map((r, i) => {
+            const material = r.materialType || r.sourceType || "";
+            const availableQty = availability[materialKey(material)] || 0;
 
-              <td style={td}>
-                <input
-                  value={r.materialType || ""}
-                  onChange={(e) =>
-                    updateRow(i, "materialType", e.target.value)
-                  }
-                  style={input}
-                />
-              </td>
+            return (
+              <tr key={i}>
+                <td style={td}>
+                  <FactoryDropdown
+                    masterType="material"
+                    name="sourceType"
+                    value={r.sourceType || ""}
+                    onChange={(e) => updateRow(i, "sourceType", e.target.value)}
+                    placeholder={materialPlaceholder}
+                    style={input}
+                    allowAddNew
+                    approvalRequired
+                    defaults={{ category: "RM", unit: "Kg" }}
+                    filter={(item) =>
+                      filterCategories.includes(
+                        String(item.category || item.materialType || "").toUpperCase()
+                      )
+                    }
+                  />
+                </td>
 
-              <td style={td}>
-                <input
-                  type="number"
-                  value={r.qtyKg || ""}
-                  onChange={(e) => updateRow(i, "qtyKg", e.target.value)}
-                  style={input}
-                />
-              </td>
+                <td style={td}>
+                  <input
+                    readOnly
+                    value={`${availableQty.toFixed(2)} Kg`}
+                    style={readonlyInput}
+                  />
+                </td>
 
-              <td style={td}>
-                <input
-                  value={r.remarks || ""}
-                  onChange={(e) => updateRow(i, "remarks", e.target.value)}
-                  style={input}
-                />
-              </td>
+                <td style={td}>
+                  <input
+                    type="number"
+                    value={r.qtyKg || ""}
+                    onChange={(e) => updateRow(i, "qtyKg", e.target.value)}
+                    style={input}
+                  />
+                </td>
 
-              <td style={td}>
-                <button
-                  type="button"
-                  onClick={() => removeRow(i)}
-                  style={removeButton}
-                >
-                  Remove
-                </button>
-              </td>
-            </tr>
-          ))}
+                <td style={td}>
+                  <button
+                    type="button"
+                    onClick={() => removeRow(i)}
+                    style={removeButton}
+                  >
+                    Delete Row
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
 
@@ -153,6 +162,12 @@ const input = {
   border: "1px solid #d1d5db",
   borderRadius: 6,
   boxSizing: "border-box",
+};
+
+const readonlyInput = {
+  ...input,
+  background: "#f8fafc",
+  fontWeight: 700,
 };
 
 const addButton = {

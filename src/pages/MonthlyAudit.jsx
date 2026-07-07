@@ -175,6 +175,11 @@ export default function MonthlyAudit() {
       unmappedKg: close.rm.purchasedKg + close.rm.consumedKg + close.production.fgProducedKg + close.production.dispatchKg,
       mappingWarnings: [],
       source: "frontend operational fallback",
+      periodReceived: backend.periodReceived || materialGroupView?.periodReceived || month,
+      periodNormalized: backend.periodNormalized || materialGroupView?.periodNormalized || materialGroupView?.periodMonth || month,
+      sheetRowCounts: backend.sheetRowCounts || materialGroupView?.sheetRowCounts || {},
+      dateFieldDetected: backend.dateFieldDetected || materialGroupView?.dateFieldDetected || {},
+      periodDiagnostics: backend.periodDiagnostics || materialGroupView?.periodDiagnostics || {},
     };
 
     fallback.mappingWarnings = [
@@ -641,6 +646,8 @@ export default function MonthlyAudit() {
       <Section title="Mapping Check">
         <ReconTable
           rows={[
+            ["Period Sent", effectiveMovementSourceSummary.periodReceived || month, "text"],
+            ["Period Used", effectiveMovementSourceSummary.periodNormalized || month, "text"],
             ["RM Received Source", effectiveMovementSourceSummary.rmReceivedKg || 0],
             ["RM Used Source", effectiveMovementSourceSummary.rmUsedKg || 0],
             ["FG Made Source", effectiveMovementSourceSummary.fgMadeKg || 0],
@@ -654,6 +661,21 @@ export default function MonthlyAudit() {
             {(effectiveMovementSourceSummary.mappingWarnings || []).slice(0, 8).map((warning) => (
               <div key={warning}>{warning}</div>
             ))}
+          </div>
+        )}
+        {effectiveMovementSourceSummary.sheetRowCounts && Object.keys(effectiveMovementSourceSummary.sheetRowCounts).length > 0 && (
+          <div style={muted}>
+            {Object.entries(effectiveMovementSourceSummary.sheetRowCounts).map(([sheet, count]) => {
+              const rowCount = typeof count === "object" ? count.selectedPeriodRows : count;
+              const totalRows = typeof count === "object" ? count.totalRows : "";
+              const field = effectiveMovementSourceSummary.dateFieldDetected?.[sheet] || "no date field";
+              const reason = effectiveMovementSourceSummary.periodDiagnostics?.reasons?.[sheet] || "";
+              return (
+                <div key={sheet}>
+                  {sheet}: {rowCount || 0}{totalRows !== "" ? ` / ${totalRows}` : ""} rows, field: {field}{reason ? `, ${reason}` : ""}
+                </div>
+              );
+            })}
           </div>
         )}
       </Section>

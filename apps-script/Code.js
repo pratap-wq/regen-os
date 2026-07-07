@@ -7364,8 +7364,9 @@ function verifyJuneLedgerV1(data = {}) {
 }
 
 function getMonthCloseMaterialGroups(data = {}) {
-  const periodMonth = String(data.periodMonth || data.month || "2026-06").slice(0, 7);
-  return buildCleanMonthCloseMaterialView_(periodMonth);
+  const periodReceived = data.periodMonth || data.month || data.date || "";
+  const periodMonth = normalizeMonthClosePeriod_(periodReceived) || normalizeMonthClosePeriod_(todayYmd());
+  return buildCleanMonthCloseMaterialView_(periodMonth, periodReceived);
 }
 
 function previewMonthCloseMaterialRepair(data = {}) {
@@ -7431,9 +7432,11 @@ function verifyMonthCloseMaterialRepair(data = {}) {
   };
 }
 
-function buildCleanMonthCloseMaterialView_(periodMonth) {
+function buildCleanMonthCloseMaterialView_(periodMonth, periodReceived) {
   createSheetIfMissing_("Material_Master", materialMasterHeaders_());
   ensureHeaders_("Material_Master", materialMasterHeaders_());
+  const periodNormalized = normalizeMonthClosePeriod_(periodMonth) || periodMonth;
+  const periodDiagnostics = monthCloseSheetPeriodDiagnostics_(periodNormalized);
   const ledgerRows = safeRows_("Inventory_Ledger").filter((row) => !isDeleted_(row));
   const materialMasterRows = safeRows_("Material_Master").filter((row) => {
     const status = String(row.status || "ACTIVE").toUpperCase();
@@ -7460,9 +7463,9 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
   };
   const balances = {};
   const movementStats = {};
-  const priorClosedOpening = monthClosePriorPhysicalOpening_(periodMonth, masterRows);
+  const priorClosedOpening = monthClosePriorPhysicalOpening_(periodNormalized, masterRows);
   const monthEndBalances = {};
-  const operationalView = monthCloseOperationalStockStats_(periodMonth, masterIndex);
+  const operationalView = monthCloseOperationalStockStats_(periodNormalized, masterIndex);
   const operationalStats = operationalView.stats || {};
   const unmappedLedgerRows = [];
 
@@ -7489,8 +7492,8 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
     const normalized = materialFlowNormalizeMaterial_(clean, row.itemType);
     const material = matchMonthCloseMaterial_(row, normalized, masterIndex);
     const qty = num(row.qtyIn) - num(row.qtyOut);
-    const inSelectedMonth = materialFlowRowInPeriod_(row, periodMonth);
-    const beforeSelectedMonth = monthCloseRowBeforePeriod_(row, periodMonth);
+    const inSelectedMonth = materialFlowRowInPeriod_(row, periodNormalized);
+    const beforeSelectedMonth = monthCloseRowBeforePeriod_(row, periodNormalized);
 
     if (!clean || clean === "Recipe Text" || materialFlowIsQualityReference_(row.itemName) || !material) {
       if (inSelectedMonth && unmappedLedgerRows.length < 25 && Math.abs(qty) > 0.001) {
@@ -7608,14 +7611,25 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
     groupTotals[category] = round2(groupTotals[category] + finalBalance);
   });
 
-  const invalidLedgerRows = findInvalidManufacturingLedgerRows_(ledgerRows, periodMonth);
+  const invalidLedgerRows = findInvalidManufacturingLedgerRows_(ledgerRows, periodNormalized);
   const exceptionRows = monthCloseGuaranteedExceptionRows_(operationalView, groups);
   const movementSourceSummary = monthCloseMovementSourceSummary_(operationalView, groups, exceptionRows);
+  movementSourceSummary.periodReceived = periodReceived || periodMonth || "";
+  movementSourceSummary.periodNormalized = periodNormalized;
+  movementSourceSummary.sheetRowCounts = periodDiagnostics.sheetRowCounts;
+  movementSourceSummary.dateFieldDetected = periodDiagnostics.dateFieldDetected;
+  movementSourceSummary.periodDiagnostics = periodDiagnostics;
+  movementSourceSummary.mappingWarnings = (movementSourceSummary.mappingWarnings || []).concat(periodDiagnostics.warnings || []);
 
   return {
     ok: true,
     route: "monthClose.materialGroups",
-    periodMonth,
+    periodMonth: periodNormalized,
+    periodReceived: periodReceived || periodMonth || "",
+    periodNormalized,
+    sheetRowCounts: periodDiagnostics.sheetRowCounts,
+    dateFieldDetected: periodDiagnostics.dateFieldDetected,
+    periodDiagnostics,
     source: "Material_Master + Inventory_Ledger",
     rule: "Month Close rows come only from Material_Master. STORE, recipe text, quality refs and unmapped free-text ledger rows are excluded from manufacturing close.",
     groupTotals,
@@ -7632,7 +7646,7 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
     groups,
     rows: monthCloseStockCategories_().reduce((list, category) => list.concat(groups[category]), []),
     exceptionRows,
-    storesSummary: monthCloseStoresSummary_(periodMonth),
+    storesSummary: monthCloseStoresSummary_(periodNormalized),
     movementSourceSummary,
     materialCount: masterRows.length,
     unmappedLedgerRows,
@@ -7756,20 +7770,14 @@ function monthCloseOpeningFromPriorClose_(material, priorClosedOpening) {
 }
 
 function monthCloseRowBeforePeriod_(row, periodMonth) {
-  const pm = String(row.periodMonth || row.closeMonth || "").trim();
-  if (pm) return pm.slice(0, 7) < periodMonth;
+  const pm = normalizeMonthClosePeriod_(row.periodMonth || row.closeMonth || "");
+  if (pm) return pm < periodMonth;
   const key = monthCloseRowPeriodKey_(row);
   return key && key < periodMonth;
 }
 
 function monthCloseRowPeriodKey_(row) {
-  const value = row.date || row.invoiceDate || row.createdAt || row.savedAt || row.closedAt || row.timestamp || "";
-  if (!value) return "";
-  const text = String(value);
-  if (/^\d{4}-\d{2}/.test(text)) return text.slice(0, 7);
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return "";
-  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+  return normalizeMonthClosePeriod_(monthCloseFirstPeriodValue_(row));
 }
 
 function monthCloseMaterialDebug_(groups, priorClosedOpening) {
@@ -8612,16 +8620,147 @@ function safeRows_(sheetName) {
   }
 }
 
+function normalizeMonthClosePeriod_(value) {
+  if (value === null || value === undefined || value === "") return "";
+  if (Object.prototype.toString.call(value) === "[object Date]" && !isNaN(value.getTime())) {
+    return value.getFullYear() + "-" + String(value.getMonth() + 1).padStart(2, "0");
+  }
+
+  const text = String(value).trim();
+  if (!text) return "";
+
+  let match = text.match(/^(\d{4})[-/](\d{1,2})(?:[-/]\d{1,2})?/);
+  if (match) return match[1] + "-" + String(Number(match[2])).padStart(2, "0");
+
+  match = text.match(/^(\d{1,2})[-/](\d{4})$/);
+  if (match) return match[2] + "-" + String(Number(match[1])).padStart(2, "0");
+
+  const monthMap = {
+    JAN: "01",
+    JANUARY: "01",
+    FEB: "02",
+    FEBRUARY: "02",
+    MAR: "03",
+    MARCH: "03",
+    APR: "04",
+    APRIL: "04",
+    MAY: "05",
+    JUN: "06",
+    JUNE: "06",
+    JUL: "07",
+    JULY: "07",
+    AUG: "08",
+    AUGUST: "08",
+    SEP: "09",
+    SEPT: "09",
+    SEPTEMBER: "09",
+    OCT: "10",
+    OCTOBER: "10",
+    NOV: "11",
+    NOVEMBER: "11",
+    DEC: "12",
+    DECEMBER: "12",
+  };
+  const upper = text.toUpperCase().replace(/[_.,]+/g, " ");
+  match = upper.match(/\b(JANUARY|JAN|FEBRUARY|FEB|MARCH|MAR|APRIL|APR|MAY|JUNE|JUN|JULY|JUL|AUGUST|AUG|SEPTEMBER|SEPT|SEP|OCTOBER|OCT|NOVEMBER|NOV|DECEMBER|DEC)\b\s+(\d{4})/);
+  if (match && monthMap[match[1]]) return match[2] + "-" + monthMap[match[1]];
+  match = upper.match(/\b(\d{4})\s+(JANUARY|JAN|FEBRUARY|FEB|MARCH|MAR|APRIL|APR|MAY|JUNE|JUN|JULY|JUL|AUGUST|AUG|SEPTEMBER|SEPT|SEP|OCTOBER|OCT|NOVEMBER|NOV|DECEMBER|DEC)\b/);
+  if (match && monthMap[match[2]]) return match[1] + "-" + monthMap[match[2]];
+
+  const d = new Date(text);
+  if (!isNaN(d.getTime())) {
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+  }
+  return "";
+}
+
+function monthClosePeriodFieldCandidates_() {
+  return ["periodMonth", "closeMonth", "month", "date", "invoiceDate", "createdAt", "savedAt", "closedAt", "timestamp"];
+}
+
+function monthCloseFirstPeriodField_(row) {
+  const candidates = monthClosePeriodFieldCandidates_();
+  let fallback = "";
+  for (let i = 0; i < candidates.length; i += 1) {
+    const field = candidates[i];
+    if (row[field] !== undefined && row[field] !== null && String(row[field]).trim() !== "") {
+      if (!fallback) fallback = field;
+      if (normalizeMonthClosePeriod_(row[field])) return field;
+    }
+  }
+  return fallback;
+}
+
+function monthCloseFirstPeriodValue_(row) {
+  const candidates = monthClosePeriodFieldCandidates_();
+  for (let i = 0; i < candidates.length; i += 1) {
+    const field = candidates[i];
+    if (row[field] !== undefined && row[field] !== null && String(row[field]).trim() !== "" && normalizeMonthClosePeriod_(row[field])) {
+      return row[field];
+    }
+  }
+  const field = monthCloseFirstPeriodField_(row);
+  return field ? row[field] : "";
+}
+
+function monthCloseSheetPeriodDiagnostics_(periodMonth) {
+  const sheets = ["RM_Inward", "Wash_Batches", "Sorting_Batches", "Extrusion_Batches", "Dispatches", "Stores_Inward", "Stores_Issue"];
+  const sheetRowCounts = {};
+  const dateFieldDetected = {};
+  const reasons = {};
+  const warnings = [];
+
+  sheets.forEach((sheetName) => {
+    let rows = [];
+    try {
+      getSheet(sheetName);
+      rows = getRowsAsObjects(sheetName).filter((row) => !isDeleted_(row));
+    } catch (err) {
+      sheetRowCounts[sheetName] = { totalRows: 0, selectedPeriodRows: 0 };
+      dateFieldDetected[sheetName] = "";
+      reasons[sheetName] = "sheet missing";
+      warnings.push(sheetName + ": sheet missing");
+      return;
+    }
+
+    const detectedCounts = {};
+    rows.forEach((row) => {
+      const field = monthCloseFirstPeriodField_(row);
+      if (field) detectedCounts[field] = (detectedCounts[field] || 0) + 1;
+    });
+    const detectedField = Object.keys(detectedCounts).sort((a, b) => detectedCounts[b] - detectedCounts[a])[0] || "";
+    const selectedPeriodRows = rows.filter((row) => materialFlowRowInPeriod_(row, periodMonth)).length;
+    sheetRowCounts[sheetName] = {
+      totalRows: rows.length,
+      selectedPeriodRows,
+    };
+    dateFieldDetected[sheetName] = detectedField;
+
+    if (!rows.length) {
+      reasons[sheetName] = "sheet has no active rows";
+      warnings.push(sheetName + ": sheet has no active rows");
+    } else if (!detectedField) {
+      reasons[sheetName] = "date column missing";
+      warnings.push(sheetName + ": date/period column missing");
+    } else if (!selectedPeriodRows) {
+      reasons[sheetName] = "no rows in selected period";
+      warnings.push(sheetName + ": no rows matched " + periodMonth + " using " + detectedField);
+    } else {
+      reasons[sheetName] = "matched selected period";
+    }
+  });
+
+  return {
+    periodNormalized: periodMonth,
+    sheetRowCounts,
+    dateFieldDetected,
+    reasons,
+    warnings,
+  };
+}
+
 function materialFlowRowInPeriod_(row, periodMonth) {
-  const pm = String(row.periodMonth || row.closeMonth || "").trim();
-  if (pm) return pm.slice(0, 7) === periodMonth;
-  const value = row.date || row.invoiceDate || row.createdAt || row.savedAt || row.closedAt || row.timestamp || "";
-  if (!value) return false;
-  const text = String(value);
-  if (/^\d{4}-\d{2}/.test(text)) return text.slice(0, 7) === periodMonth;
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return false;
-  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") === periodMonth;
+  return normalizeMonthClosePeriod_(monthCloseFirstPeriodValue_(row)) === normalizeMonthClosePeriod_(periodMonth);
 }
 
 function addMasterOnlyMaterials_(materialIndex, rows, sourceSheet) {

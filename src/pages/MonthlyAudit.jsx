@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { apiCall } from "../api/api";
 import MonthlySummary from "../components/MonthlySummary";
 import InventoryReconciliation from "../components/InventoryReconciliation";
@@ -12,7 +11,6 @@ import { calculateMonthClose } from "../services/monthCloseEngine";
 import { getPhysicalCount, savePhysicalCount } from "../services/physicalCountService";
 
 export default function MonthlyAudit() {
-  const navigate = useNavigate();
   const now = new Date();
 
   const [month, setMonth] = useState(
@@ -32,6 +30,7 @@ export default function MonthlyAudit() {
   });
 
   const [adjustments, setAdjustments] = useState([]);
+  const [adjustmentReasons, setAdjustmentReasons] = useState({});
 
   const [physical, setPhysical] = useState({
     rmPhysicalKg: "",
@@ -90,23 +89,29 @@ export default function MonthlyAudit() {
     }
   }
 
+  async function savePhysicalStockSnapshot({ silent = false } = {}) {
+    const res = await savePhysicalCount(month, {
+      ...physical,
+      savedBy: physical.ceoSignoff || "System",
+    });
+
+    if (!res?.ok) {
+      throw new Error(res?.error || "Failed to save physical stock.");
+    }
+
+    if (!silent) {
+      setStatus("Physical stock saved successfully.");
+    }
+
+    await loadPhysicalCount();
+    await loadData();
+    return res;
+  }
+
   async function savePhysicalStock() {
     try {
       setStatus("Saving physical stock count...");
-
-      const res = await savePhysicalCount(month, {
-        ...physical,
-        savedBy: physical.ceoSignoff || "System",
-      });
-
-      if (!res?.ok) {
-        setStatus(res?.error || "Failed to save physical stock.");
-        return;
-      }
-
-      setStatus("Physical stock saved successfully.");
-      await loadPhysicalCount();
-      await loadData();
+      await savePhysicalStockSnapshot();
     } catch (err) {
       setStatus(err.message || "Failed to save physical stock.");
     }
@@ -177,7 +182,7 @@ export default function MonthlyAudit() {
         stage: "Material",
         module: "RM",
         itemType: "RM",
-        itemCode: "RM",
+        itemCode: "White Flakes",
         systemKg: close.inventory.rmClosingKg,
         physicalKg: physical.rmPhysicalKg,
       },
@@ -186,7 +191,7 @@ export default function MonthlyAudit() {
         stage: "Washed Material",
         module: "Wash",
         itemType: "WASHED",
-        itemCode: "Washed Flakes",
+        itemCode: "Washed White Flakes",
         systemKg: close.inventory.washClosingKg,
         physicalKg: physical.washPhysicalKg,
       },
@@ -195,7 +200,7 @@ export default function MonthlyAudit() {
         stage: "Sorted Material",
         module: "Color Sorter",
         itemType: "SORTED",
-        itemCode: "Sorted Material",
+        itemCode: "White Sorted",
         systemKg: close.inventory.sortingClosingKg,
         physicalKg: physical.sortingPhysicalKg,
       },
@@ -211,12 +216,19 @@ export default function MonthlyAudit() {
     ];
 
     return baseLines.map((line) => {
-      const related = adjustments.filter(
-        (a) =>
-          String(a.periodMonth || "") === String(month) &&
+      const lineSourceRef = `MONTH_CLOSE:${month}:${line.key}`;
+      const related = adjustments.filter((a) => {
+        const sameMonth = String(a.periodMonth || "") === String(month);
+        const sameType =
           String(a.itemType || "").toUpperCase() ===
-            String(line.itemType || "").toUpperCase()
-      );
+          String(line.itemType || "").toUpperCase();
+        const sameSource = String(a.sourceRef || "") === lineSourceRef;
+        const sameItem =
+          String(a.itemCode || a.material || "").toUpperCase() ===
+          String(line.itemCode || "").toUpperCase();
+
+        return sameMonth && sameType && (sameSource || sameItem);
+      });
 
       const approvedAdjustmentKg = related
         .filter((a) => String(a.status || "").toUpperCase() === "APPROVED")
@@ -236,20 +248,28 @@ export default function MonthlyAudit() {
         line.physicalKg !== undefined;
       const physicalKg = num(line.physicalKg);
       const varianceKg = hasPhysical ? physicalKg - num(line.systemKg) : 0;
-      const remainingKg = varianceKg + approvedAdjustmentKg;
+      const remainingKg = varianceKg - approvedAdjustmentKg;
+      const hasDifference = hasPhysical && Math.abs(varianceKg) > 0.01;
+      const adjustmentApproved =
+        hasDifference &&
+        Math.abs(approvedAdjustmentKg) > 0.01 &&
+        Math.abs(remainingKg) <= 0.01;
 
       let statusText = "Physical Pending";
       let statusType = "pending";
 
       if (hasPhysical) {
-        if (Math.abs(remainingKg) <= 0.01) {
-          statusText = "Reconciled";
+        if (!hasDifference) {
+          statusText = "No Difference";
+          statusType = "success";
+        } else if (adjustmentApproved) {
+          statusText = "Adjustment Approved";
           statusType = "success";
         } else if (Math.abs(pendingAdjustmentKg) > 0.01) {
-          statusText = "Adjustment Pending";
+          statusText = "Difference Pending Approval";
           statusType = "warning";
         } else {
-          statusText = "Investigation Required";
+          statusText = "Difference Pending Approval";
           statusType = "danger";
         }
       }
@@ -258,6 +278,8 @@ export default function MonthlyAudit() {
         ...line,
         related,
         hasPhysical,
+        hasDifference,
+        adjustmentApproved,
         physicalKg,
         varianceKg,
         approvedAdjustmentKg,
@@ -306,7 +328,7 @@ export default function MonthlyAudit() {
           type: "warning",
           text: `${line.stage} variance is ${formatKg(
             line.remainingKg
-          )}. Create an inventory adjustment.`,
+          )}. Approve the adjustment inside Month Close.`,
         });
       }
 
@@ -360,19 +382,71 @@ export default function MonthlyAudit() {
     setPhysical((p) => ({ ...p, [name]: value }));
   }
 
-  function goToAdjustment(line) {
-    navigate("/inventory-adjustments", {
-      state: {
+  function onAdjustmentReasonChange(lineKey, value) {
+    setAdjustmentReasons((prev) => ({ ...prev, [lineKey]: value }));
+  }
+
+  async function approveMonthCloseAdjustment(line) {
+    if (!line.hasPhysical) {
+      setStatus("Enter physical closing stock before approving an adjustment.");
+      return;
+    }
+
+    if (!line.hasDifference || Math.abs(line.remainingKg) <= 0.01) {
+      setStatus(`${line.stage} has no pending difference to approve.`);
+      return;
+    }
+
+    const reason =
+      String(adjustmentReasons[line.key] || "").trim() ||
+      `Month Close physical stock variance for ${line.stage}`;
+
+    const ok = window.confirm(
+      `Approve ${line.stage} adjustment of ${formatKg(line.remainingKg)} for ${monthLabel(month)}?`
+    );
+
+    if (!ok) return;
+
+    try {
+      setStatus("Saving physical stock and approving adjustment...");
+      await savePhysicalStockSnapshot({ silent: true });
+
+      const res = await apiCall({
+        fn: "inventoryAdjustments.approveMonthClose",
         periodMonth: month,
+        closeMonth: month,
+        date: `${month}-01`,
         module: line.module,
         itemType: line.itemType,
         itemCode: line.itemCode,
-        quantityKg: line.remainingKg * -1,
-        adjustmentType: "Physical Count",
-        reason: "Physical stock mismatch",
-        sourceRef: `Month Close Control Room ${month}`,
-      },
-    });
+        material: line.itemCode,
+        stage: line.stage,
+        systemQty: line.systemKg,
+        physicalQty: line.physicalKg,
+        differenceQty: line.remainingKg,
+        value: getDifferenceValue(line, close),
+        reason,
+        remarks: physical.remarks || "",
+        sourceRef: `MONTH_CLOSE:${month}:${line.key}`,
+        approvedBy:
+          physical.accountsSignoff ||
+          physical.ceoSignoff ||
+          physical.productionSignoff ||
+          "Month Close",
+      });
+
+      if (!res?.ok) {
+        setStatus(res?.error || "Failed to approve Month Close adjustment.");
+        return;
+      }
+
+      setAdjustmentReasons((prev) => ({ ...prev, [line.key]: reason }));
+      setStatus(res.message || "Month Close adjustment approved and posted.");
+      await loadData();
+      await loadPhysicalCount();
+    } catch (err) {
+      setStatus(err.message || "Failed to approve Month Close adjustment.");
+    }
   }
 
   async function closeMonth() {
@@ -511,8 +585,7 @@ export default function MonthlyAudit() {
         exceptions={exceptions}
         physical={physical}
         readyToClose={readyToClose}
-        goToAdjustment={goToAdjustment}
-        navigate={navigate}
+        onApproveAdjustment={approveMonthCloseAdjustment}
       />
 
       <MonthlySummary close={close} />
@@ -530,14 +603,13 @@ export default function MonthlyAudit() {
               <tr>
                 {[
                   "Stage",
-                  "System Kg",
-                  "Physical Kg",
-                  "Variance",
-                  "Approved Adj.",
-                  "Pending Adj.",
-                  "Remaining",
+                  "System Closing Qty",
+                  "Physical Closing Qty",
+                  "Difference Qty",
+                  "Difference Value",
+                  "Reason",
                   "Status",
-                  "Action",
+                  "Approve Adjustment",
                 ].map((h) => (
                   <th key={h} style={th}>{h}</th>
                 ))}
@@ -550,25 +622,33 @@ export default function MonthlyAudit() {
                   <td style={td}>{formatKg(line.systemKg)}</td>
                   <td style={td}>{line.hasPhysical ? formatKg(line.physicalKg) : "Enter below"}</td>
                   <td style={td}>{line.hasPhysical ? formatKg(line.varianceKg) : "-"}</td>
-                  <td style={td}>{formatKg(line.approvedAdjustmentKg)}</td>
-                  <td style={td}>{formatKg(line.pendingAdjustmentKg)}</td>
-                  <td style={td}><b>{line.hasPhysical ? formatKg(line.remainingKg) : "-"}</b></td>
+                  <td style={td}>{line.hasPhysical ? formatCurrency(getDifferenceValue(line, close)) : "-"}</td>
+                  <td style={td}>
+                    {line.hasDifference && !line.adjustmentApproved ? (
+                      <input
+                        value={adjustmentReasons[line.key] || ""}
+                        onChange={(e) => onAdjustmentReasonChange(line.key, e.target.value)}
+                        placeholder="Reason for difference"
+                        style={smallInput}
+                      />
+                    ) : (
+                      <span style={{ color: "#64748b" }}>-</span>
+                    )}
+                  </td>
                   <td style={td}>
                     <span style={pill(line.statusType)}>{line.statusText}</span>
                   </td>
                   <td style={td}>
                     {line.statusType === "danger" ? (
-                      <button style={miniButton} onClick={() => goToAdjustment(line)}>
-                        Create Adjustment
+                      <button style={miniButton} onClick={() => approveMonthCloseAdjustment(line)}>
+                        Approve Adjustment
                       </button>
                     ) : line.statusType === "warning" ? (
-                      <button style={miniDarkButton} onClick={() => navigate("/inventory-adjustments")}>
-                        View / Approve
-                      </button>
+                      <span style={{ color: "#b45309", fontWeight: 800 }}>Pending approval</span>
                     ) : line.statusType === "pending" ? (
                       <span style={{ color: "#64748b" }}>Enter physical stock</span>
                     ) : (
-                      <span style={{ color: "#15803d", fontWeight: 800 }}>OK</span>
+                      <span style={{ color: "#15803d", fontWeight: 800 }}>{line.statusText}</span>
                     )}
                   </td>
                 </tr>
@@ -578,7 +658,7 @@ export default function MonthlyAudit() {
         </div>
 
         <div style={hintBox}>
-          Month Close Control Room reviews differences. Corrections must be entered through Resolve Variance, then approved and posted to the inventory ledger. Physical count corrections are saved as new audit snapshots.
+          Enter physical closing stock here. If a difference appears, approve the adjustment in this table; Month Close will create the approved inventory adjustment, post it to the inventory ledger, and keep the physical count as an audit snapshot.
         </div>
       </Panel>
 
@@ -664,8 +744,7 @@ function MonthCloseWorkflow({
   exceptions,
   physical,
   readyToClose,
-  goToAdjustment,
-  navigate,
+  onApproveAdjustment,
 }) {
   const pendingAdjustments = materialLines.filter((x) => x.statusType === "warning").length;
   const needsAction = materialLines.filter((x) => x.statusType === "danger").length;
@@ -690,7 +769,7 @@ function MonthCloseWorkflow({
       label: "Material Reconciliation",
       status: materialReady ? "Reconciled" : needsAction > 0 ? "Difference Found" : "Pending Approval",
       type: materialReady ? "success" : needsAction > 0 ? "danger" : "warning",
-      action: materialReady ? "None" : needsAction > 0 ? "Create adjustment" : "Approve pending adjustment",
+      action: materialReady ? "None" : needsAction > 0 ? "Approve difference below" : "Pending adjustment approval",
     },
     {
       label: "Critical Exceptions",
@@ -742,9 +821,9 @@ function MonthCloseWorkflow({
         {physicalPending > 0
           ? "Enter physical stock and click SAVE / UPDATE PHYSICAL STOCK."
           : needsAction > 0
-          ? "Create inventory adjustment for the difference rows below."
+          ? "Enter a reason and approve the difference rows below."
           : pendingAdjustments > 0
-          ? "Approve pending inventory adjustments."
+          ? "Wait for pending adjustment approval or refresh after approval."
           : !approvalsDone
           ? "Complete Production, Stores, Accounts, QC and CEO sign-offs."
           : readyToClose
@@ -764,8 +843,8 @@ function MonthCloseWorkflow({
                     Remaining difference: {formatKg(line.remainingKg)}
                   </div>
                 </div>
-                <button style={miniButton} onClick={() => goToAdjustment(line)}>
-                  Create Adjustment
+                <button style={miniButton} onClick={() => onApproveAdjustment(line)}>
+                  Approve Adjustment
                 </button>
               </div>
             ))}
@@ -778,9 +857,7 @@ function MonthCloseWorkflow({
             <b>Adjustment approval pending</b>
             <div style={actionSub}>Approve or reject pending adjustment entries.</div>
           </div>
-          <button style={miniDarkButton} onClick={() => navigate("/inventory-adjustments")}>
-            View / Approve
-          </button>
+          <span style={{ color: "#b45309", fontWeight: 900 }}>Pending</span>
         </div>
       )}
     </Panel>
@@ -791,6 +868,16 @@ function MonthCloseWorkflow({
 function getLineVariance(lines, stage) {
   const line = lines.find((x) => x.stage === stage);
   return line ? line.remainingKg : 0;
+}
+
+function getDifferenceValue(line, close) {
+  const differenceKg = Math.abs(num(line.remainingKg || line.varianceKg));
+  const rate =
+    line.itemType === "RM"
+      ? close.rm.avgRate
+      : close.profitability.manufacturingCostPerKg || close.rm.avgRate;
+
+  return differenceKg * num(rate);
 }
 
 function materialFlowData(close) {
@@ -839,6 +926,10 @@ function formatKg(value) {
   return `${num(value).toLocaleString("en-IN", { maximumFractionDigits: 0 })} Kg`;
 }
 
+function formatCurrency(value) {
+  return `₹${num(value).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+}
+
 function formatPercent(value) {
   return `${num(value).toFixed(2)}%`;
 }
@@ -873,6 +964,7 @@ const statusBanner = (ready) => ({
 const panel = { background: "white", padding: 18, borderRadius: 16, boxShadow: "0 2px 12px rgba(15, 23, 42, 0.08)", border: "1px solid #e2e8f0", marginBottom: 18 };
 const panelTitle = { margin: "0 0 14px", color: "#0f172a" };
 const input = { width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #cbd5e1", boxSizing: "border-box", background: "white" };
+const smallInput = { ...input, minWidth: 190, padding: "8px 10px", fontSize: 12 };
 const textarea = { ...input, minHeight: 95, resize: "vertical" };
 const label = { display: "block", fontWeight: 800, marginBottom: 8, color: "#334155" };
 const labelStyle = { ...label, fontSize: 13 };

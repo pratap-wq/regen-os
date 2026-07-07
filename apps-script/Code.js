@@ -428,6 +428,7 @@ if (p.fn === "inventoryAdjustments.add") return addInventoryAdjustment(p);
 if (p.fn === "inventoryAdjustments.list") return listInventoryAdjustments(p);
 if (p.fn === "inventoryAdjustments.update") return updateInventoryAdjustment(p);
 if (p.fn === "inventoryAdjustments.approve") return approveInventoryAdjustment(p);
+if (p.fn === "inventoryAdjustments.approveMonthClose") return approveMonthCloseInventoryAdjustment(p);
 if (p.fn === "inventoryAdjustments.reject") return rejectInventoryAdjustment(p);
 if (p.fn === "inventoryAdjustments.summary") return inventoryAdjustmentsSummary(p);
 
@@ -593,6 +594,12 @@ const REGEN_DB_SCHEMA = {
     "reason",
     "remarks",
     "sourceRef",
+    "closeMonth",
+    "material",
+    "systemQty",
+    "physicalQty",
+    "differenceQty",
+    "differenceValue",
     "status",
     "approvedBy",
     "approvedAt",
@@ -8763,6 +8770,12 @@ Inventory_Adjustments: [
   "reason",
   "remarks",
   "sourceRef",
+  "closeMonth",
+  "material",
+  "systemQty",
+  "physicalQty",
+  "differenceQty",
+  "differenceValue",
   "status",
   "approvedBy",
   "approvedAt",
@@ -8865,6 +8878,12 @@ function ensureInventoryAdjustmentSheet_() {
     "reason",
     "remarks",
     "sourceRef",
+    "closeMonth",
+    "material",
+    "systemQty",
+    "physicalQty",
+    "differenceQty",
+    "differenceValue",
     "status",
     "approvedBy",
     "approvedAt",
@@ -9080,6 +9099,119 @@ function approveInventoryAdjustment(data = {}) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function approveMonthCloseInventoryAdjustment(data = {}) {
+  ensureInventoryAdjustmentSheet_();
+
+  const periodMonth =
+    data.periodMonth || data.closeMonth || getPeriodMonth(data.date || todayYmd());
+  const differenceQty = num(data.differenceQty || data.quantityKg);
+  const sourceRef =
+    data.sourceRef ||
+    "MONTH_CLOSE:" +
+      periodMonth +
+      ":" +
+      String(data.itemType || "") +
+      ":" +
+      String(data.itemCode || data.material || "");
+
+  if (!periodMonth) {
+    return output({ ok: false, error: "Missing close month" });
+  }
+
+  if (!sourceRef) {
+    return output({ ok: false, error: "Missing source reference" });
+  }
+
+  if (Math.abs(differenceQty) <= 0.01) {
+    return output({ ok: true, skipped: true, message: "No difference to approve" });
+  }
+
+  try {
+    validateInventoryLedgerMaterial_({
+      itemType: data.itemType || "",
+      itemName: data.itemCode || data.material || "",
+      materialId: data.materialId || "",
+      materialCode: data.materialCode || data.itemCode || data.material || "",
+    });
+  } catch (err) {
+    return output({
+      ok: false,
+      error: err.message || "Month Close adjustment material is not valid for Inventory Ledger",
+    });
+  }
+
+  validateMonthLock(periodMonth);
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    return output({ ok: false, error: "Month Close adjustment approval is already in progress" });
+  }
+
+  try {
+    const rows = getRowsAsObjects("Inventory_Adjustments");
+    const existing = rows.find(
+      (row) =>
+        String(row.sourceRef || "") === String(sourceRef) &&
+        String(row.periodMonth || "") === String(periodMonth)
+    );
+
+    if (existing && String(existing.status || "").toUpperCase() === "APPROVED") {
+      return output({
+        ok: true,
+        adjustmentId: existing.adjustmentId,
+        alreadyApproved: true,
+        message: "Month Close adjustment was already approved",
+      });
+    }
+
+    const adjustmentId = existing?.adjustmentId || generateBatchId("IA");
+    const payload = {
+      adjustmentId,
+      periodMonth,
+      date: normalizeDateOnly_(data.date || todayYmd()),
+      module: data.module || "MONTH_CLOSE",
+      itemType: data.itemType || "",
+      itemCode: data.itemCode || data.material || "",
+      adjustmentType: "MONTH_CLOSE_PHYSICAL_VARIANCE",
+      quantityKg: differenceQty,
+      value: num(data.value || data.differenceValue),
+      reason: data.reason || "Month Close physical stock variance",
+      remarks: data.remarks || "",
+      sourceRef,
+      closeMonth: data.closeMonth || periodMonth,
+      material: data.material || data.itemCode || "",
+      systemQty: num(data.systemQty),
+      physicalQty: num(data.physicalQty),
+      differenceQty,
+      differenceValue: num(data.value || data.differenceValue),
+      status: "DRAFT",
+      approvedBy: "",
+      approvedAt: "",
+      createdBy: data.createdBy || data.approvedBy || "Month Close",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    if (existing) {
+      updateById("Inventory_Adjustments", "adjustmentId", adjustmentId, payload);
+    } else {
+      appendObjectRow(getSheet("Inventory_Adjustments"), payload);
+    }
+  } finally {
+    lock.releaseLock();
+  }
+
+  return approveInventoryAdjustment({
+    adjustmentId:
+      getRowsAsObjects("Inventory_Adjustments").find(
+        (row) =>
+          String(row.sourceRef || "") === String(sourceRef) &&
+          String(row.periodMonth || "") === String(periodMonth)
+      )?.adjustmentId || "",
+    approvedBy: data.approvedBy || data.createdBy || "Month Close",
+  });
 }
 
 function rejectInventoryAdjustment(data = {}) {

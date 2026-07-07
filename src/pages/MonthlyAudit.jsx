@@ -154,44 +154,6 @@ export default function MonthlyAudit() {
     [rows, month]
   );
 
-  const effectiveMovementSourceSummary = useMemo(() => {
-    const backend = materialGroupView?.movementSourceSummary || {};
-    const backendHasSource =
-      num(backend.rmReceivedKg) > 0 ||
-      num(backend.rmUsedKg) > 0 ||
-      num(backend.fgMadeKg) > 0 ||
-      num(backend.dispatchedKg) > 0 ||
-      num(backend.mappedKg) > 0 ||
-      num(backend.unmappedKg) > 0;
-
-    if (backendHasSource) return backend;
-
-    const fallback = {
-      rmReceivedKg: close.rm.purchasedKg,
-      rmUsedKg: close.rm.consumedKg,
-      fgMadeKg: close.production.fgProducedKg,
-      dispatchedKg: close.production.dispatchKg,
-      mappedKg: 0,
-      unmappedKg: close.rm.purchasedKg + close.rm.consumedKg + close.production.fgProducedKg + close.production.dispatchKg,
-      mappingWarnings: [],
-      source: "frontend operational fallback",
-      periodReceived: backend.periodReceived || materialGroupView?.periodReceived || month,
-      periodNormalized: backend.periodNormalized || materialGroupView?.periodNormalized || materialGroupView?.periodMonth || month,
-      sheetRowCounts: backend.sheetRowCounts || materialGroupView?.sheetRowCounts || {},
-      dateFieldDetected: backend.dateFieldDetected || materialGroupView?.dateFieldDetected || {},
-      periodDiagnostics: backend.periodDiagnostics || materialGroupView?.periodDiagnostics || {},
-    };
-
-    fallback.mappingWarnings = [
-      fallback.rmReceivedKg ? `Unmapped RM Received: ${formatKg(fallback.rmReceivedKg)}` : "",
-      fallback.rmUsedKg ? `Unmapped RM Used: ${formatKg(fallback.rmUsedKg)}` : "",
-      fallback.fgMadeKg ? `Unmapped FG Made: ${formatKg(fallback.fgMadeKg)}` : "",
-      fallback.dispatchedKg ? `Unmapped Dispatch: ${formatKg(fallback.dispatchedKg)}` : "",
-    ].filter(Boolean);
-
-    return fallback;
-  }, [materialGroupView, close]);
-
   const materialLines = useMemo(
     () => buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }),
     [close, rows, physicalMaterialLines, month]
@@ -548,43 +510,6 @@ export default function MonthlyAudit() {
           <StatusPill label="Closing" count={formatQtyCount(materialGroupView?.storesSummary?.closingQty)} type="success" />
         </div>
         <div style={muted}>Stores are summarized here so consumable items do not crowd the manufacturing stock table.</div>
-      </Section>
-
-      <Section title="Mapping Check">
-        <ReconTable
-          rows={[
-            ["Period Sent", effectiveMovementSourceSummary.periodReceived || month, "text"],
-            ["Period Used", effectiveMovementSourceSummary.periodNormalized || month, "text"],
-            ["RM Received Source", effectiveMovementSourceSummary.rmReceivedKg || 0],
-            ["RM Used Source", effectiveMovementSourceSummary.rmUsedKg || 0],
-            ["FG Made Source", effectiveMovementSourceSummary.fgMadeKg || 0],
-            ["Dispatched Source", effectiveMovementSourceSummary.dispatchedKg || 0],
-            ["Mapped Movement", effectiveMovementSourceSummary.mappedKg || 0],
-            ["Unmapped Movement", effectiveMovementSourceSummary.unmappedKg || 0],
-          ]}
-        />
-        {(effectiveMovementSourceSummary.mappingWarnings || []).length > 0 && (
-          <div style={warningBox}>
-            {(effectiveMovementSourceSummary.mappingWarnings || []).slice(0, 8).map((warning) => (
-              <div key={warning}>{warning}</div>
-            ))}
-          </div>
-        )}
-        {effectiveMovementSourceSummary.sheetRowCounts && Object.keys(effectiveMovementSourceSummary.sheetRowCounts).length > 0 && (
-          <div style={muted}>
-            {Object.entries(effectiveMovementSourceSummary.sheetRowCounts).map(([sheet, count]) => {
-              const rowCount = typeof count === "object" ? count.selectedPeriodRows : count;
-              const totalRows = typeof count === "object" ? count.totalRows : "";
-              const field = effectiveMovementSourceSummary.dateFieldDetected?.[sheet] || "no date field";
-              const reason = effectiveMovementSourceSummary.periodDiagnostics?.reasons?.[sheet] || "";
-              return (
-                <div key={sheet}>
-                  {sheet}: {rowCount || 0}{totalRows !== "" ? ` / ${totalRows}` : ""} rows, field: {field}{reason ? `, ${reason}` : ""}
-                </div>
-              );
-            })}
-          </div>
-        )}
       </Section>
 
       <div style={twoColumn}>

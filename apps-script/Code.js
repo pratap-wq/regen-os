@@ -7435,11 +7435,23 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
   createSheetIfMissing_("Material_Master", materialMasterHeaders_());
   ensureHeaders_("Material_Master", materialMasterHeaders_());
   const ledgerRows = safeRows_("Inventory_Ledger").filter((row) => !isDeleted_(row));
-  const masterRows = safeRows_("Material_Master").filter((row) => {
+  const materialMasterRows = safeRows_("Material_Master").filter((row) => {
     const status = String(row.status || "ACTIVE").toUpperCase();
     const category = monthCloseMaterialCategory_(row);
-    return status !== "DELETED" && status !== "INACTIVE" && materialFlowIsManufacturingCategory_(category);
+    return status !== "DELETED" && status !== "INACTIVE" && monthCloseIsStockCategory_(category);
   });
+  const storeMasterRows = safeRows_("Stores_Master").filter((row) => {
+    const status = String(row.status || row.isActive || "ACTIVE").toUpperCase();
+    return status !== "DELETED" && status !== "INACTIVE" && status !== "FALSE";
+  }).map((row) => ({
+    materialId: row.itemId || row.storesItemId || "",
+    materialCode: row.itemCode || row.itemId || row.storesItemId || row.itemName || "",
+    materialName: row.itemName || row.name || "",
+    category: "STORE",
+    unit: row.unit || row.uom || "Nos",
+    status: row.status || "ACTIVE",
+  }));
+  const masterRows = monthCloseUniqueMasterRows_(materialMasterRows.concat(storeMasterRows));
   const masterIndex = monthCloseMaterialMasterIndex_(masterRows);
   const groups = {
     RM: [],
@@ -7448,6 +7460,7 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
     WASTE: [],
     REWORK: [],
     ADDITIVE: [],
+    STORE: [],
   };
   const groupTotals = {
     RM: 0,
@@ -7456,11 +7469,13 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
     WASTE: 0,
     REWORK: 0,
     ADDITIVE: 0,
+    STORE: 0,
   };
   const balances = {};
   const movementStats = {};
   const priorClosedOpening = monthClosePriorPhysicalOpening_(periodMonth, masterRows);
   const monthEndBalances = {};
+  const operationalStats = monthCloseOperationalStockStats_(periodMonth, masterIndex);
   const unmappedLedgerRows = [];
 
   masterRows.forEach((material) => {
@@ -7474,13 +7489,13 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
       consumed: 0,
       produced: 0,
       dispatched: 0,
+      issued: 0,
       approvedAdjustments: 0,
     };
   });
 
   ledgerRows.forEach((row) => {
     const rawType = String(row.itemType || "").toUpperCase();
-    if (rawType === "STORE") return;
 
     const clean = materialFlowCleanName_(row.itemName || row.materialName || row.materialCode || "");
     const normalized = materialFlowNormalizeMaterial_(clean, row.itemType);
@@ -7515,6 +7530,7 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
       consumed: 0,
       produced: 0,
       dispatched: 0,
+      issued: 0,
       approvedAdjustments: 0,
     };
 
@@ -7537,7 +7553,7 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
     if (bucket === "approvedAdjustments") {
       stats.approvedAdjustments = round2(num(stats.approvedAdjustments) + qty);
       balances[key] = round2(num(balances[key]) + qty);
-    } else if (bucket === "consumed" || bucket === "dispatched") {
+    } else if (bucket === "consumed" || bucket === "dispatched" || bucket === "issued") {
       const outQty = Math.abs(num(row.qtyOut) || (qty < 0 ? qty : 0));
       stats[bucket] = round2(num(stats[bucket]) + outQty);
       balances[key] = round2(num(balances[key]) - outQty);
@@ -7559,7 +7575,29 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
       const balance = Object.prototype.hasOwnProperty.call(monthEndBalances, key)
         ? round2(monthEndBalances[key])
         : round2(balances[key]);
-      const stats = movementStats[key] || {};
+      let stats = movementStats[key] || {};
+      let finalBalance = balance;
+      const ops = operationalStats[key];
+      const ledgerHasCurrentMovement =
+        Math.abs(num(stats.inward)) > 0.01 ||
+        Math.abs(num(stats.consumed)) > 0.01 ||
+        Math.abs(num(stats.produced)) > 0.01 ||
+        Math.abs(num(stats.dispatched)) > 0.01 ||
+        Math.abs(num(stats.issued)) > 0.01 ||
+        Math.abs(num(stats.approvedAdjustments)) > 0.01 ||
+        Object.prototype.hasOwnProperty.call(monthEndBalances, key);
+      if (!ledgerHasCurrentMovement && ops && monthCloseStatsHasMovement_(ops)) {
+        stats = {
+          opening: num(stats.opening),
+          inward: num(ops.inward),
+          consumed: num(ops.consumed),
+          produced: num(ops.produced),
+          dispatched: num(ops.dispatched),
+          issued: num(ops.issued),
+          approvedAdjustments: num(ops.approvedAdjustments),
+        };
+        finalBalance = round2(num(stats.opening) + num(ops.inward) + num(ops.produced) - num(ops.consumed) - num(ops.dispatched) - num(ops.issued) + num(ops.approvedAdjustments));
+      }
       groups[category].push({
         materialId: material.materialId || "",
         materialCode: material.materialCode || "",
@@ -7571,13 +7609,15 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
         consumed: round2(stats.consumed),
         produced: round2(stats.produced),
         dispatched: round2(stats.dispatched),
+        issued: round2(stats.issued),
         approvedAdjustments: round2(stats.approvedAdjustments),
         adjusted: round2(stats.approvedAdjustments),
-        balance,
-        systemStock: balance,
+        balance: finalBalance,
+        systemStock: finalBalance,
+        systemStockSource: !ledgerHasCurrentMovement && ops && monthCloseStatsHasMovement_(ops) ? "operational sheets" : "inventory ledger",
         status: material.status || "ACTIVE",
       });
-    groupTotals[category] = round2(groupTotals[category] + balance);
+    groupTotals[category] = round2(groupTotals[category] + finalBalance);
   });
 
   const invalidLedgerRows = findInvalidManufacturingLedgerRows_(ledgerRows, periodMonth);
@@ -7597,10 +7637,11 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
       wasteClosingKg: round2(groupTotals.WASTE),
       reworkClosingKg: round2(groupTotals.REWORK),
       additiveClosingKg: round2(groupTotals.ADDITIVE),
+      storesClosingQty: round2(groupTotals.STORE),
       totalWipClosingKg: round2(groupTotals.WIP),
     },
     groups,
-    rows: ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"].reduce((list, category) => list.concat(groups[category]), []),
+    rows: monthCloseStockCategories_().reduce((list, category) => list.concat(groups[category]), []),
     materialCount: masterRows.length,
     unmappedLedgerRows,
     invalidLedgerRows,
@@ -7617,18 +7658,39 @@ function monthCloseMaterialCategory_(row) {
   if (raw === "REWORK MATERIAL" || raw === "REWORK MATERIALS") return "REWORK";
   if (raw === "WASTE MATERIAL" || raw === "WASTE MATERIALS") return "WASTE";
   if (raw === "ADDITIVE MATERIAL" || raw === "ADDITIVE MATERIALS") return "ADDITIVE";
+  if (raw === "STORE" || raw === "STORES" || raw === "STORE ITEM" || raw === "STORE ITEMS") return "STORE";
   return normalizeMaterialCategoryForLedger_(raw);
+}
+
+function monthCloseStockCategories_() {
+  return ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE", "STORE"];
+}
+
+function monthCloseIsStockCategory_(category) {
+  return monthCloseStockCategories_().indexOf(String(category || "").toUpperCase()) !== -1;
+}
+
+function monthCloseUniqueMasterRows_(rows) {
+  const seen = {};
+  return rows.filter((row) => {
+    const key = monthCloseMaterialKey_(row.materialId || row.materialCode || row.materialName);
+    if (!key || seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
 }
 
 function classifyMonthCloseLedgerMovement_(row) {
   const module = String(row.module || row.legacySourceSheet || "").toUpperCase();
   const movementType = String(row.movementType || "").toUpperCase();
+  const itemType = String(row.itemType || "").toUpperCase();
   const qtyIn = num(row.qtyIn);
   const qtyOut = num(row.qtyOut);
 
   if (/MONTH.*END.*BALANCE|CLOSING.*BALANCE|SYSTEM.*BALANCE/.test(movementType)) return "monthEndBalance";
   if (/OPEN|OPENING/.test(module) || /OPEN|OPENING/.test(movementType)) return "opening";
   if (/INVENTORY_ADJUSTMENT|ADJUSTMENT/.test(module) || /ADJUSTMENT/.test(movementType)) return "approvedAdjustments";
+  if (itemType === "STORE" && qtyOut > qtyIn) return "issued";
   if (/DISPATCH/.test(module) || /DISPATCH/.test(movementType)) return "dispatched";
   if (/RM_INWARD|RECEIVING|INWARD/.test(module)) return "inward";
   if (/WASH|SORT|EXTRUSION|PRODUCTION|TRANSFORMATION/.test(module)) {
@@ -7720,7 +7782,7 @@ function monthCloseRowPeriodKey_(row) {
 
 function monthCloseMaterialDebug_(groups, priorClosedOpening) {
   const rows = [];
-  ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"].forEach((category) => {
+  monthCloseStockCategories_().forEach((category) => {
     (groups[category] || []).forEach((row) => {
       if (rows.length >= 20) return;
       rows.push({
@@ -7729,9 +7791,10 @@ function monthCloseMaterialDebug_(groups, priorClosedOpening) {
         category,
         ledgerOpening: round2(row.opening),
         ledgerInward: round2(row.inward + row.produced),
-        ledgerOutward: round2(row.consumed + row.dispatched),
+        ledgerOutward: round2(row.consumed + row.dispatched + num(row.issued)),
         adjustment: round2(row.approvedAdjustments),
         calculatedSystemStock: round2(row.balance),
+        source: row.systemStockSource || "",
       });
     });
   });
@@ -7742,6 +7805,113 @@ function monthCloseMaterialDebug_(groups, priorClosedOpening) {
     previousClosedMonth: priorClosedOpening ? priorClosedOpening.periodMonth : "",
     sampleRows: rows,
   };
+}
+
+function monthCloseOperationalStockStats_(periodMonth, masterIndex) {
+  const stats = {};
+  const moves = [];
+
+  collectJuneReceivingMoves_(moves, periodMonth);
+  collectJuneWashMoves_(moves, periodMonth);
+  collectJuneSortingMoves_(moves, periodMonth);
+  collectJuneExtrusionMoves_(moves, periodMonth);
+  collectJuneDispatchMoves_(moves, periodMonth);
+  collectMonthCloseStoresMoves_(moves, periodMonth);
+  collectJuneAdjustmentMoves_(moves, periodMonth);
+
+  moves.forEach((move) => {
+    const normalized = materialFlowNormalizeMaterial_(move.originalName, move.category);
+    const material = matchMonthCloseMaterial_(
+      { materialId: "", materialCode: "", itemName: normalized.name || move.originalName },
+      normalized,
+      masterIndex
+    );
+    if (!material) return;
+
+    const key = String(material.materialId || material.materialCode || material.materialName || "").trim();
+    if (!key) return;
+    if (!stats[key]) {
+      stats[key] = {
+        opening: 0,
+        inward: 0,
+        consumed: 0,
+        produced: 0,
+        dispatched: 0,
+        issued: 0,
+        approvedAdjustments: 0,
+      };
+    }
+
+    const qtyIn = num(move.qtyIn);
+    const qtyOut = num(move.qtyOut);
+    const bucket = monthCloseOperationalBucket_(move);
+
+    if (bucket === "approvedAdjustments") {
+      stats[key].approvedAdjustments = round2(num(stats[key].approvedAdjustments) + qtyIn - qtyOut);
+    } else if (bucket === "consumed" || bucket === "dispatched" || bucket === "issued") {
+      stats[key][bucket] = round2(num(stats[key][bucket]) + Math.abs(qtyOut || (qtyIn - qtyOut)));
+    } else {
+      stats[key][bucket] = round2(num(stats[key][bucket]) + Math.abs(qtyIn || (qtyIn - qtyOut)));
+    }
+  });
+
+  return stats;
+}
+
+function collectMonthCloseStoresMoves_(moves, periodMonth) {
+  safeRows_("Stores_Inward").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row, index) => {
+    const sourceId = row.inwardId || row.storesInwardId || "STORE-IN-" + (index + 1);
+    monthClosePushStoreMove_(moves, {
+      sourceSheet: "Stores_Inward",
+      sourceId,
+      field: "itemName",
+      originalName: row.itemName,
+      category: "STORE",
+      qtyIn: row.qty,
+      date: row.date,
+    });
+  });
+
+  safeRows_("Stores_Issue").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row, index) => {
+    const sourceId = row.issueId || row.storesIssueId || "STORE-OUT-" + (index + 1);
+    monthClosePushStoreMove_(moves, {
+      sourceSheet: "Stores_Issue",
+      sourceId,
+      field: "itemName",
+      originalName: row.itemName,
+      category: "STORE",
+      qtyOut: row.qty,
+      date: row.date,
+    });
+  });
+}
+
+function monthClosePushStoreMove_(moves, payload) {
+  const originalName = materialFlowCleanName_(payload.originalName || payload.itemName);
+  if (!originalName) return;
+  moves.push({
+    sourceSheet: payload.sourceSheet || "",
+    sourceId: payload.sourceId || "",
+    field: payload.field || "",
+    originalName,
+    category: "STORE",
+    qtyIn: num(payload.qtyIn),
+    qtyOut: num(payload.qtyOut),
+    date: payload.date || "",
+  });
+}
+
+function monthCloseOperationalBucket_(move) {
+  if (move.sourceSheet === "RM_Inward" || move.sourceSheet === "Stores_Inward") return "inward";
+  if (move.sourceSheet === "Dispatches") return "dispatched";
+  if (move.sourceSheet === "Stores_Issue") return "issued";
+  if (move.sourceSheet === "Inventory_Adjustments") return "approvedAdjustments";
+  if (num(move.qtyOut) > 0) return "consumed";
+  return "produced";
+}
+
+function monthCloseStatsHasMovement_(stats) {
+  return ["opening", "inward", "consumed", "produced", "dispatched", "issued", "approvedAdjustments"].some((key) => Math.abs(num(stats[key])) > 0.01);
 }
 
 function monthCloseMaterialMasterIndex_(masterRows) {

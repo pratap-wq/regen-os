@@ -3,7 +3,7 @@ import { apiCall } from "../api/api";
 import { calculateMonthClose } from "../services/monthCloseEngine";
 import { getPhysicalCount, savePhysicalCount } from "../services/physicalCountService";
 
-const MANUFACTURING_GROUPS = ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"];
+const MANUFACTURING_GROUPS = ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE", "STORE"];
 
 export default function MonthlyAudit() {
   const now = new Date();
@@ -21,6 +21,7 @@ export default function MonthlyAudit() {
     storesInward: [],
     storesIssue: [],
     factoryExpenses: [],
+    factoryCostMaster: [],
     storesMaster: [],
     adjustments: [],
     closeRows: [],
@@ -75,6 +76,7 @@ export default function MonthlyAudit() {
       storesInward,
       storesIssue,
       factoryExpenses,
+      factoryCostMaster,
       storesMaster,
       adjustments,
       closeRows,
@@ -90,6 +92,7 @@ export default function MonthlyAudit() {
       safeLoad("storesInward.list"),
       safeLoad("storesIssue.list"),
       safeLoad("factoryExpenses.list"),
+      safeLoad("factoryCostMaster.list"),
       safeLoad("storesMaster.list"),
       safeLoad("inventoryAdjustments.list", { periodMonth: month }),
       safeLoad("monthClose.list"),
@@ -107,6 +110,7 @@ export default function MonthlyAudit() {
       storesInward,
       storesIssue,
       factoryExpenses,
+      factoryCostMaster,
       storesMaster,
       adjustments,
       closeRows,
@@ -143,6 +147,7 @@ export default function MonthlyAudit() {
         dispatchRows: rows.dispatch,
         storesIssueRows: rows.storesIssue,
         factoryExpenseRows: rows.factoryExpenses,
+        factoryCostMasterRows: rows.factoryCostMaster,
         storesMasterRows: rows.storesMaster,
         periodMonth: month,
       }),
@@ -204,6 +209,7 @@ export default function MonthlyAudit() {
           consumed: num(material.consumed),
           produced: num(material.produced),
           dispatched: num(material.dispatched),
+          issued: num(material.issued),
           approvedAdjustments: approvedAdjustmentKg,
           systemClosing,
           physicalKg,
@@ -451,7 +457,7 @@ export default function MonthlyAudit() {
 
       <div style={monthBanner}>
         <b>{monthLabel(month)} Status:</b>{" "}
-        {formatTon(close.production.fgProducedKg)} Produced | {formatTon(close.production.dispatchKg)} Dispatched | {formatMoney(close.profitability.manufacturingProfit)} Profit | {materialLines.filter((x) => x.statusType === "danger" || x.statusType === "warning").length} Differences Pending
+        {formatTon(close.production.fgProducedKg)} Produced | {formatTon(close.production.dispatchKg)} Dispatched | {materialLines.filter((x) => x.statusType === "danger" || x.statusType === "warning").length} Differences Pending | {readyToClose ? "Can Close" : "Action Required"}
       </div>
 
       <Section title="Can We Close This Month?">
@@ -488,6 +494,7 @@ export default function MonthlyAudit() {
                   "Consumed",
                   "Produced",
                   "Dispatched",
+                  "Stores Issued",
                   "Adjusted",
                   "System Stock",
                   "Actual Stock",
@@ -509,6 +516,7 @@ export default function MonthlyAudit() {
                   <td style={td}>{formatKg(line.consumed)}</td>
                   <td style={td}>{formatKg(line.produced)}</td>
                   <td style={td}>{formatKg(line.dispatched)}</td>
+                  <td style={td}>{formatKg(line.issued)}</td>
                   <td style={td}>{formatKg(line.approvedAdjustments)}</td>
                   <td style={td}>{formatKg(line.systemClosing)}</td>
                   <td style={td}>
@@ -566,7 +574,12 @@ export default function MonthlyAudit() {
               ["RM Cost", close.costs.estimatedRmConsumedValue, "currency"],
               ["Stores Cost", close.costs.storesIssueValue, "currency"],
               ["Factory Expenses", close.costs.factoryExpenseValue, "currency"],
-              ["Profit", close.profitability.manufacturingProfit, "currency"],
+              ["Factory Cost Master Allocation", close.costs.factoryCostAllocationValue, "currency"],
+              [
+                "Estimated Manufacturing Profit",
+                close.costs.costDataComplete ? close.profitability.manufacturingProfit : "Cost data incomplete",
+                close.costs.costDataComplete ? "currency" : "text",
+              ],
             ]}
           />
         </Section>
@@ -615,7 +628,7 @@ function ReconTable({ rows }) {
           {rows.map(([label, value, type]) => (
             <tr key={label}>
               <td style={td}><b>{label}</b></td>
-              <td style={td}>{type === "currency" ? formatMoney(value) : type === "percent" ? formatPercent(value) : formatKg(value)}</td>
+              <td style={td}>{type === "currency" ? formatMoney(value) : type === "percent" ? formatPercent(value) : type === "text" ? value : formatKg(value)}</td>
             </tr>
           ))}
         </tbody>
@@ -656,7 +669,7 @@ function parsePhysicalMaterialLines(value) {
 }
 
 function buildMaterialGroupsFromMaster(rows = []) {
-  const groups = { RM: [], WIP: [], FG: [], REWORK: [], WASTE: [], ADDITIVE: [] };
+  const groups = { RM: [], WIP: [], FG: [], REWORK: [], WASTE: [], ADDITIVE: [], STORE: [] };
   rows.forEach((row) => {
     const status = String(row.status || "ACTIVE").toUpperCase();
     const category = normalizeMaterialCategory(row.category || row.materialType || row.materialCategory);

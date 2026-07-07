@@ -7609,6 +7609,8 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
   });
 
   const invalidLedgerRows = findInvalidManufacturingLedgerRows_(ledgerRows, periodMonth);
+  const exceptionRows = monthCloseGuaranteedExceptionRows_(operationalView, groups);
+  const movementSourceSummary = monthCloseMovementSourceSummary_(operationalView, groups, exceptionRows);
 
   return {
     ok: true,
@@ -7629,9 +7631,9 @@ function buildCleanMonthCloseMaterialView_(periodMonth) {
     },
     groups,
     rows: monthCloseStockCategories_().reduce((list, category) => list.concat(groups[category]), []),
-    exceptionRows: monthCloseOperationalExceptionRows_(operationalView.unmappedMovements || []),
+    exceptionRows,
     storesSummary: monthCloseStoresSummary_(periodMonth),
-    movementSourceSummary: monthCloseMovementSourceSummary_(operationalView, groups),
+    movementSourceSummary,
     materialCount: masterRows.length,
     unmappedLedgerRows,
     invalidLedgerRows,
@@ -7942,21 +7944,25 @@ function monthCloseAddMovementSourceSummary_(summary, move, isUnmapped) {
   }
 }
 
-function monthCloseMovementSourceSummary_(operationalView, groups) {
+function monthCloseMovementSourceSummary_(operationalView, groups, exceptionRows) {
   const summary = operationalView.movementSourceSummary || {};
   const mappedFromRows = monthCloseStockCategories_().reduce((total, category) => {
     return total + (groups[category] || []).reduce((sum, row) => {
       return sum + Math.abs(num(row.inward)) + Math.abs(num(row.produced)) + Math.abs(num(row.consumed)) + Math.abs(num(row.dispatched)) + Math.abs(num(row.approvedAdjustments));
     }, 0);
   }, 0);
+  const gapUnmappedKg = (exceptionRows || []).reduce((sum, row) => sum + Math.abs(num(row.inward)) + Math.abs(num(row.produced)) + Math.abs(num(row.consumed)) + Math.abs(num(row.dispatched)) + Math.abs(num(row.approvedAdjustments)), 0);
+  const gapWarnings = (exceptionRows || [])
+    .filter((row) => String(row.systemStockSource || "") === "source total gap")
+    .map((row) => row.materialName + ": " + Math.abs(num(row.inward) || num(row.produced) || num(row.consumed) || num(row.dispatched)) + " kg");
   return {
     rmReceivedKg: round2(summary.rmReceivedKg),
     rmUsedKg: round2(summary.rmUsedKg),
     fgMadeKg: round2(summary.fgMadeKg),
     dispatchedKg: round2(summary.dispatchedKg),
     mappedKg: round2(Math.max(num(summary.mappedKg), mappedFromRows)),
-    unmappedKg: round2(summary.unmappedKg),
-    mappingWarnings: summary.mappingWarnings || [],
+    unmappedKg: round2(Math.max(num(summary.unmappedKg), gapUnmappedKg)),
+    mappingWarnings: (summary.mappingWarnings || []).concat(gapWarnings).slice(0, 30),
   };
 }
 
@@ -7986,6 +7992,89 @@ function monthCloseOperationalExceptionRows_(rows) {
         originalNames: Object.keys(row.originalNames || {}).join(", "),
       };
     });
+}
+
+function monthCloseGuaranteedExceptionRows_(operationalView, groups) {
+  const exceptions = monthCloseOperationalExceptionRows_(operationalView.unmappedMovements || []);
+  const summary = operationalView.movementSourceSummary || {};
+  const represented = monthCloseRepresentedMovement_(groups, exceptions);
+
+  monthClosePushGapException_(exceptions, {
+    label: "Unmapped RM Received",
+    category: "RM",
+    field: "inward",
+    sourceKg: summary.rmReceivedKg,
+    representedKg: represented.rmReceivedKg,
+  });
+  monthClosePushGapException_(exceptions, {
+    label: "Unmapped RM Used",
+    category: "RM",
+    field: "consumed",
+    sourceKg: summary.rmUsedKg,
+    representedKg: represented.rmUsedKg,
+  });
+  monthClosePushGapException_(exceptions, {
+    label: "Unmapped FG Made",
+    category: "FG",
+    field: "produced",
+    sourceKg: summary.fgMadeKg,
+    representedKg: represented.fgMadeKg,
+  });
+  monthClosePushGapException_(exceptions, {
+    label: "Unmapped Dispatch",
+    category: "FG",
+    field: "dispatched",
+    sourceKg: summary.dispatchedKg,
+    representedKg: represented.dispatchedKg,
+  });
+
+  return exceptions.map((row, index) => ({
+    ...row,
+    materialId: row.materialId || "UNMAPPED-" + (index + 1),
+  }));
+}
+
+function monthCloseRepresentedMovement_(groups, exceptionRows) {
+  const rows = monthCloseStockCategories_().reduce((list, category) => list.concat(groups[category] || []), []).concat(exceptionRows || []);
+  return rows.reduce((acc, row) => {
+    const category = String(row.category || "").toUpperCase();
+    if (category === "RM") {
+      acc.rmReceivedKg += num(row.inward);
+      acc.rmUsedKg += num(row.consumed);
+    }
+    if (category === "FG") {
+      acc.fgMadeKg += num(row.produced);
+      acc.dispatchedKg += num(row.dispatched);
+    }
+    return acc;
+  }, { rmReceivedKg: 0, rmUsedKg: 0, fgMadeKg: 0, dispatchedKg: 0 });
+}
+
+function monthClosePushGapException_(exceptions, options) {
+  const gap = round2(num(options.sourceKg) - num(options.representedKg));
+  if (Math.abs(gap) <= 0.01) return;
+  const row = {
+    materialId: "",
+    materialCode: "CHECK",
+    materialName: options.label,
+    category: options.category,
+    unit: "Kg",
+    opening: 0,
+    inward: 0,
+    consumed: 0,
+    produced: 0,
+    dispatched: 0,
+    issued: 0,
+    approvedAdjustments: 0,
+    adjusted: 0,
+    status: "CHECK_MAPPING",
+    systemStockSource: "source total gap",
+    originalNames: "Source total not allocated to material rows",
+  };
+  row[options.field] = Math.abs(gap);
+  row.balance = round2(num(row.opening) + num(row.inward) + num(row.produced) - num(row.consumed) - num(row.dispatched) - num(row.issued) + num(row.approvedAdjustments));
+  row.systemStock = row.balance;
+  exceptions.push(row);
 }
 
 function collectMonthCloseStoresMoves_(moves, periodMonth) {

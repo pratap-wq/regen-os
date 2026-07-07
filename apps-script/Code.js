@@ -132,6 +132,10 @@ if (p.fn === "factoryCostMaster.update") return updateFactoryCostMaster(p);
     // Monthly Close v1 compatibility
     if (p.fn === "monthClose.add") return addMonthClose(p);
     if (p.fn === "monthClose.list") return listMaster("Month_Close");
+    if (p.fn === "monthClose.materialGroups") return output(getMonthCloseMaterialGroups(p));
+    if (p.fn === "monthClose.materialRepair.preview") return output(previewMonthCloseMaterialRepair(p));
+    if (p.fn === "monthClose.materialRepair.run") return output(runMonthCloseMaterialRepair(p));
+    if (p.fn === "monthClose.materialRepair.verify") return output(verifyMonthCloseMaterialRepair(p));
 
     // MONTH CLOSE
     
@@ -7359,6 +7363,280 @@ function verifyJuneLedgerV1(data = {}) {
   };
 }
 
+function getMonthCloseMaterialGroups(data = {}) {
+  const periodMonth = String(data.periodMonth || data.month || "2026-06").slice(0, 7);
+  return buildCleanMonthCloseMaterialView_(periodMonth);
+}
+
+function previewMonthCloseMaterialRepair(data = {}) {
+  const periodMonth = String(data.periodMonth || data.month || "2026-06").slice(0, 7);
+  if (periodMonth !== "2026-06") {
+    return {
+      ok: false,
+      route: "monthClose.materialRepair.preview",
+      periodMonth,
+      error: "Only June 2026 has an approved controlled repair plan. No data changed.",
+    };
+  }
+
+  const preview = rebuildJuneLedgerV1({ dryRun: true });
+  return {
+    ok: true,
+    route: "monthClose.materialRepair.preview",
+    periodMonth,
+    repair: preview,
+    cleanMaterialView: buildCleanMonthCloseMaterialView_(periodMonth),
+  };
+}
+
+function runMonthCloseMaterialRepair(data = {}) {
+  const periodMonth = String(data.periodMonth || data.month || "2026-06").slice(0, 7);
+  const confirm = String(data.confirm || "").toUpperCase();
+  if (periodMonth !== "2026-06") {
+    return {
+      ok: false,
+      route: "monthClose.materialRepair.run",
+      periodMonth,
+      error: "Only June 2026 has an approved controlled repair plan. No data changed.",
+    };
+  }
+
+  if (confirm !== "YES") {
+    return {
+      ok: false,
+      route: "monthClose.materialRepair.run",
+      periodMonth,
+      error: "Live repair requires confirm=YES. No data changed.",
+    };
+  }
+
+  const repair = rebuildJuneLedgerV1({ dryRun: false });
+  return {
+    ok: true,
+    route: "monthClose.materialRepair.run",
+    periodMonth,
+    repair,
+    cleanMaterialView: buildCleanMonthCloseMaterialView_(periodMonth),
+  };
+}
+
+function verifyMonthCloseMaterialRepair(data = {}) {
+  const periodMonth = String(data.periodMonth || data.month || "2026-06").slice(0, 7);
+  return {
+    ok: true,
+    route: "monthClose.materialRepair.verify",
+    periodMonth,
+    juneLedger: periodMonth === "2026-06" ? verifyJuneLedgerV1({ periodMonth }) : null,
+    cleanMaterialView: buildCleanMonthCloseMaterialView_(periodMonth),
+  };
+}
+
+function buildCleanMonthCloseMaterialView_(periodMonth) {
+  const ledgerRows = safeRows_("Inventory_Ledger").filter((row) => !isDeleted_(row));
+  const masterRows = safeRows_("Material_Master").filter((row) => {
+    const status = String(row.status || "ACTIVE").toUpperCase();
+    const category = normalizeMaterialCategoryForLedger_(row.category || row.materialType);
+    return status !== "DELETED" && status !== "INACTIVE" && materialFlowIsManufacturingCategory_(category);
+  });
+  const masterIndex = monthCloseMaterialMasterIndex_(masterRows);
+  const groups = {
+    RM: [],
+    WIP: [],
+    FG: [],
+    WASTE: [],
+    REWORK: [],
+    ADDITIVE: [],
+  };
+  const groupTotals = {
+    RM: 0,
+    WIP: 0,
+    FG: 0,
+    WASTE: 0,
+    REWORK: 0,
+    ADDITIVE: 0,
+  };
+  const balances = {};
+  const unmappedLedgerRows = [];
+
+  masterRows.forEach((material) => {
+    const category = normalizeMaterialCategoryForLedger_(material.category || material.materialType);
+    const materialId = String(material.materialId || material.materialCode || material.materialName || "").trim();
+    if (!materialId || !groups[category]) return;
+    balances[materialId] = 0;
+  });
+
+  ledgerRows.filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row) => {
+    const rawType = String(row.itemType || "").toUpperCase();
+    if (rawType === "STORE") return;
+
+    const clean = materialFlowCleanName_(row.itemName || row.materialName || row.materialCode || "");
+    const normalized = materialFlowNormalizeMaterial_(clean, row.itemType);
+    const material = matchMonthCloseMaterial_(row, normalized, masterIndex);
+    const qty = num(row.qtyIn) - num(row.qtyOut);
+
+    if (!clean || clean === "Recipe Text" || materialFlowIsQualityReference_(row.itemName) || !material) {
+      if (unmappedLedgerRows.length < 25 && Math.abs(qty) > 0.001) {
+        unmappedLedgerRows.push({
+          ledgerId: row.ledgerId || "",
+          date: row.date || "",
+          itemName: row.itemName || "",
+          itemType: row.itemType || "",
+          qtyIn: num(row.qtyIn),
+          qtyOut: num(row.qtyOut),
+          reason: clean === "Recipe Text"
+            ? "Recipe/feed text is not a material"
+            : !clean || materialFlowIsQualityReference_(row.itemName)
+            ? "Quality reference or blank material"
+            : "No matching Material Master row",
+        });
+      }
+      return;
+    }
+
+    const key = String(material.materialId || material.materialCode || material.materialName || "").trim();
+    balances[key] = round2(num(balances[key]) + qty);
+  });
+
+  masterRows
+    .slice()
+    .sort((a, b) => String(a.materialName || "").localeCompare(String(b.materialName || "")))
+    .forEach((material) => {
+      const category = normalizeMaterialCategoryForLedger_(material.category || material.materialType);
+      if (!groups[category]) return;
+      const key = String(material.materialId || material.materialCode || material.materialName || "").trim();
+      const balance = round2(balances[key]);
+      groups[category].push({
+        materialId: material.materialId || "",
+        materialCode: material.materialCode || "",
+        materialName: material.materialName || material.name || "",
+        category,
+        unit: material.unit || "Kg",
+        balance,
+        status: material.status || "ACTIVE",
+      });
+    groupTotals[category] = round2(groupTotals[category] + balance);
+  });
+
+  const invalidLedgerRows = findInvalidManufacturingLedgerRows_(ledgerRows, periodMonth);
+
+  return {
+    ok: true,
+    route: "monthClose.materialGroups",
+    periodMonth,
+    source: "Material_Master + Inventory_Ledger",
+    rule: "Month Close rows come only from Material_Master. STORE, recipe text, quality refs and unmapped free-text ledger rows are excluded from manufacturing close.",
+    groupTotals,
+    systemFields: {
+      rmClosingKg: round2(groupTotals.RM),
+      washClosingKg: round2(groupTotals.WIP),
+      sortingClosingKg: 0,
+      fgClosingKg: round2(groupTotals.FG),
+      wasteClosingKg: round2(groupTotals.WASTE),
+      reworkClosingKg: round2(groupTotals.REWORK),
+      additiveClosingKg: round2(groupTotals.ADDITIVE),
+      totalWipClosingKg: round2(groupTotals.WIP),
+    },
+    groups,
+    materialCount: masterRows.length,
+    unmappedLedgerRows,
+    invalidLedgerRows,
+    negativeManufacturingMaterials: monthCloseNegativeMasterBalances_(groups),
+  };
+}
+
+function monthCloseMaterialMasterIndex_(masterRows) {
+  const index = {};
+  masterRows.forEach((row) => {
+    [
+      row.materialId,
+      row.materialCode,
+      row.materialName,
+      materialCode_(row.materialName || ""),
+      materialFlowNormalizeMaterial_(row.materialName || "", row.category).name,
+    ].forEach((value) => {
+      const key = monthCloseMaterialKey_(value);
+      if (key && !index[key]) index[key] = row;
+    });
+  });
+  return index;
+}
+
+function matchMonthCloseMaterial_(ledgerRow, normalized, masterIndex) {
+  const candidates = [
+    ledgerRow.materialId,
+    ledgerRow.materialCode,
+    ledgerRow.itemName,
+    normalized && normalized.name,
+    materialCode_(ledgerRow.itemName || ""),
+  ];
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    const match = masterIndex[monthCloseMaterialKey_(candidates[i])];
+    if (match) return match;
+  }
+
+  return null;
+}
+
+function monthCloseMaterialKey_(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "");
+}
+
+function monthCloseNegativeMasterBalances_(groups) {
+  const rows = [];
+  Object.keys(groups).forEach((category) => {
+    groups[category].forEach((row) => {
+      if (num(row.balance) < -0.01) {
+        rows.push({
+          material: row.materialName,
+          category,
+          balance: num(row.balance),
+        });
+      }
+    });
+  });
+  return rows;
+}
+
+function findInvalidManufacturingLedgerRows_(rows, periodMonth) {
+  const examples = [];
+  rows.filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row) => {
+    if (examples.length >= 10) return;
+    const rawName = String(row.itemName || "").trim();
+    const clean = materialFlowCleanName_(rawName);
+    const normalized = materialFlowNormalizeMaterial_(rawName, row.itemType);
+    const rawCategory = String(row.itemType || "").toUpperCase();
+    const isStore = rawCategory === "STORE";
+    const invalid =
+      clean === "Recipe Text" ||
+      !clean ||
+      materialFlowIsQualityReference_(rawName) ||
+      (!isStore && !materialFlowIsManufacturingCategory_(normalized.category));
+
+    if (invalid) {
+      examples.push({
+        ledgerId: row.ledgerId || "",
+        date: row.date || "",
+        itemName: rawName,
+        itemType: row.itemType || "",
+        reason: clean === "Recipe Text"
+          ? "Recipe/feed text"
+          : !clean
+          ? "Blank or quality reference"
+          : "Unknown manufacturing material type",
+      });
+    }
+  });
+  return {
+    countShown: examples.length,
+    examples,
+    note: "STORE rows are intentionally excluded from manufacturing Month Close, not treated as invalid.",
+  };
+}
+
 function buildJuneLedgerV1Rows_(periodMonth) {
   const moves = [];
   collectJuneReceivingMoves_(moves, periodMonth);
@@ -10211,7 +10489,12 @@ function ensurePhysicalCountsSheet_() {
   createSheetIfMissing_("Physical_Counts", [
     "countId","periodMonth","rmPhysicalKg","washPhysicalKg","sortingPhysicalKg",
     "fgPhysicalKg","storesPhysicalValue","productionSignoff","storesSignoff",
-    "accountsSignoff","qcSignoff","ceoSignoff","remarks","savedBy","savedAt","status"
+    "accountsSignoff","qcSignoff","ceoSignoff","remarks","materialPhysicalLinesJson","savedBy","savedAt","status"
+  ]);
+  ensureHeaders_("Physical_Counts", [
+    "countId","periodMonth","rmPhysicalKg","washPhysicalKg","sortingPhysicalKg",
+    "fgPhysicalKg","storesPhysicalValue","productionSignoff","storesSignoff",
+    "accountsSignoff","qcSignoff","ceoSignoff","remarks","materialPhysicalLinesJson","savedBy","savedAt","status"
   ]);
 }
 
@@ -10248,6 +10531,7 @@ function savePhysicalCount(data = {}) {
     qcSignoff: data.qcSignoff || "",
     ceoSignoff: data.ceoSignoff || "",
     remarks: data.remarks || "",
+    materialPhysicalLinesJson: data.materialPhysicalLinesJson || data.materialPhysicalLines || "",
     savedBy: data.savedBy || data.ceoSignoff || "System",
     savedAt: new Date(),
     status: "ACTIVE",

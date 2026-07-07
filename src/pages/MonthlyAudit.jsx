@@ -31,6 +31,8 @@ export default function MonthlyAudit() {
 
   const [adjustments, setAdjustments] = useState([]);
   const [adjustmentReasons, setAdjustmentReasons] = useState({});
+  const [materialGroupView, setMaterialGroupView] = useState(null);
+  const [materialRepairResult, setMaterialRepairResult] = useState(null);
 
   const [physical, setPhysical] = useState({
     rmPhysicalKg: "",
@@ -45,6 +47,7 @@ export default function MonthlyAudit() {
     ceoSignoff: "Pratap",
     remarks: "",
   });
+  const [physicalMaterialLines, setPhysicalMaterialLines] = useState({});
 
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
@@ -61,6 +64,15 @@ export default function MonthlyAudit() {
     } catch (err) {
       console.log(fn, err);
       return [];
+    }
+  }
+
+  async function safeCall(fn, extra = {}) {
+    try {
+      return await apiCall({ fn, ...extra });
+    } catch (err) {
+      console.log(fn, err);
+      return null;
     }
   }
 
@@ -83,6 +95,7 @@ export default function MonthlyAudit() {
           ceoSignoff: res.row.ceoSignoff || "Pratap",
           remarks: res.row.remarks ?? "",
         }));
+        setPhysicalMaterialLines(parsePhysicalMaterialLines(res.row.materialPhysicalLinesJson));
       }
     } catch (err) {
       console.log("physicalCounts.get", err);
@@ -90,8 +103,29 @@ export default function MonthlyAudit() {
   }
 
   async function savePhysicalStockSnapshot({ silent = false } = {}) {
+    const materialPhysicalRows = materialLines.map((line) => ({
+      materialId: line.materialId || "",
+      materialCode: line.materialCode || "",
+      materialName: line.materialName || line.itemCode || "",
+      category: line.category || line.itemType || "",
+      systemKg: num(line.systemKg),
+      physicalKg: physicalMaterialLines[line.key] === "" ? "" : num(physicalMaterialLines[line.key]),
+    }));
+    const physicalTotals = materialPhysicalRows.reduce(
+      (totals, row) => {
+        const qty = row.physicalKg === "" ? 0 : num(row.physicalKg);
+        if (row.category === "RM") totals.rmPhysicalKg += qty;
+        if (row.category === "WIP") totals.washPhysicalKg += qty;
+        if (row.category === "FG") totals.fgPhysicalKg += qty;
+        return totals;
+      },
+      { rmPhysicalKg: 0, washPhysicalKg: 0, sortingPhysicalKg: 0, fgPhysicalKg: 0 }
+    );
+
     const res = await savePhysicalCount(month, {
       ...physical,
+      ...physicalTotals,
+      materialPhysicalLinesJson: JSON.stringify(materialPhysicalRows),
       savedBy: physical.ceoSignoff || "System",
     });
 
@@ -132,6 +166,7 @@ export default function MonthlyAudit() {
       factoryExpenses,
       storesMaster,
       adjustmentRows,
+      materialGroups,
     ] = await Promise.all([
       safeLoad("rm.list"),
       safeLoad("wash.list"),
@@ -143,6 +178,7 @@ export default function MonthlyAudit() {
       safeLoad("factoryExpenses.list"),
       safeLoad("storesMaster.list"),
       safeLoad("inventoryAdjustments.list", { periodMonth: month }),
+      safeCall("monthClose.materialGroups", { periodMonth: month }),
     ]);
 
     setRows({
@@ -158,6 +194,7 @@ export default function MonthlyAudit() {
     });
 
     setAdjustments(adjustmentRows);
+    setMaterialGroupView(materialGroups?.ok ? materialGroups : null);
     setLoading(false);
   }
 
@@ -176,48 +213,31 @@ export default function MonthlyAudit() {
   }, [rows, month]);
 
   const materialLines = useMemo(() => {
-    const baseLines = [
-      {
-        key: "RM|RM",
-        stage: "Material",
-        module: "RM",
-        itemType: "RM",
-        itemCode: "White Flakes",
-        physicalField: "rmPhysicalKg",
-        systemKg: close.inventory.rmClosingKg,
-        physicalKg: physical.rmPhysicalKg,
-      },
-      {
-        key: "WASHED|Washed Flakes",
-        stage: "Washed Material",
-        module: "Wash",
-        itemType: "WASHED",
-        itemCode: "Washed White Flakes",
-        physicalField: "washPhysicalKg",
-        systemKg: close.inventory.washClosingKg,
-        physicalKg: physical.washPhysicalKg,
-      },
-      {
-        key: "SORTED|Sorted Material",
-        stage: "Sorted Material",
-        module: "Color Sorter",
-        itemType: "SORTED",
-        itemCode: "White Sorted",
-        physicalField: "sortingPhysicalKg",
-        systemKg: close.inventory.sortingClosingKg,
-        physicalKg: physical.sortingPhysicalKg,
-      },
-      {
-        key: "FG|E1",
-        stage: "Dispatch Material",
-        module: "FG",
-        itemType: "FG",
-        itemCode: "E1",
-        physicalField: "fgPhysicalKg",
-        systemKg: close.inventory.fgClosingKg,
-        physicalKg: physical.fgPhysicalKg,
-      },
-    ];
+    const groups = materialGroupView?.groups || {};
+    const categoryOrder = ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"];
+    const baseLines = categoryOrder.flatMap((category) =>
+      (groups[category] || []).map((material) => {
+        const key = `${category}|${material.materialId || material.materialCode || material.materialName}`;
+        return {
+          key,
+          stage: categoryLabel(category),
+          module: "MONTH_CLOSE",
+          itemType: category,
+          category,
+          materialId: material.materialId || "",
+          materialCode: material.materialCode || "",
+          materialName: material.materialName || "",
+          itemCode: material.materialName || material.materialCode || "",
+          sourceNote: "Material Master",
+          systemKg: material.balance,
+          physicalKg: physicalMaterialLines[key] ?? "",
+        };
+      })
+    );
+
+    if (!baseLines.length) {
+      return [];
+    }
 
     return baseLines.map((line) => {
       const lineSourceRef = `MONTH_CLOSE:${month}:${line.key}`;
@@ -247,9 +267,10 @@ export default function MonthlyAudit() {
         .reduce((s, a) => s + num(a.quantityKg), 0);
 
       const hasPhysical =
-        line.physicalKg !== "" &&
-        line.physicalKg !== null &&
-        line.physicalKg !== undefined;
+        Math.abs(num(line.systemKg)) <= 0.01 ||
+        (line.physicalKg !== "" &&
+          line.physicalKg !== null &&
+          line.physicalKg !== undefined);
       const physicalKg = num(line.physicalKg);
       const varianceKg = hasPhysical ? physicalKg - num(line.systemKg) : 0;
       const remainingKg = varianceKg - approvedAdjustmentKg;
@@ -293,7 +314,7 @@ export default function MonthlyAudit() {
         statusType,
       };
     });
-  }, [close, physical, adjustments, month]);
+  }, [adjustments, month, materialGroupView, physicalMaterialLines]);
 
   const materialReady = materialLines.every(
     (x) => x.statusType === "success"
@@ -301,6 +322,27 @@ export default function MonthlyAudit() {
 
   const exceptions = useMemo(() => {
     const list = [];
+
+    if (!materialGroupView?.ok) {
+      list.push({
+        type: "danger",
+        text: "Material Master based Month Close groups did not load.",
+      });
+    }
+
+    if (materialGroupView?.ok && materialLines.length === 0) {
+      list.push({
+        type: "danger",
+        text: "No active manufacturing materials found in Material Master.",
+      });
+    }
+
+    if (materialGroupView?.unmappedLedgerRows?.length) {
+      list.push({
+        type: "warning",
+        text: `${materialGroupView.unmappedLedgerRows.length} ledger material example(s) are not mapped to Material Master and are excluded from Month Close.`,
+      });
+    }
 
     if (close.rm.purchasedKg <= 0) {
       list.push({ type: "danger", text: "No material receiving entries found." });
@@ -359,7 +401,7 @@ export default function MonthlyAudit() {
     }
 
     return list;
-  }, [close, materialLines]);
+  }, [close, materialLines, materialGroupView]);
 
   const hasPhysicalStock = materialLines.every((x) => x.hasPhysical);
   const hasStoresPhysical =
@@ -384,6 +426,10 @@ export default function MonthlyAudit() {
   function onPhysicalChange(e) {
     const { name, value } = e.target;
     setPhysical((p) => ({ ...p, [name]: value }));
+  }
+
+  function onMaterialPhysicalChange(lineKey, value) {
+    setPhysicalMaterialLines((prev) => ({ ...prev, [lineKey]: value }));
   }
 
   async function savePhysicalFromRow() {
@@ -431,8 +477,10 @@ export default function MonthlyAudit() {
         date: `${month}-01`,
         module: line.module,
         itemType: line.itemType,
+        materialId: line.materialId || "",
+        materialCode: line.materialCode || "",
         itemCode: line.itemCode,
-        material: line.itemCode,
+        material: line.materialName || line.itemCode,
         stage: line.stage,
         systemQty: line.systemKg,
         physicalQty: line.physicalKg,
@@ -506,21 +554,21 @@ export default function MonthlyAudit() {
         extrusionRecovery: close.production.extrusionRecovery,
         overallRecovery: close.production.overallRecovery,
 
-        rmSystemClosingKg: close.inventory.rmClosingKg,
-        washSystemClosingKg: close.inventory.washClosingKg,
-        sortingSystemClosingKg: close.inventory.sortingClosingKg,
-        fgSystemClosingKg: close.inventory.fgClosingKg,
+        rmSystemClosingKg: getCategorySystemKg(materialLines, "RM"),
+        washSystemClosingKg: getCategorySystemKg(materialLines, "WIP"),
+        sortingSystemClosingKg: 0,
+        fgSystemClosingKg: getCategorySystemKg(materialLines, "FG"),
 
-        rmPhysicalKg: physical.rmPhysicalKg,
-        washPhysicalKg: physical.washPhysicalKg,
-        sortingPhysicalKg: physical.sortingPhysicalKg,
-        fgPhysicalKg: physical.fgPhysicalKg,
+        rmPhysicalKg: getCategoryPhysicalKg(materialLines, "RM"),
+        washPhysicalKg: getCategoryPhysicalKg(materialLines, "WIP"),
+        sortingPhysicalKg: 0,
+        fgPhysicalKg: getCategoryPhysicalKg(materialLines, "FG"),
         storesPhysicalValue: physical.storesPhysicalValue,
 
-        rmVarianceKg: getLineVariance(materialLines, "Material"),
-        washVarianceKg: getLineVariance(materialLines, "Washed Material"),
-        sortingVarianceKg: getLineVariance(materialLines, "Sorted Material"),
-        fgVarianceKg: getLineVariance(materialLines, "Dispatch Material"),
+        rmVarianceKg: getCategoryVarianceKg(materialLines, "RM"),
+        washVarianceKg: getCategoryVarianceKg(materialLines, "WIP"),
+        sortingVarianceKg: 0,
+        fgVarianceKg: getCategoryVarianceKg(materialLines, "FG"),
 
         factoryExpenses: close.costs.factoryExpenseValue,
         storesIssueQty: close.costs.storesIssueValue,
@@ -549,6 +597,60 @@ export default function MonthlyAudit() {
       }
     } catch (err) {
       setStatus(err.message || "Month close failed.");
+    }
+  }
+
+  async function previewMaterialRepair() {
+    try {
+      setStatus("Preparing material ledger repair preview...");
+      const res = await apiCall({
+        fn: "monthClose.materialRepair.preview",
+        periodMonth: month,
+      });
+      setMaterialRepairResult(res);
+      setStatus(res?.ok ? "Material ledger repair preview loaded." : res?.error || "Preview failed.");
+    } catch (err) {
+      setStatus(err.message || "Preview failed.");
+    }
+  }
+
+  async function runMaterialRepair() {
+    const ok = window.confirm(
+      `Run controlled material ledger repair for ${monthLabel(month)}? A backup will be created first.`
+    );
+    if (!ok) return;
+
+    try {
+      setStatus("Running controlled material ledger repair...");
+      const res = await apiCall({
+        fn: "monthClose.materialRepair.run",
+        periodMonth: month,
+        confirm: "YES",
+      });
+      setMaterialRepairResult(res);
+      if (!res?.ok) {
+        setStatus(res?.error || "Repair failed.");
+        return;
+      }
+      setStatus("Material ledger repair completed. Reloading Month Close values...");
+      await loadData();
+    } catch (err) {
+      setStatus(err.message || "Repair failed.");
+    }
+  }
+
+  async function verifyMaterialRepair() {
+    try {
+      setStatus("Verifying material ledger...");
+      const res = await apiCall({
+        fn: "monthClose.materialRepair.verify",
+        periodMonth: month,
+      });
+      setMaterialRepairResult(res);
+      setMaterialGroupView(res?.cleanMaterialView?.ok ? res.cleanMaterialView : materialGroupView);
+      setStatus(res?.ok ? "Material ledger verification loaded." : res?.error || "Verification failed.");
+    } catch (err) {
+      setStatus(err.message || "Verification failed.");
     }
   }
 
@@ -603,6 +705,56 @@ export default function MonthlyAudit() {
 
       <MonthlySummary close={close} />
 
+      <Panel title="Material Master Close View">
+        <div style={accountabilityTop}>
+          {["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"].map((category) => (
+            <StatusPill
+              key={category}
+              label={categoryLabel(category)}
+              count={formatKg(materialGroupView?.groupTotals?.[category] || 0)}
+              type={category === "FG" ? "success" : category === "WASTE" ? "warning" : "pending"}
+            />
+          ))}
+        </div>
+
+        <div style={hintBox}>
+          Month Close now uses Material Master names only. Free-text ledger items, recipe strings, quality references and STORE items are excluded from manufacturing close.
+        </div>
+
+        {materialGroupView?.unmappedLedgerRows?.length > 0 && (
+          <div style={hintBox}>
+            <b>Needs Material Master mapping:</b>{" "}
+            {materialGroupView.unmappedLedgerRows.slice(0, 5).map((row) => row.itemName || "Blank").join(", ")}
+          </div>
+        )}
+
+        <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button onClick={previewMaterialRepair} style={secondaryButton}>
+            Preview Material Repair
+          </button>
+          <button onClick={verifyMaterialRepair} style={secondaryButton}>
+            Verify Material Ledger
+          </button>
+          <button onClick={runMaterialRepair} style={miniButton}>
+            Repair June Ledger
+          </button>
+        </div>
+
+        {materialRepairResult && (
+          <div style={hintBox}>
+            <b>{materialRepairResult.route || "Material repair"}</b>
+            <div style={mutedCell}>
+              {materialRepairResult.ok ? "OK" : materialRepairResult.error || "Check result"} · {materialRepairResult.periodMonth || month}
+            </div>
+            {materialRepairResult.repair?.summary && (
+              <div style={mutedCell}>
+                Rows to replace: {materialRepairResult.repair.summary.rowsToReplace || 0}; rows to write: {materialRepairResult.repair.summary.rowsToWrite || 0}
+              </div>
+            )}
+          </div>
+        )}
+      </Panel>
+
       <Panel title="Material Accountability">
         <div style={accountabilityTop}>
           <StatusPill label="Reconciled" count={materialLines.filter((x) => x.statusType === "success").length} type="success" />
@@ -634,13 +786,13 @@ export default function MonthlyAudit() {
                   <td style={td}>
                     <b>{line.stage}</b>
                     <div style={mutedCell}>{line.itemCode}</div>
+                    {line.sourceNote && <div style={mutedCell}>{line.sourceNote}</div>}
                   </td>
                   <td style={td}>{formatKg(line.systemKg)}</td>
                   <td style={td}>
                     <input
-                      name={line.physicalField}
-                      value={physical[line.physicalField] ?? ""}
-                      onChange={onPhysicalChange}
+                      value={physicalMaterialLines[line.key] ?? ""}
+                      onChange={(e) => onMaterialPhysicalChange(line.key, e.target.value)}
                       onBlur={savePhysicalFromRow}
                       type="number"
                       placeholder="Enter kg"
@@ -890,6 +1042,49 @@ function MonthCloseWorkflow({
 function getLineVariance(lines, stage) {
   const line = lines.find((x) => x.stage === stage);
   return line ? line.remainingKg : 0;
+}
+
+function parsePhysicalMaterialLines(value) {
+  try {
+    const rows = typeof value === "string" ? JSON.parse(value || "[]") : value || [];
+    return rows.reduce((map, row) => {
+      const key = `${row.category}|${row.materialId || row.materialCode || row.materialName}`;
+      map[key] = row.physicalKg === null || row.physicalKg === undefined ? "" : row.physicalKg;
+      return map;
+    }, {});
+  } catch (err) {
+    return {};
+  }
+}
+
+function categoryLabel(category) {
+  const labels = {
+    RM: "RM Material",
+    WIP: "WIP Material",
+    FG: "FG Material",
+    REWORK: "Rework Material",
+    WASTE: "Waste Material",
+    ADDITIVE: "Additive Material",
+  };
+  return labels[category] || "Material";
+}
+
+function getCategorySystemKg(lines, category) {
+  return lines
+    .filter((line) => line.category === category)
+    .reduce((sum, line) => sum + num(line.systemKg), 0);
+}
+
+function getCategoryPhysicalKg(lines, category) {
+  return lines
+    .filter((line) => line.category === category)
+    .reduce((sum, line) => sum + (line.hasPhysical ? num(line.physicalKg) : 0), 0);
+}
+
+function getCategoryVarianceKg(lines, category) {
+  return lines
+    .filter((line) => line.category === category)
+    .reduce((sum, line) => sum + num(line.remainingKg), 0);
 }
 
 function getDifferenceValue(line, close) {

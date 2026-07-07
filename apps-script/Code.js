@@ -408,6 +408,8 @@ function updateFactoryCostMaster(data = {}) {
     if (p.fn === "inventoryLedger.balance") return getInventoryLedgerBalance();
     if (p.fn === "inventoryLedger.audit") return auditInventoryLedger(p);
     if (p.fn === "inventoryLedger.rebuild") return rebuildInventoryLedger(p);
+    if (p.fn === "materialFlow.auditJune2026") return auditJuneMaterialFlowV1(p);
+    if (p.fn === "materialFlow.migrateJuneToV1") return output(migrateJuneMaterialFlowToV1(p.dryRun !== false && String(p.dryRun || "true").toLowerCase() !== "false"));
     if (p.fn === "trace.batch") return traceBatch(p);
     if (p.fn === "inventory.summary") {
       return output({
@@ -1126,6 +1128,7 @@ const REGEN_DB_SCHEMA = {
     "createdAt",
     "legacySourceSheet",
     "legacySourceId",
+    "legacyMaterialName",
     "migrationId",
     "migratedAt",
   ],
@@ -6329,6 +6332,7 @@ function addInventoryLedger(data={}){
       "createdAt",
       "legacySourceSheet",
       "legacySourceId",
+      "legacyMaterialName",
       "migrationId",
       "migratedAt"
   ]);
@@ -6560,6 +6564,7 @@ function inventoryLedgerHeaders_() {
     "createdAt",
     "legacySourceSheet",
     "legacySourceId",
+    "legacyMaterialName",
     "migrationId",
     "migratedAt",
   ];
@@ -6652,6 +6657,7 @@ function pushRebuiltLedgerRow_(ctx, sourceSheet, sourceId, payload) {
     createdAt: ctx.rebuildAt,
     legacySourceSheet: sourceSheet,
     legacySourceId: sourceId || "",
+    legacyMaterialName: payload.legacyMaterialName || payload.itemName || "",
     migrationId: "LEDGER_REBUILD_FROM_SOURCE",
     migratedAt: ctx.rebuildAt,
   });
@@ -6985,6 +6991,444 @@ function rebuildFromInventoryAdjustments_(ctx) {
       createdBy: row.approvedBy || row.createdBy || "Ledger Rebuild",
     });
   });
+}
+
+function auditJuneMaterialFlowV1(data = {}) {
+  const periodMonth = data.periodMonth || "2026-06";
+  const movements = buildJuneV1MaterialMovements_(periodMonth);
+  const masterRows = safeRows_("Material_Master");
+  const productionRows = safeRows_("Production_Materials");
+  const rmRows = safeRows_("RM_Inward").filter((row) => materialFlowRowInPeriod_(row, periodMonth));
+  const dispatchRows = safeRows_("Dispatches").filter((row) => materialFlowRowInPeriod_(row, periodMonth));
+  const monthCloseRows = safeRows_("Month_Close").filter((row) => materialFlowRowInPeriod_(row, periodMonth));
+  const materialIndex = {};
+  const balances = {};
+
+  movements.forEach((move) => {
+    const key = move.originalName || "UNKNOWN";
+    const normalized = materialFlowNormalizeMaterial_(move.originalName, move.category);
+
+    if (!materialIndex[key]) {
+      materialIndex[key] = {
+        originalName: key,
+        sources: {},
+        currentInferredCategory: move.category || normalized.category || "UNKNOWN",
+        suggestedNormalizedName: normalized.name,
+        suggestedNormalizedCategory: normalized.category,
+        shouldMergeInto: normalized.mergeInto,
+        quantityImpactBySource: {},
+        netQuantityImpact: 0,
+        causesNegativeInventory: false,
+        appearsInMonthClose: false,
+        appearsInProductionDropdowns: false,
+        appearsInRMInwardDropdowns: false,
+        appearsInDispatchDropdowns: false,
+        examples: [],
+      };
+    }
+
+    const item = materialIndex[key];
+    item.sources[move.sourceSheet] = true;
+    item.quantityImpactBySource[move.sourceSheet] =
+      (item.quantityImpactBySource[move.sourceSheet] || 0) + num(move.qtyIn) - num(move.qtyOut);
+    item.netQuantityImpact += num(move.qtyIn) - num(move.qtyOut);
+    if (item.examples.length < 5) {
+      item.examples.push({
+        sourceSheet: move.sourceSheet,
+        sourceId: move.sourceId,
+        field: move.field,
+        qtyIn: num(move.qtyIn),
+        qtyOut: num(move.qtyOut),
+      });
+    }
+
+    balances[normalized.name] = (balances[normalized.name] || 0) + num(move.qtyIn) - num(move.qtyOut);
+  });
+
+  addMasterOnlyMaterials_(materialIndex, masterRows, "Material_Master");
+  addMasterOnlyMaterials_(materialIndex, productionRows, "Production_Materials");
+  markDropdownAppearances_(materialIndex, masterRows, productionRows, rmRows, dispatchRows);
+  markMonthCloseAppearances_(materialIndex, monthCloseRows);
+
+  const materials = Object.keys(materialIndex).sort().map((key) => {
+    const item = materialIndex[key];
+    item.sources = Object.keys(item.sources).sort();
+    item.normalizedBalance = balances[item.suggestedNormalizedName] || 0;
+    item.causesNegativeInventory = item.normalizedBalance < -0.01;
+    return item;
+  });
+
+  return output({
+    ok: true,
+    route: "materialFlow.auditJune2026",
+    periodMonth,
+    materialCount: materials.length,
+    materials,
+    balances,
+    negativeInventory: materials.filter((item) => item.causesNegativeInventory),
+    directFlowDiagnosis: diagnoseJuneDirectFlow_(periodMonth, movements),
+    proposedNormalizationMap: proposedJuneMaterialNormalizationMap_(),
+    migrationFunction: "migrateJuneMaterialFlowToV1(dryRun)",
+    dryRunUrl: "?fn=materialFlow.migrateJuneToV1&dryRun=true",
+    message: "Diagnosis only. No data was changed.",
+  });
+}
+
+function migrateJuneMaterialFlowToV1(dryRun) {
+  const isDryRun = dryRun !== false && String(dryRun || "true").toLowerCase() !== "false";
+  const periodMonth = "2026-06";
+  const movements = buildJuneV1MaterialMovements_(periodMonth);
+  const rebuiltRows = movementsToJuneLedgerRows_(movements, periodMonth);
+  const beforeRows = safeRows_("Inventory_Ledger").filter((row) => !isDeleted_(row));
+  const beforeBalances = materialFlowBalancesFromLedger_(beforeRows, periodMonth);
+  const afterBalances = materialFlowBalancesFromLedger_(rebuiltRows, periodMonth);
+
+  const result = {
+    ok: true,
+    dryRun: isDryRun,
+    migrationFunction: "migrateJuneMaterialFlowToV1",
+    periodMonth,
+    rowsBefore: beforeRows.filter((row) => materialFlowRowInPeriod_(row, periodMonth)).length,
+    rowsAfter: rebuiltRows.length,
+    beforeBalances,
+    afterBalances,
+    proposedNormalizationMap: proposedJuneMaterialNormalizationMap_(),
+    warnings: [
+      "Live migration rewrites June Inventory_Ledger rows from source sheets only.",
+      "Source operational sheets are not deleted or overwritten.",
+      "Run dryRun=true first and review negativeInventory/materials before live run.",
+    ],
+  };
+
+  if (isDryRun) {
+    result.message = "Dry run complete. No data was changed.";
+    return result;
+  }
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    return { ok: false, error: "June material flow migration is already in progress" };
+  }
+
+  try {
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const ledgerSheet = getSheet("Inventory_Ledger");
+    const headers = inventoryLedgerHeaders_();
+    ensureHeaders_("Inventory_Ledger", headers);
+    const backupSheetName = backupInventoryLedger_(ss, ledgerSheet);
+    const keepRows = beforeRows.filter((row) => !materialFlowRowInPeriod_(row, periodMonth));
+    clearInventoryLedger_(ledgerSheet, headers);
+    writeInventoryLedgerRows_(ledgerSheet, headers, keepRows.concat(rebuiltRows));
+    result.backupSheetName = backupSheetName;
+    result.message = "June Inventory_Ledger rows were backed up and rebuilt using V1 material-flow mapping.";
+    return result;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function buildJuneV1MaterialMovements_(periodMonth) {
+  const moves = [];
+  collectJuneReceivingMoves_(moves, periodMonth);
+  collectJuneWashMoves_(moves, periodMonth);
+  collectJuneSortingMoves_(moves, periodMonth);
+  collectJuneExtrusionMoves_(moves, periodMonth);
+  collectJuneDispatchMoves_(moves, periodMonth);
+  collectJuneLedgerMoves_(moves, periodMonth);
+  collectJuneQualityMoves_(moves, periodMonth);
+  collectJuneMonthCloseMoves_(moves, periodMonth);
+  collectJunePhysicalCountMoves_(moves, periodMonth);
+  collectJuneAdjustmentMoves_(moves, periodMonth);
+  return moves;
+}
+
+function pushMaterialFlowMove_(moves, payload) {
+  const originalName = materialFlowCleanName_(payload.originalName || payload.material || payload.itemName);
+  if (!originalName) return;
+  moves.push({
+    sourceSheet: payload.sourceSheet || "",
+    sourceId: payload.sourceId || "",
+    field: payload.field || "",
+    originalName,
+    category: payload.category || materialCategory_(originalName),
+    qtyIn: num(payload.qtyIn),
+    qtyOut: num(payload.qtyOut),
+    date: payload.date || "",
+  });
+}
+
+function collectJuneReceivingMoves_(moves, periodMonth) {
+  safeRows_("RM_Inward").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row, index) => {
+    const sourceId = row.inwardId || row.batchId || "RM-" + (index + 1);
+    parseRmMaterialLines_(row.materialLines, row.material || row.color || "White Flakes", row.netWeight || row.quantityKg || row.grossWeight).forEach((line) => {
+      pushMaterialFlowMove_(moves, { sourceSheet: "RM_Inward", sourceId, field: "material", originalName: line.material, category: "RM", qtyIn: line.quantityKg, date: row.date });
+    });
+  });
+}
+
+function collectJuneWashMoves_(moves, periodMonth) {
+  safeRows_("Wash_Batches").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row, index) => {
+    const sourceId = row.washBatchId || row.batchId || "WASH-" + (index + 1);
+    const inputMaterial = materialName_(row.inputMaterial, "White Flakes");
+    const washedMaterial = inputMaterial.toUpperCase().indexOf("WHITE") !== -1 ? "Washed White Flakes" : "Washed Mixed";
+    pushMaterialFlowMove_(moves, { sourceSheet: "Wash_Batches", sourceId, field: "inputMaterial", originalName: inputMaterial, category: "RM", qtyOut: row.inputWeightKg, date: row.date });
+    pushMaterialFlowMove_(moves, { sourceSheet: "Wash_Batches", sourceId, field: "washedOutputKg", originalName: washedMaterial, category: "WIP", qtyIn: row.washedOutputKg, date: row.date });
+    [["sinkMaterialKg", "Sink Material"], ["dustKg", "Dust"], ["otherColorKg", "Color Reject"], ["sludgeKg", "Sludge"], ["ironScrapKg", "Metal Reject"], ["raffiaKg", "Raffia Reject"], ["wrappersKg", "Wrapper Reject"]].forEach(([field, name]) => {
+      pushMaterialFlowMove_(moves, { sourceSheet: "Wash_Batches", sourceId, field, originalName: name, category: "WASTE", qtyIn: row[field], date: row.date });
+    });
+  });
+}
+
+function collectJuneSortingMoves_(moves, periodMonth) {
+  safeRows_("Sorting_Batches").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row, index) => {
+    const sourceId = row.sortingBatchId || row.batchId || "SORT-" + (index + 1);
+    const inputMaterial = materialName_(row.inputMaterial, "Washed White Flakes");
+    pushMaterialFlowMove_(moves, { sourceSheet: "Sorting_Batches", sourceId, field: "inputMaterial", originalName: inputMaterial, category: "WIP", qtyOut: row.inputWeightKg, date: row.date });
+    pushMaterialFlowMove_(moves, { sourceSheet: "Sorting_Batches", sourceId, field: "whiteSortedKg", originalName: "White Sorted", category: "WIP", qtyIn: num(row.whiteSortedKg || row.acceptedQtyKg), date: row.date });
+    pushMaterialFlowMove_(moves, { sourceSheet: "Sorting_Batches", sourceId, field: "allMixSortedKg", originalName: "Mixed Sorted", category: "WIP", qtyIn: row.allMixSortedKg, date: row.date });
+    pushMaterialFlowMove_(moves, { sourceSheet: "Sorting_Batches", sourceId, field: "commodityKg", originalName: "Commodity", category: "WIP", qtyIn: row.commodityKg, date: row.date });
+    pushMaterialFlowMove_(moves, { sourceSheet: "Sorting_Batches", sourceId, field: "rejectedQtyKg", originalName: "Color Reject", category: "WASTE", qtyIn: row.rejectedQtyKg, date: row.date });
+    pushMaterialFlowMove_(moves, { sourceSheet: "Sorting_Batches", sourceId, field: "dustKg", originalName: "Dust", category: "WASTE", qtyIn: row.dustKg, date: row.date });
+  });
+}
+
+function collectJuneExtrusionMoves_(moves, periodMonth) {
+  const sortingOutputKg = safeRows_("Sorting_Batches").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).reduce((sum, row) => sum + num(row.whiteSortedKg || row.acceptedQtyKg), 0);
+  safeRows_("Extrusion_Batches").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row, index) => {
+    const sourceId = row.extrusionBatchId || row.batchId || "EXT-" + (index + 1);
+    const explicitInput = materialFlowCleanName_(row.inputMaterial);
+    const inputMaterial = explicitInput || (sortingOutputKg > 0 ? "White Sorted" : "Washed White Flakes");
+    const grade = normalizeFgMaterialName_(row.productionGrade || row.grade || "E1");
+    pushMaterialFlowMove_(moves, { sourceSheet: "Extrusion_Batches", sourceId, field: "inputMaterial", originalName: inputMaterial, category: "WIP", qtyOut: row.inputWeightKg || row.totalInputKg, date: row.date });
+    [["virginMaterialKg", "Virgin PP", "ADDITIVE"], ["masterBatchKg", "Masterbatch", "ADDITIVE"], ["antiOxidantKg", "Antioxidant", "ADDITIVE"], ["batteryFlakesKg", "Battery Scrap", "RM"], ["lumpsReusedKg", "Lumps", "REWORK"], ["purgingReusedKg", "Purging", "REWORK"], ["reworkGranulesKg", "Rework Material", "REWORK"]].forEach(([field, name, category]) => {
+      pushMaterialFlowMove_(moves, { sourceSheet: "Extrusion_Batches", sourceId, field, originalName: name, category, qtyOut: row[field], date: row.date });
+    });
+    pushMaterialFlowMove_(moves, { sourceSheet: "Extrusion_Batches", sourceId, field: "fgOutputKg", originalName: grade, category: "FG", qtyIn: row.fgOutputKg, date: row.date });
+    [["lumpsKg", "Lumps", "REWORK"], ["purgingKg", "Purging", "REWORK"], ["dustKg", "Dust", "WASTE"], ["rejectKg", "Extrusion Waste", "WASTE"], ["vacuumRejectKg", "Extrusion Waste", "WASTE"], ["meshRejectKg", "Extrusion Waste", "WASTE"], ["floorSpillageKg", "Extrusion Waste", "WASTE"]].forEach(([field, name, category]) => {
+      pushMaterialFlowMove_(moves, { sourceSheet: "Extrusion_Batches", sourceId, field, originalName: name, category, qtyIn: row[field], date: row.date });
+    });
+  });
+}
+
+function collectJuneDispatchMoves_(moves, periodMonth) {
+  safeRows_("Dispatches").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row, index) => {
+    const sourceId = row.dispatchId || "DISP-" + (index + 1);
+    const lines = parseDispatchLines_(row.dispatchLines);
+    if (lines.length) {
+      lines.forEach((line) => {
+        parseFgDispatchItems_(line.grade || line.material || row.grade || row.productionGrade, num(line.dispatchQtyKg || line.quantityKg || row.quantityKg)).forEach((item) => {
+          pushMaterialFlowMove_(moves, { sourceSheet: "Dispatches", sourceId, field: "dispatchLines", originalName: item.itemName, category: "FG", qtyOut: item.quantityKg, date: row.date });
+        });
+      });
+      return;
+    }
+    parseFgDispatchItems_(row.material || row.grade || row.productionGrade || "E1", num(row.quantityKg)).forEach((item) => {
+      pushMaterialFlowMove_(moves, { sourceSheet: "Dispatches", sourceId, field: "grade", originalName: item.itemName, category: "FG", qtyOut: item.quantityKg, date: row.date });
+    });
+  });
+}
+
+function collectJuneLedgerMoves_(moves, periodMonth) {
+  safeRows_("Inventory_Ledger").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row) => {
+    pushMaterialFlowMove_(moves, { sourceSheet: "Inventory_Ledger", sourceId: row.ledgerId, field: "itemName", originalName: row.itemName, category: row.itemType || "UNKNOWN", qtyIn: row.qtyIn, qtyOut: row.qtyOut, date: row.date });
+  });
+}
+
+function collectJuneQualityMoves_(moves, periodMonth) {
+  safeRows_("RM_Quality").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row) => pushMaterialFlowMove_(moves, { sourceSheet: "RM_Quality", sourceId: row.qualityId, field: "material", originalName: row.material || row.materialName, category: "RM", date: row.date }));
+  safeRows_("FG_Quality").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row) => pushMaterialFlowMove_(moves, { sourceSheet: "FG_Quality", sourceId: row.qualityId, field: "grade", originalName: row.grade || row.productionGrade || row.fgBatchCode, category: "FG", qtyIn: row.quantityKg, date: row.date }));
+}
+
+function collectJuneMonthCloseMoves_(moves, periodMonth) {
+  safeRows_("Month_Close").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row) => {
+    pushMaterialFlowMove_(moves, { sourceSheet: "Month_Close", sourceId: row.closeId, field: "rmSystemClosingKg", originalName: "White Flakes", category: "RM", qtyIn: row.rmSystemClosingKg });
+    pushMaterialFlowMove_(moves, { sourceSheet: "Month_Close", sourceId: row.closeId, field: "washSystemClosingKg", originalName: "Washed White Flakes", category: "WIP", qtyIn: row.washSystemClosingKg });
+    pushMaterialFlowMove_(moves, { sourceSheet: "Month_Close", sourceId: row.closeId, field: "sortingSystemClosingKg", originalName: "White Sorted", category: "WIP", qtyIn: row.sortingSystemClosingKg });
+    pushMaterialFlowMove_(moves, { sourceSheet: "Month_Close", sourceId: row.closeId, field: "fgSystemClosingKg", originalName: "E1", category: "FG", qtyIn: row.fgSystemClosingKg });
+  });
+}
+
+function collectJunePhysicalCountMoves_(moves, periodMonth) {
+  safeRows_("Physical_Counts").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row) => {
+    pushMaterialFlowMove_(moves, { sourceSheet: "Physical_Counts", sourceId: row.countId, field: "rmPhysicalKg", originalName: "White Flakes", category: "RM", qtyIn: row.rmPhysicalKg });
+    pushMaterialFlowMove_(moves, { sourceSheet: "Physical_Counts", sourceId: row.countId, field: "washPhysicalKg", originalName: "Washed White Flakes", category: "WIP", qtyIn: row.washPhysicalKg });
+    pushMaterialFlowMove_(moves, { sourceSheet: "Physical_Counts", sourceId: row.countId, field: "sortingPhysicalKg", originalName: "White Sorted", category: "WIP", qtyIn: row.sortingPhysicalKg });
+    pushMaterialFlowMove_(moves, { sourceSheet: "Physical_Counts", sourceId: row.countId, field: "fgPhysicalKg", originalName: "E1", category: "FG", qtyIn: row.fgPhysicalKg });
+  });
+}
+
+function collectJuneAdjustmentMoves_(moves, periodMonth) {
+  safeRows_("Inventory_Adjustments").filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row) => {
+    const qty = num(row.quantityKg);
+    pushMaterialFlowMove_(moves, { sourceSheet: "Inventory_Adjustments", sourceId: row.adjustmentId, field: "itemCode", originalName: row.itemCode || row.material, category: row.itemType || "UNKNOWN", qtyIn: qty > 0 ? qty : 0, qtyOut: qty < 0 ? Math.abs(qty) : 0, date: row.date });
+  });
+}
+
+function movementsToJuneLedgerRows_(movements, periodMonth) {
+  const ctx = { rows: [], sourceCounts: {}, warnings: [], rebuildAt: new Date() };
+  movements.filter((move) => ["RM_Inward", "Wash_Batches", "Sorting_Batches", "Extrusion_Batches", "Dispatches", "Inventory_Adjustments"].indexOf(move.sourceSheet) !== -1).forEach((move, index) => {
+    const normalized = materialFlowNormalizeMaterial_(move.originalName, move.category);
+    pushRebuiltLedgerRow_(ctx, move.sourceSheet, move.sourceId || index + 1, {
+      date: move.date || periodMonth + "-01",
+      module: move.sourceSheet.replace(/_Batches|_Inward|es$/g, "").toUpperCase(),
+      movementType: num(move.qtyIn) > 0 ? "IN" : "OUT",
+      itemType: normalized.category,
+      itemName: normalized.name,
+      sourceRef: move.sourceId || "",
+      targetRef: move.sourceId || "",
+      qtyIn: move.qtyIn,
+      qtyOut: move.qtyOut,
+      unit: "Kg",
+      remarks: "June V1 material-flow rebuild from " + move.sourceSheet,
+      createdBy: "June V1 Material Migration",
+      legacyMaterialName: move.originalName,
+      migrationId: "JUNE_2026_MATERIAL_FLOW_V1",
+    });
+  });
+  return ctx.rows;
+}
+
+function materialFlowNormalizeMaterial_(name, category) {
+  const clean = materialFlowCleanName_(name);
+  const upper = clean.toUpperCase();
+  const map = {
+    "WASHED MATERIAL": ["Washed White Flakes", "WIP", "Washed White Flakes"],
+    "WASHED FLAKES": ["Washed White Flakes", "WIP", "Washed White Flakes"],
+    "WHITE WASHED FLAKES": ["Washed White Flakes", "WIP", "Washed White Flakes"],
+    "SORTED MATERIAL": ["White Sorted Flakes", "WIP", "White Sorted Flakes"],
+    "WHITE SORTED": ["White Sorted Flakes", "WIP", "White Sorted Flakes"],
+    "WHITE SORTED MATERIAL": ["White Sorted Flakes", "WIP", "White Sorted Flakes"],
+    "REWORK GRANULES": ["Rework Material", "REWORK", "Rework Material"],
+    "VIRGIN MATERIAL": ["Virgin PP", "ADDITIVE", "Virgin PP"],
+    "ANTI OXIDANT": ["Antioxidant", "ADDITIVE", "Antioxidant"],
+    "MASTER BATCH": ["Masterbatch", "ADDITIVE", "Masterbatch"],
+    "BATTERY FLAKES": ["Battery Scrap", "RM", "Battery Scrap"],
+  };
+  if (map[upper]) return { name: map[upper][0], category: map[upper][1], mergeInto: map[upper][2] };
+  return { name: clean, category: normalizeMaterialCategoryForLedger_(category || materialCategory_(clean)) || "UNKNOWN", mergeInto: "" };
+}
+
+function materialFlowCleanName_(value) {
+  let text = String(value || "").trim();
+  if (!text) return "";
+  text = text.replace(/\bE([1-5])\s*:\s*[\d,]+(?:\.\d+)?\s*(KG|KGS|KILOGRAMS)?/gi, "E$1");
+  text = text.replace(/\b\d+(?:\.\d+)?\s*(kg|kgs|kilogram|kilograms|mt|tons?|tonnes?)\b/gi, " ");
+  text = text.replace(/\s+/g, " ").trim();
+  if (/FEED\s*COMPOSITION|RECIPE|DOSING/i.test(text)) return "Recipe Text";
+  return text;
+}
+
+function safeRows_(sheetName) {
+  try {
+    return getRowsAsObjects(sheetName).filter((row) => !isDeleted_(row));
+  } catch (err) {
+    return [];
+  }
+}
+
+function materialFlowRowInPeriod_(row, periodMonth) {
+  const pm = String(row.periodMonth || row.closeMonth || "").trim();
+  if (pm) return pm.slice(0, 7) === periodMonth;
+  const value = row.date || row.invoiceDate || row.createdAt || row.savedAt || row.closedAt || row.timestamp || "";
+  if (!value) return false;
+  const text = String(value);
+  if (/^\d{4}-\d{2}/.test(text)) return text.slice(0, 7) === periodMonth;
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return false;
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") === periodMonth;
+}
+
+function addMasterOnlyMaterials_(materialIndex, rows, sourceSheet) {
+  rows.forEach((row) => {
+    const name = materialFlowCleanName_(row.materialName || row.itemName || row.gradeName || row.material || "");
+    if (!name || materialIndex[name]) return;
+    const normalized = materialFlowNormalizeMaterial_(name, row.category || row.materialType);
+    materialIndex[name] = {
+      originalName: name,
+      sources: { [sourceSheet]: true },
+      currentInferredCategory: row.category || row.materialType || normalized.category,
+      suggestedNormalizedName: normalized.name,
+      suggestedNormalizedCategory: normalized.category,
+      shouldMergeInto: normalized.mergeInto,
+      quantityImpactBySource: {},
+      netQuantityImpact: 0,
+      causesNegativeInventory: false,
+      appearsInMonthClose: false,
+      appearsInProductionDropdowns: false,
+      appearsInRMInwardDropdowns: false,
+      appearsInDispatchDropdowns: false,
+      examples: [],
+    };
+  });
+}
+
+function markDropdownAppearances_(materialIndex, masterRows, productionRows, rmRows, dispatchRows) {
+  const masterNames = masterRows.map((row) => String(row.materialName || row.materialCode || "").toUpperCase());
+  const productionNames = productionRows.map((row) => String(row.materialName || "").toUpperCase());
+  const rmNames = rmRows.map((row) => String(row.material || row.color || "").toUpperCase());
+  const dispatchNames = dispatchRows.map((row) => String(row.material || row.grade || row.productionGrade || "").toUpperCase());
+  Object.keys(materialIndex).forEach((key) => {
+    const item = materialIndex[key];
+    const candidates = [item.originalName, item.suggestedNormalizedName].map((name) => String(name || "").toUpperCase());
+    item.appearsInProductionDropdowns = candidates.some((name) => masterNames.indexOf(name) !== -1 || productionNames.indexOf(name) !== -1);
+    item.appearsInRMInwardDropdowns = candidates.some((name) => masterNames.indexOf(name) !== -1 || rmNames.indexOf(name) !== -1);
+    item.appearsInDispatchDropdowns = candidates.some((name) => masterNames.indexOf(name) !== -1 || dispatchNames.indexOf(name) !== -1 || /^E[1-5]$/.test(name));
+  });
+}
+
+function markMonthCloseAppearances_(materialIndex, monthCloseRows) {
+  const closeNames = ["White Flakes", "Washed White Flakes", "White Sorted", "White Sorted Flakes", "E1"];
+  if (!monthCloseRows.length) closeNames.push("Material", "Washed Material", "Sorted Material", "Dispatch Material");
+  Object.keys(materialIndex).forEach((key) => {
+    const item = materialIndex[key];
+    const candidates = [item.originalName, item.suggestedNormalizedName, item.shouldMergeInto].map((name) => String(name || "").toUpperCase());
+    item.appearsInMonthClose = closeNames.some((name) => candidates.indexOf(String(name).toUpperCase()) !== -1);
+  });
+}
+
+function diagnoseJuneDirectFlow_(periodMonth, movements) {
+  const sortingProduced = movements.filter((m) => m.sourceSheet === "Sorting_Batches" && num(m.qtyIn) > 0 && /SORTED/i.test(m.originalName)).reduce((s, m) => s + num(m.qtyIn), 0);
+  const extrusionSortedConsumed = movements.filter((m) => m.sourceSheet === "Extrusion_Batches" && num(m.qtyOut) > 0 && /SORTED/i.test(m.originalName)).reduce((s, m) => s + num(m.qtyOut), 0);
+  const washProduced = movements.filter((m) => m.sourceSheet === "Wash_Batches" && num(m.qtyIn) > 0 && /WASHED/i.test(m.originalName)).reduce((s, m) => s + num(m.qtyIn), 0);
+  return {
+    periodMonth,
+    sortingProducedKg: sortingProduced,
+    extrusionSortedConsumedKg: extrusionSortedConsumed,
+    washedProducedKg: washProduced,
+    likelyDirectWashToExtrusion: sortingProduced <= 0.01 && extrusionSortedConsumed > 0.01,
+    rootCause: sortingProduced <= 0.01 && extrusionSortedConsumed > 0.01
+      ? "Extrusion is consuming a sorted-material alias while June source data does not show matching sorting output. Treat June as Wash -> Extrusion direct flow or normalize extrusion input to washed material."
+      : "Review audit materials for alias mismatch and source/output timing.",
+  };
+}
+
+function materialFlowBalancesFromLedger_(rows, periodMonth) {
+  const balances = {};
+  rows.filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row) => {
+    const normalized = materialFlowNormalizeMaterial_(row.itemName, row.itemType);
+    balances[normalized.name] = (balances[normalized.name] || 0) + num(row.qtyIn) - num(row.qtyOut);
+  });
+  return balances;
+}
+
+function proposedJuneMaterialNormalizationMap_() {
+  return [
+    { oldName: "White Flakes", normalizedName: "White Flakes", category: "RM", merge: false },
+    { oldName: "Washed Material", normalizedName: "Washed White Flakes", category: "WIP", merge: true },
+    { oldName: "Washed White Flakes", normalizedName: "Washed White Flakes", category: "WIP", merge: false },
+    { oldName: "White Sorted", normalizedName: "White Sorted Flakes", category: "WIP", merge: true },
+    { oldName: "Sorted Material", normalizedName: "White Sorted Flakes", category: "WIP", merge: true },
+    { oldName: "E1", normalizedName: "E1", category: "FG", merge: false },
+    { oldName: "E2", normalizedName: "E2", category: "FG", merge: false },
+    { oldName: "E3", normalizedName: "E3", category: "FG", merge: false },
+    { oldName: "Sink Material", normalizedName: "Sink Material", category: "WASTE", merge: false },
+    { oldName: "Dust", normalizedName: "Dust", category: "WASTE", merge: false },
+    { oldName: "Lumps", normalizedName: "Lumps", category: "REWORK", merge: false },
+    { oldName: "Purging", normalizedName: "Purging", category: "REWORK", merge: false },
+    { oldName: "Rework Granules", normalizedName: "Rework Material", category: "REWORK", merge: true },
+    { oldName: "E1: 25000 Kg", normalizedName: "E1", category: "FG", merge: true },
+    { oldName: "Recipe/feed text", normalizedName: "Do not store as inventory material", category: "UNKNOWN", merge: true },
+  ];
 }
 
 function normalizeFgMaterialName_(value) {
@@ -8632,6 +9076,11 @@ function setupRegenOSBackend() {
       "status",
       "createdBy",
       "createdAt",
+      "legacySourceSheet",
+      "legacySourceId",
+      "legacyMaterialName",
+      "migrationId",
+      "migratedAt",
     ],
     Material_Master: [
       "materialId",

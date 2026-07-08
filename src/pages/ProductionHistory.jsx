@@ -2,6 +2,37 @@ import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 import DataTable from "../components/DataTable";
+import { listFactoryMaster } from "../services/FactoryMasterService";
+import { normalizeInventoryMaterial } from "../services/inventoryEngine";
+
+const SHIFT_OPTIONS = ["A", "B", "C"];
+const STATUS_OPTIONS = [
+  "ACTIVE",
+  "WASH_COMPLETED",
+  "READY_FOR_SORTING",
+  "READY_FOR_EXTRUSION",
+  "READY_FOR_DISPATCH",
+  "COMPLETED",
+  "HOLD",
+];
+const NEXT_PROCESS_OPTIONS = [
+  "Colour Sorting",
+  "Extrusion",
+  "Dispatch",
+  "Finished Goods",
+  "Hold",
+];
+const SOURCE_TYPE_OPTIONS = [
+  "PRODUCTION_SHIFT",
+  "WASH",
+  "SORTING",
+  "RECOVERY",
+  "REWORK",
+  "RM",
+  "WIP",
+  "ADDITIVE",
+];
+const PROCESS_OPTIONS = ["Wash", "Sorting", "Extrusion"];
 
 export default function ProductionHistory() {
   const now = new Date();
@@ -17,9 +48,15 @@ export default function ProductionHistory() {
   const [status, setStatus] = useState("");
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [masterRows, setMasterRows] = useState({
+    machines: [],
+    materials: [],
+    grades: [],
+  });
 
   useEffect(() => {
     loadData();
+    loadEditMasters();
   }, []);
 
   async function safeList(fn) {
@@ -56,6 +93,25 @@ export default function ProductionHistory() {
     } catch (err) {
       console.log(err);
       setStatus("Failed loading production history");
+    }
+  }
+
+  async function loadEditMasters() {
+    const [machines, materials, grades] = await Promise.all([
+      safeMasterList("machine"),
+      safeMasterList("material"),
+      safeMasterList("productGrade"),
+    ]);
+
+    setMasterRows({ machines, materials, grades });
+  }
+
+  async function safeMasterList(masterType) {
+    try {
+      return await listFactoryMaster(masterType);
+    } catch (err) {
+      console.log(masterType, err);
+      return [];
     }
   }
 
@@ -199,10 +255,11 @@ export default function ProductionHistory() {
         {
           title: "Batch Details",
           fields: [
+            ["__process", "Process", "processSelect"],
             ["date", "Date", "date"],
-            ["shift", "Shift", "text"],
-            ["machine", "Machine", "text"],
-            ["inputMaterial", "Input Material", "text"],
+            ["shift", "Shift", "shiftSelect"],
+            ["machine", "Machine", "machineSelect"],
+            ["inputMaterial", "Input Material", "materialSelect"],
             ["inputWeightKg", "Input Kg", "number"],
             ["washedOutputKg", "Washed Output Kg", "number"],
           ],
@@ -233,9 +290,9 @@ export default function ProductionHistory() {
           fields: [
             ["operatorName", "Operator", "text"],
             ["supervisorName", "Supervisor", "text"],
-            ["sortingRequired", "Sorting Required", "text"],
-            ["nextProcess", "Next Process", "text"],
-            ["status", "Status", "text"],
+            ["sortingRequired", "Sorting Required", "yesNoSelect"],
+            ["nextProcess", "Next Process", "nextProcessSelect"],
+            ["status", "Status", "statusSelect"],
             ["remarks", "Remarks", "textarea"],
           ],
         },
@@ -247,11 +304,12 @@ export default function ProductionHistory() {
         {
           title: "Batch Details",
           fields: [
+            ["__process", "Process", "processSelect"],
             ["date", "Date", "date"],
-            ["shift", "Shift", "text"],
-            ["machine", "Machine", "text"],
-            ["sourceWashBatchId", "Source Wash Batch", "text"],
-            ["inputMaterial", "Input Material", "text"],
+            ["shift", "Shift", "shiftSelect"],
+            ["machine", "Machine", "machineSelect"],
+            ["sourceWashBatchId", "Source Wash Batch", "readonly"],
+            ["inputMaterial", "Input Material", "materialSelect"],
             ["inputWeightKg", "Input Kg", "number"],
           ],
         },
@@ -281,8 +339,8 @@ export default function ProductionHistory() {
           fields: [
             ["operatorName", "Operator", "text"],
             ["supervisorName", "Supervisor", "text"],
-            ["nextProcess", "Next Process", "text"],
-            ["status", "Status", "text"],
+            ["nextProcess", "Next Process", "nextProcessSelect"],
+            ["status", "Status", "statusSelect"],
             ["remarks", "Remarks", "textarea"],
           ],
         },
@@ -293,22 +351,23 @@ export default function ProductionHistory() {
       {
         title: "Batch Details",
         fields: [
+          ["__process", "Process", "processSelect"],
           ["date", "Date", "date"],
-          ["periodMonth", "Period Month", "text"],
-          ["shift", "Shift", "text"],
-          ["machine", "Machine", "text"],
-          ["sourceType", "Source Type", "text"],
-          ["sourceSortingBatchId", "Source Sorting Batch", "text"],
-          ["sourceWashBatchId", "Source Wash Batch", "text"],
-          ["inputMaterial", "Input Material / Feed Summary", "textarea"],
+          ["periodMonth", "Period Month", "month"],
+          ["shift", "Shift", "shiftSelect"],
+          ["machine", "Machine", "machineSelect"],
+          ["sourceType", "Source Type", "sourceTypeSelect"],
+          ["sourceSortingBatchId", "Source Sorting Batch", "readonly"],
+          ["sourceWashBatchId", "Source Wash Batch", "readonly"],
+          ["inputMaterial", "Input Material / Feed Summary", "materialSelect"],
           ["inputWeightKg", "Input Weight Kg", "number"],
           ["totalInputKg", "Total Input Kg", "number"],
-          ["productionGrade", "Production Grade", "text"],
+          ["productionGrade", "Production Grade", "gradeSelect"],
         ],
       },
       {
         title: "Feed Composition",
-        fields: [["feedComposition", "Feed Composition", "textarea"]],
+        fields: [["feedComposition", "Feed Composition", "readonlyTextarea"]],
       },
       {
         title: "Extrusion Outputs",
@@ -350,8 +409,8 @@ export default function ProductionHistory() {
         fields: [
           ["operatorName", "Operator", "text"],
           ["supervisorName", "Supervisor", "text"],
-          ["nextProcess", "Next Process", "text"],
-          ["status", "Status", "text"],
+          ["nextProcess", "Next Process", "nextProcessSelect"],
+          ["status", "Status", "statusSelect"],
           ["remarks", "Remarks", "textarea"],
         ],
       },
@@ -360,6 +419,7 @@ export default function ProductionHistory() {
 
   function prepareEditFields(row) {
     const source = { ...(row.source || {}) };
+    source.__process = row.process;
     source.date = dateForInput(source.date || row.date);
 
     if (row.process === "Wash") {
@@ -424,13 +484,21 @@ export default function ProductionHistory() {
       setSaving(true);
 
       const cleanDate = dateForInput(editing.fields.date);
+      const normalizedFields = normalizeEditFields(editing.fields);
+      const validationError = validateEditFields(normalizedFields, editing.sections, editing.process);
+
+      if (validationError) {
+        alert(validationError);
+        return;
+      }
 
       const payload = {
         fn: editing.updateFn,
-        ...editing.fields,
+        ...normalizedFields,
         date: cleanDate,
         [editing.idKey]: editing.id,
       };
+      delete payload.__process;
 
       const res = await apiCall(payload);
 
@@ -471,6 +539,64 @@ export default function ProductionHistory() {
     } catch (err) {
       alert(err.message);
     }
+  }
+
+  function normalizeEditFields(fields = {}) {
+    const next = { ...fields };
+
+    [
+      "shift",
+      "machine",
+      "inputMaterial",
+      "sourceType",
+      "productionGrade",
+      "status",
+      "nextProcess",
+      "__process",
+    ].forEach((key) => {
+      if (next[key] !== undefined && next[key] !== null) {
+        next[key] = normalizeControlledValue(key, next[key]);
+      }
+    });
+
+    return next;
+  }
+
+  function validateEditFields(fields = {}, sections = [], process) {
+    const controlledFields = new Set([
+      "__process",
+      "shift",
+      "machine",
+      "inputMaterial",
+      "sourceType",
+      "productionGrade",
+      "status",
+      "nextProcess",
+    ]);
+
+    for (const section of sections) {
+      for (const [key, label, type] of section.fields) {
+        if (!controlledFields.has(key)) continue;
+        if (type === "readonly" || type === "readonlyTextarea") continue;
+
+        const value = String(fields[key] || "").trim();
+        if (!value) {
+          return `${label} is required. Select a controlled value before saving.`;
+        }
+
+        const options = getSelectOptions(type, {
+          value,
+          process,
+          masterRows,
+        });
+
+        if (options && !options.includes(value)) {
+          return `${label} must be selected from the approved list.`;
+        }
+      }
+    }
+
+    return "";
   }
 
   return (
@@ -590,6 +716,8 @@ export default function ProductionHistory() {
                       label={label}
                       type={type}
                       value={editing.fields[key]}
+                      process={editing.process}
+                      masterRows={masterRows}
                       dateForInput={dateForInput}
                       onChange={(value) => onEditChange(key, value)}
                     />
@@ -600,20 +728,12 @@ export default function ProductionHistory() {
 
             <details style={jsonBox}>
               <summary style={{ cursor: "pointer", fontWeight: 700 }}>
-                Advanced JSON
+                Raw record preview
               </summary>
 
               <textarea
+                readOnly
                 value={JSON.stringify(editing.fields, null, 2)}
-                onChange={(e) => {
-                  try {
-                    const parsed = JSON.parse(e.target.value);
-                    setEditing((prev) => ({
-                      ...prev,
-                      fields: parsed,
-                    }));
-                  } catch {}
-                }}
                 style={jsonArea}
               />
             </details>
@@ -634,8 +754,55 @@ export default function ProductionHistory() {
   );
 }
 
-function EditField({ label, value, type = "text", onChange, dateForInput }) {
+function EditField({
+  label,
+  value,
+  type = "text",
+  onChange,
+  dateForInput,
+  process,
+  masterRows,
+}) {
   const safe = type === "date" ? dateForInput(value) : value || "";
+  const selectOptions = getSelectOptions(type, {
+    value: safe,
+    process,
+    masterRows,
+  });
+
+  if (selectOptions) {
+    return (
+      <div>
+        <label style={labelStyle}>{label}</label>
+        <select
+          value={safe}
+          onChange={(e) => onChange(e.target.value)}
+          style={inputStyle}
+        >
+          <option value="">Select {label}</option>
+          {selectOptions.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </div>
+    );
+  }
+
+  if (type === "readonly" || type === "readonlyTextarea") {
+    const Control = type === "readonlyTextarea" ? "textarea" : "input";
+    return (
+      <div>
+        <label style={labelStyle}>{label}</label>
+        <Control
+          readOnly
+          value={safe}
+          style={type === "readonlyTextarea" ? readonlyTextareaStyle : readonlyInputStyle}
+        />
+      </div>
+    );
+  }
 
   if (type === "textarea") {
     return (
@@ -661,6 +828,108 @@ function EditField({ label, value, type = "text", onChange, dateForInput }) {
       />
     </div>
   );
+}
+
+function getSelectOptions(type, context) {
+  if (type === "processSelect") return withCurrent(PROCESS_OPTIONS, context.value);
+  if (type === "shiftSelect") return withCurrent(SHIFT_OPTIONS, context.value);
+  if (type === "statusSelect") return withCurrent(STATUS_OPTIONS, context.value);
+  if (type === "nextProcessSelect") return withCurrent(NEXT_PROCESS_OPTIONS, context.value);
+  if (type === "sourceTypeSelect") return withCurrent(SOURCE_TYPE_OPTIONS, context.value);
+  if (type === "yesNoSelect") return withCurrent(["YES", "NO"], context.value);
+
+  if (type === "machineSelect") {
+    return withCurrent(
+      (context.masterRows?.machines || [])
+        .filter((item) => machineMatchesProcess(item, context.process))
+        .map(itemLabel)
+        .filter(Boolean),
+      context.value
+    );
+  }
+
+  if (type === "materialSelect") {
+    return withCurrent(
+      (context.masterRows?.materials || []).map(itemLabel).filter(Boolean),
+      context.value
+    );
+  }
+
+  if (type === "gradeSelect") {
+    const gradeOptions = [
+      ...(context.masterRows?.grades || []).map(itemLabel),
+      ...(context.masterRows?.materials || [])
+        .filter((item) => String(item.category || item.materialType || "").toUpperCase() === "FG")
+        .map(itemLabel),
+      "E1",
+      "E2",
+      "E3",
+      "E4",
+      "E5",
+    ].filter(Boolean);
+
+    return withCurrent(gradeOptions, context.value);
+  }
+
+  return null;
+}
+
+function withCurrent(options, current) {
+  const values = [];
+  const seen = new Set();
+
+  [current, ...options].forEach((value) => {
+    const clean = String(value || "").trim();
+    if (!clean || seen.has(clean)) return;
+    seen.add(clean);
+    values.push(clean);
+  });
+
+  return values;
+}
+
+function machineMatchesProcess(item, process) {
+  const rowProcess = String(item.processType || item.machineType || "").toUpperCase();
+  if (!rowProcess) return true;
+
+  const current = String(process || "").toUpperCase();
+  if (current === "WASH") return rowProcess.includes("WASH");
+  if (current === "SORTING") return rowProcess.includes("SORT");
+  if (current === "EXTRUSION") {
+    return rowProcess.includes("EXTRUSION") || rowProcess.includes("EXTRUDER");
+  }
+
+  return true;
+}
+
+function itemLabel(item) {
+  return String(
+    item?.name ||
+      item?.materialName ||
+      item?.machineName ||
+      item?.gradeName ||
+      item?.itemName ||
+      item?.code ||
+      item?.materialCode ||
+      item?.gradeCode ||
+      ""
+  ).trim();
+}
+
+function normalizeControlledValue(key, value) {
+  const clean = String(value || "").trim();
+  if (!clean) return "";
+  if (key === "shift") return clean.toUpperCase();
+  if (key === "__process") {
+    return PROCESS_OPTIONS.find((option) => option.toUpperCase() === clean.toUpperCase()) || clean;
+  }
+  if (key === "status" || key === "sourceType") {
+    return clean.toUpperCase().replace(/\s+/g, "_");
+  }
+  if (key === "productionGrade") {
+    return normalizeInventoryMaterial(clean).toUpperCase();
+  }
+  return clean.replace(/\s+/g, " ");
 }
 
 function KPI({ title, value }) {
@@ -828,6 +1097,18 @@ const textareaStyle = {
   border: "1px solid #cbd5e1",
   borderRadius: 8,
   boxSizing: "border-box",
+};
+
+const readonlyInputStyle = {
+  ...inputStyle,
+  background: "#f8fafc",
+  color: "#475569",
+};
+
+const readonlyTextareaStyle = {
+  ...textareaStyle,
+  background: "#f8fafc",
+  color: "#475569",
 };
 
 const jsonBox = {

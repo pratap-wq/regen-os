@@ -10,6 +10,7 @@ import {
   materialInventoryFromLedgerBalances,
   normalizeInventoryMaterial,
 } from "../services/inventoryEngine";
+import { materialKey } from "../utils/materialInventory";
 
 export default function Dispatch() {
   const today = new Date().toISOString().split("T")[0];
@@ -18,6 +19,8 @@ export default function Dispatch() {
     sourceExtrusionBatchId: "",
     lotNo: "",
     grade: "",
+    material: "",
+    itemType: "FG",
     productionDate: "",
     productionShift: "",
     availableKg: "",
@@ -113,12 +116,15 @@ export default function Dispatch() {
       console.log(err);
     }
 
-    if (row.sourceExtrusionBatchId) {
+    if (row.sourceExtrusionBatchId || row.grade) {
+      const grade = normalizeFgGrade(row.grade || row.material || "");
       return [
         {
           sourceExtrusionBatchId: row.sourceExtrusionBatchId || "",
           lotNo: row.lotNo || row.sourceExtrusionBatchId || "",
-          grade: row.grade || "",
+          grade,
+          material: grade,
+          itemType: "FG",
           productionDate: row.productionDate || row.date || "",
           productionShift: row.productionShift || "",
           availableKg: row.availableFGQty || "",
@@ -207,7 +213,7 @@ export default function Dispatch() {
     const map = {};
 
     allLiveLots.forEach((lot) => {
-      const material = normalizeMaterial(lot.productionGrade || lot.grade);
+      const material = normalizeFgGrade(lot.productionGrade || lot.grade);
       if (!material) return;
 
       if (!map[material]) {
@@ -231,7 +237,7 @@ export default function Dispatch() {
   }, [ledgerBalanceRows, allLiveLots]);
 
   const selectedInventory = materialInventory.find(
-    (x) => normalizeMaterial(x.material) === normalizeMaterial(form.material || form.grade || "")
+    (x) => normalizeFgGrade(x.material) === normalizeFgGrade(form.material || form.grade || "")
   );
 
   function getLineTotal(lines = dispatchLines) {
@@ -242,7 +248,7 @@ export default function Dispatch() {
     const map = {};
 
     lines.forEach((line) => {
-      const grade = line.grade || "NA";
+      const grade = normalizeFgGrade(line.grade || line.material || "") || "NA";
       map[grade] = (map[grade] || 0) + Number(line.dispatchQtyKg || 0);
     });
 
@@ -266,6 +272,9 @@ export default function Dispatch() {
 
     const cleanLines = lines.map((x) => ({
       ...x,
+      grade: normalizeFgGrade(x.grade || x.material || updated.material || updated.grade),
+      material: normalizeFgGrade(x.material || x.grade || updated.material || updated.grade),
+      itemType: "FG",
       availableKg: Number(x.availableKg || 0),
       dispatchQtyKg: Number(x.dispatchQtyKg || 0),
     }));
@@ -276,12 +285,10 @@ export default function Dispatch() {
 
     updated.quantityKg = totalQty.toFixed(2);
     updated.dispatchLines = JSON.stringify(cleanLines);
+    updated.material = normalizeFgGrade(updated.material || updated.grade);
     updated.grade = updated.material || getGradeSummary(cleanLines);
     updated.lotNo = getLotSummary(cleanLines);
-    updated.sourceExtrusionBatchId = cleanLines
-      .map((x) => x.sourceExtrusionBatchId)
-      .filter(Boolean)
-      .join(",");
+    updated.sourceExtrusionBatchId = "";
 
     return updated;
   }
@@ -293,10 +300,11 @@ export default function Dispatch() {
     };
 
     if (e.target.name === "material") {
-      updated.grade = e.target.value;
+      updated.material = normalizeFgGrade(e.target.value);
+      updated.grade = updated.material;
       updated.lotNo = "";
       updated.sourceExtrusionBatchId = "";
-      setDispatchLines([{ ...blankLine, grade: e.target.value }]);
+      setDispatchLines([{ ...blankLine, grade: updated.material, material: updated.material }]);
     }
 
     if (e.target.name === "quantityKg") {
@@ -308,62 +316,20 @@ export default function Dispatch() {
     setForm(updated);
   }
 
-  function allocateMaterialLots(material, quantityKg) {
-    let remaining = Number(quantityKg || 0);
-    const allocated = [];
-
-    const matchingLots = allLiveLots
-      .filter(
-        (lot) =>
-          normalizeMaterial(lot.productionGrade || lot.grade) ===
-          normalizeMaterial(material)
-      )
-      .sort((a, b) =>
-        String(a.productionDate || "").localeCompare(String(b.productionDate || ""))
-      );
-
-    matchingLots.forEach((lot) => {
-      if (remaining <= 0) return;
-
-      const available = Number(lot.available || 0);
-      if (available <= 0) return;
-
-      const dispatchQtyKg = Math.min(available, remaining);
-      remaining -= dispatchQtyKg;
-
-      allocated.push({
-        sourceExtrusionBatchId: lot.extrusionBatchId,
-        lotNo: lot.lotNo || lot.extrusionBatchId,
-        grade: material,
-        productionDate: lot.productionDate || "",
-        productionShift: lot.productionShift || "",
-        availableKg: available,
-        dispatchQtyKg,
-        remarks: "Auto allocated from material inventory",
-      });
-    });
-
-    if (remaining > 0.01 && Number(selectedInventory?.availableKg || 0) >= Number(quantityKg || 0)) {
-      allocated.push({
-        sourceExtrusionBatchId: "",
-        lotNo: "Material Inventory",
-        grade: material,
-        productionDate: "",
-        productionShift: "",
-        availableKg: remaining,
-        dispatchQtyKg: remaining,
-        remarks: "Auto allocated from inventory ledger balance",
-      });
-      remaining = 0;
-    }
-
-    if (remaining > 0.01) {
-      throw new Error(
-        `Not enough ${material} inventory. Short by ${remaining.toFixed(2)} Kg.`
-      );
-    }
-
-    return allocated;
+  function buildGradeDispatchLines(material, quantityKg) {
+    const grade = normalizeFgGrade(material);
+    return [
+      {
+        ...blankLine,
+        grade,
+        material: grade,
+        itemType: "FG",
+        lotNo: grade,
+        availableKg: Number(selectedInventory?.availableKg || 0),
+        dispatchQtyKg: Number(quantityKg || 0),
+        remarks: "Dispatched from FG grade inventory",
+      },
+    ];
   }
   async function submit(e) {
     e.preventDefault();
@@ -390,12 +356,16 @@ export default function Dispatch() {
         return;
       }
 
-      const cleanLines = allocateMaterialLots(form.material, form.quantityKg);
+      const material = normalizeFgGrade(form.material);
+      const cleanLines = buildGradeDispatchLines(material, form.quantityKg);
 
       const finalForm = autoCalculate(
         {
           ...form,
-          grade: form.material,
+          material,
+          grade: material,
+          sourceExtrusionBatchId: "",
+          linkedFgBatchId: "",
           dispatchId:
             form.dispatchId ||
             makeDispatchId(form.date, form.productionShift),
@@ -446,7 +416,7 @@ export default function Dispatch() {
       productionDate: dateForInput(line.productionDate) || productionDate || "",
       productionShift: line.productionShift || productionShift || "",
     }));
-    const material = row.material || row.grade || normalizedLines[0]?.grade || "";
+    const material = normalizeFgGrade(row.material || row.grade || normalizedLines[0]?.grade || "");
 
     setEditingRow(row);
     setDispatchLines(normalizedLines);
@@ -810,8 +780,8 @@ export default function Dispatch() {
               readOnly
               value={
                 form.material
-                  ? "System will allocate known lots first, then material inventory ledger balance if needed."
-                  : "Select material to allocate inventory."
+                  ? "Dispatch will consume normalized FG grade inventory from the ledger."
+                  : "Select FG grade to allocate inventory."
               }
               style={textareaStyle}
             />
@@ -917,8 +887,8 @@ function KPI({ title, value }) {
   );
 }
 
-function normalizeMaterial(value) {
-  return normalizeInventoryMaterial(value).toUpperCase();
+function normalizeFgGrade(value) {
+  return materialKey(normalizeInventoryMaterial(value));
 }
 
 const pageStyle = { padding: 20 };

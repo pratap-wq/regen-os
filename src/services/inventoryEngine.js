@@ -174,20 +174,32 @@ export function materialInventoryFromLedgerBalances(
 ) {
   const expectedType = String(itemType || "").trim().toUpperCase();
 
-  return ledgerBalanceRows
+  const byMaterial = {};
+
+  ledgerBalanceRows
     .filter((row) => {
       if (!expectedType) return true;
       return String(row.itemType || "").toUpperCase() === expectedType;
     })
-    .map((row) => ({
-      materialId: row.materialId || "",
-      material: normalizeInventoryMaterial(row.itemName),
-      itemType: row.itemType || "",
-      availableKg: Number(row.qty || row.balance || 0),
-      source: "Inventory Ledger",
-    }))
-    .filter((row) => row.material && row.availableKg > 0)
-    .sort((a, b) =>
+    .forEach((row) => {
+      const material = normalizeInventoryMaterial(row.itemName);
+      const availableKg = Number(row.qty || row.balance || 0);
+      if (!material || availableKg <= 0) return;
+
+      if (!byMaterial[material]) {
+        byMaterial[material] = {
+          materialId: row.materialId || "",
+          material,
+          itemType: row.itemType || "",
+          availableKg: 0,
+          source: "Inventory Ledger",
+        };
+      }
+
+      byMaterial[material].availableKg += availableKg;
+    });
+
+  return Object.values(byMaterial).sort((a, b) =>
       String(a.material).localeCompare(String(b.material), undefined, {
         numeric: true,
       })

@@ -1,0 +1,18 @@
+{
+  "name": "regenmarketos",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5174",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4174"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^6.0.1",
+    "vite": "^8.0.12",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "devDependencies": {}
+}

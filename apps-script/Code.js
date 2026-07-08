@@ -5740,27 +5740,37 @@ function normalizeDispatchLines_(data = {}) {
     try {
       const parsed = JSON.parse(data.dispatchLines);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return JSON.stringify(parsed.map((x) => ({
-          sourceExtrusionBatchId: x.sourceExtrusionBatchId || "",
-          lotNo: x.lotNo || x.sourceExtrusionBatchId || "",
-          grade: x.grade || "",
-          productionDate: normalizeDateOnly_(x.productionDate || data.productionDate || data.date || todayYmd()),
-          productionShift: x.productionShift || data.productionShift || "",
-          availableKg: num(x.availableKg),
-          dispatchQtyKg: num(x.dispatchQtyKg),
-          remarks: x.remarks || "",
-        })));
+        return JSON.stringify(parsed.map(function(x) {
+          const grade = normalizeDispatchFgGrade_(x.grade || x.material || data.grade || data.material);
+          return {
+            sourceExtrusionBatchId: x.sourceExtrusionBatchId || "",
+            lotNo: x.lotNo || x.sourceExtrusionBatchId || grade,
+            grade,
+            material: grade,
+            itemType: "FG",
+            productionDate: normalizeDateOnly_(x.productionDate || data.productionDate || data.date || todayYmd()),
+            productionShift: x.productionShift || data.productionShift || "",
+            availableKg: num(x.availableKg),
+            dispatchQtyKg: num(x.dispatchQtyKg || x.quantityKg),
+            remarks: x.remarks || "",
+          };
+        }).filter(function(x) {
+          return x.grade && num(x.dispatchQtyKg) > 0;
+        }));
       }
     } catch (err) {}
   }
 
   const sourceId = data.sourceExtrusionBatchId || data.linkedFgBatchId || "";
+  const grade = normalizeDispatchFgGrade_(data.grade || data.material);
 
   return JSON.stringify([
     {
       sourceExtrusionBatchId: sourceId,
-      lotNo: data.lotNo || sourceId,
-      grade: data.grade || "",
+      lotNo: data.lotNo || sourceId || grade,
+      grade,
+      material: grade,
+      itemType: "FG",
       productionDate: normalizeDateOnly_(data.productionDate || data.date || todayYmd()),
       productionShift: data.productionShift || "",
       availableKg: num(data.availableFGQty),
@@ -5777,6 +5787,55 @@ function parseDispatchLines_(dispatchLines) {
   } catch (err) {
     return [];
   }
+}
+
+function normalizeDispatchFgGrade_(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  return normalizeDispatchGrade_(raw);
+}
+
+function dispatchLineGrade_(line = {}, fallbackGrade) {
+  return normalizeDispatchFgGrade_(line.grade || line.material || fallbackGrade);
+}
+
+function dispatchLineQty_(line = {}, fallbackQty) {
+  return num(line.dispatchQtyKg || line.quantityKg || fallbackQty);
+}
+
+function dispatchQtyByGradeFromRow_(row = {}) {
+  const byGrade = {};
+  const lines = parseDispatchLines_(row.dispatchLines);
+
+  if (lines.length > 0) {
+    lines.forEach(function(line) {
+      const grade = dispatchLineGrade_(line, row.grade || row.material);
+      const qty = dispatchLineQty_(line, row.quantityKg);
+      if (!grade || qty <= 0) return;
+      byGrade[grade] = (byGrade[grade] || 0) + qty;
+    });
+    return byGrade;
+  }
+
+  const grade = normalizeDispatchFgGrade_(row.grade || row.material);
+  const qty = num(row.quantityKg);
+  if (grade && qty > 0) byGrade[grade] = qty;
+  return byGrade;
+}
+
+function fgLedgerBalanceByGrade_() {
+  const byGrade = {};
+
+  getRowsAsObjects("Inventory_Ledger")
+    .filter(function(row) { return !isDeleted_(row); })
+    .filter(function(row) { return String(row.itemType || "").toUpperCase() === "FG"; })
+    .forEach(function(row) {
+      const grade = normalizeDispatchFgGrade_(row.itemName || row.material || row.grade);
+      if (!grade) return;
+      byGrade[grade] = (byGrade[grade] || 0) + num(row.qtyIn) - num(row.qtyOut);
+    });
+
+  return byGrade;
 }
 
 function fgProducedForBatch_(batchId) {
@@ -5817,25 +5876,29 @@ function fgDispatchedForBatch_(batchId, excludeDispatchId) {
 
 function validateDispatchAvailability_(data = {}) {
   const lines = parseDispatchLines_(normalizeDispatchLines_(data))
-    .filter((line) => line.sourceExtrusionBatchId && num(line.dispatchQtyKg) > 0);
+    .filter(function(line) { return dispatchLineGrade_(line, data.grade || data.material) && dispatchLineQty_(line, data.quantityKg) > 0; });
 
-  const requestedByBatch = {};
+  const requestedByGrade = {};
 
-  lines.forEach((line) => {
-    const batchId = String(line.sourceExtrusionBatchId || "");
-    requestedByBatch[batchId] =
-      (requestedByBatch[batchId] || 0) + num(line.dispatchQtyKg);
+  lines.forEach(function(line) {
+    const grade = dispatchLineGrade_(line, data.grade || data.material);
+    requestedByGrade[grade] =
+      (requestedByGrade[grade] || 0) + dispatchLineQty_(line, data.quantityKg);
   });
 
-  Object.keys(requestedByBatch).forEach((batchId) => {
-    const available =
-      fgProducedForBatch_(batchId) -
-      fgDispatchedForBatch_(batchId, data.dispatchId);
+  const balanceByGrade = fgLedgerBalanceByGrade_();
+  const existingRow = data.dispatchId
+    ? getRowById_("Dispatches", "dispatchId", data.dispatchId)
+    : null;
+  const existingByGrade = existingRow ? dispatchQtyByGradeFromRow_(existingRow) : {};
 
-    if (requestedByBatch[batchId] > available + 0.01) {
+  Object.keys(requestedByGrade).forEach(function(grade) {
+    const available = num(balanceByGrade[grade]) + num(existingByGrade[grade]);
+
+    if (requestedByGrade[grade] > available + 0.01) {
       throw new Error(
-        "Dispatch exceeds available FG stock for " +
-          batchId +
+        "Dispatch exceeds available FG grade stock for " +
+          grade +
           ". Available: " +
           round2(available) +
           " Kg"
@@ -5850,8 +5913,10 @@ function addDispatch(data = {}) {
 
   const dispatchId = data.dispatchId || generateBatchId("DIS");
   const date = normalizeDateOnly_(data.date || todayYmd());
-  const sourceId = data.sourceExtrusionBatchId || data.linkedFgBatchId || "";
+  const sourceId = "";
   const dispatchLines = normalizeDispatchLines_(data);
+  const lineRows = parseDispatchLines_(dispatchLines);
+  const headerGrade = lineRows.map(function(line) { return dispatchLineGrade_(line, data.grade || data.material); }).filter(Boolean).join(" | ");
   validateOperationalWrite_({ ...data, date });
   validateDispatchAvailability_({ ...data, dispatchId });
 
@@ -5866,8 +5931,8 @@ function addDispatch(data = {}) {
     invoiceNo: data.invoiceNo || "",
     vehicleNo: data.vehicleNo || "",
     driverName: data.driverName || "",
-    grade: data.grade || "",
-    lotNo: data.lotNo || sourceId,
+    grade: headerGrade || normalizeDispatchFgGrade_(data.grade || data.material),
+    lotNo: data.lotNo || headerGrade,
     quantityKg: num(data.quantityKg),
     noOfBags: num(data.noOfBags),
     ratePerKg: num(data.ratePerKg),
@@ -5875,7 +5940,7 @@ function addDispatch(data = {}) {
     remarks: data.remarks || "",
     dispatchStatus: data.dispatchStatus || "DISPATCHED",
     status: data.status || "ACTIVE",
-    linkedFgBatchId: sourceId,
+    linkedFgBatchId: "",
     transporterName: data.transporterName || "",
     ewayBillNo: data.ewayBillNo || "",
     dispatchLines,
@@ -5886,19 +5951,24 @@ function addDispatch(data = {}) {
     updatedAt: new Date(),
   });
 
-  addInventoryLedger({
-    date,
-    module: "DISPATCH",
-    movementType: "OUT",
-    itemType: "FG",
-    itemName: data.grade || "",
-    sourceRef: sourceId,
-    targetRef: dispatchId,
-    qtyIn: 0,
-    qtyOut: num(data.quantityKg),
-    unit: "Kg",
-    remarks: data.remarks || "FG dispatched",
-    createdBy: data.createdBy || "System",
+  lineRows.forEach(function(line) {
+    const grade = dispatchLineGrade_(line, data.grade || data.material);
+    const qty = dispatchLineQty_(line, data.quantityKg);
+    if (!grade || qty <= 0) return;
+    addInventoryLedger({
+      date,
+      module: "DISPATCH",
+      movementType: "OUT",
+      itemType: "FG",
+      itemName: grade,
+      sourceRef: grade,
+      targetRef: dispatchId,
+      qtyIn: 0,
+      qtyOut: qty,
+      unit: "Kg",
+      remarks: data.remarks || "FG dispatched",
+      createdBy: data.createdBy || "System",
+    });
   });
 
   return output({
@@ -5912,6 +5982,9 @@ function updateDispatch(data = {}) {
 
   const date = normalizeDateOnly_(data.date || todayYmd());
   const sourceId = data.sourceExtrusionBatchId || data.linkedFgBatchId || "";
+  const dispatchLines = normalizeDispatchLines_(data);
+  const lineRows = parseDispatchLines_(dispatchLines);
+  const headerGrade = lineRows.map(function(line) { return dispatchLineGrade_(line, data.grade || data.material); }).filter(Boolean).join(" | ");
   const isDeleted =
     String(data.status || "").toUpperCase() === "DELETED" ||
     String(data.dispatchStatus || "").toUpperCase() === "DELETED";
@@ -5934,7 +6007,7 @@ function updateDispatch(data = {}) {
     invoiceNo: data.invoiceNo || "",
     vehicleNo: data.vehicleNo || "",
     driverName: data.driverName || "",
-    grade: data.grade || "",
+    grade: headerGrade || normalizeDispatchFgGrade_(data.grade || data.material),
     lotNo: data.lotNo || sourceId,
     quantityKg: num(data.quantityKg),
     noOfBags: num(data.noOfBags),
@@ -5946,7 +6019,7 @@ function updateDispatch(data = {}) {
     linkedFgBatchId: sourceId,
     transporterName: data.transporterName || "",
     ewayBillNo: data.ewayBillNo || "",
-    dispatchLines: normalizeDispatchLines_(data),
+    dispatchLines,
     productionDate: normalizeDateOnly_(data.productionDate || date),
     productionShift: data.productionShift || "",
     updatedAt: new Date(),

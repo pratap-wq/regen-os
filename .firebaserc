@@ -3,6 +3,17 @@
     "default": "regen-os",
     "staging": "regen-os"
   },
-  "targets": {},
+  "targets": {
+    "regen-os": {
+      "hosting": {
+        "regenmarketos": [
+          "regenmarketos"
+        ],
+        "regenos": [
+          "regen-os"
+        ]
+      }
+    }
+  },
   "etags": {}
 }

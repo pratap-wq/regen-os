@@ -4,6 +4,38 @@
 
 RegenOS v1 keeps the familiar operator workflow and stabilizes the data model behind it. The platform should not create parallel concepts for the same business object.
 
+## Regen Digital Ecosystem
+
+Regenplastics has three separate digital experiences. They share the business ecosystem, but they should not be mixed unless a planned migration explicitly requires it.
+
+| Experience | Purpose | URL | Local folder | Firebase project |
+|---|---|---|---|---|
+| Website | Public company website and app gateway | [www.regenplastic.com](http://www.regenplastic.com) | `C:\Users\pratap\regen-website` | `regenwebsiteregenplasticweb` |
+| RegenOS | Factory operating system | [https://regen-os.web.app](https://regen-os.web.app) | `C:\Users\pratap\regen-os` | `regen-os` |
+| RegenMarketOS | Procurement excellence platform | [https://regenmarketos.web.app](https://regenmarketos.web.app) | `C:\Users\pratap\regen-os\regenmarketos` | `regen-os` |
+
+The website is separate from the internal apps. RegenOS confirms physical stock. RegenMarketOS creates procurement intent only.
+
+## Deployment Commands
+
+RegenOS:
+
+```bash
+firebase deploy --only hosting:regenos --project regen-os
+```
+
+RegenMarketOS:
+
+```bash
+firebase deploy --only hosting:regenmarketos --project regen-os
+```
+
+Website:
+
+```bash
+firebase deploy --only hosting --project regenwebsiteregenplasticweb
+```
+
 ## Source of truth map
 
 | Business concept | Source of truth |
@@ -61,6 +93,14 @@ Operators must not select:
 - historical sorting batches
 - FG lots
 
+Production flow:
+
+```txt
+RM Inward -> Grinder optional -> Wash -> Colour Sorter optional -> Extrusion -> Finished Goods -> Dispatch
+```
+
+Grinder is the optional first production process before Wash. It consumes in-house RM buckets and produces the controlled WIP material `Unwashed White Regrind`. Grinder must not create finished goods directly. Wash can consume either RM material directly or `Unwashed White Regrind` from grinder output stock.
+
 Traceability is drill-down only:
 
 - Why is this stock available?
@@ -68,6 +108,18 @@ Traceability is drill-down only:
 - Which quality result is linked?
 
 This doctrine is mandatory for RegenOS v1.
+
+## Non-Negotiable Architecture Rules
+
+1. Dispatch consumes FG grades only.
+2. Never dispatch from EB batches.
+3. Ledger is the inventory source of truth.
+4. Material names must be master-driven and normalized.
+5. Production History edits must use dropdowns for controlled fields.
+6. Free text is allowed only for remarks and notes.
+7. RegenMarketOS creates procurement intent only.
+8. RegenOS confirms physical stock.
+9. The website is separate from internal apps.
 
 ## Material Master
 
@@ -213,3 +265,13 @@ Before enabling strict production use:
 5. Keep experimental bucket/transformation sheets as hidden/archive-only data.
 
 No historical source-sheet migration is required for this stabilization pass.
+
+## Current Priority Roadmap
+
+1. Dispatch FG-stock fix: completed.
+2. Production History dropdown edits: next.
+3. Grinder production stage: next after dropdowns.
+4. Month Close inventory unification.
+5. Live Inventory ledger alignment.
+6. Historical ledger repair utility.
+7. Firestore migration later.

@@ -173,8 +173,16 @@ export default function Production() {
     });
   }, [rmRows, grinderRows, washRows, sortingRows, extrusionRows, dispatchRows]);
 
+  const availableInventoryByMaterial = useMemo(() => {
+    return buildAvailabilityMap(inventoryLots);
+  }, [inventoryLots]);
+
   function n(v) {
     return Number(v || 0);
+  }
+
+  function availableKg(material) {
+    return availableInventoryByMaterial[materialKey(material)] || 0;
   }
 
   function buildExtrusionBatchId(updatedForm = form) {
@@ -722,11 +730,11 @@ export default function Production() {
       subtitle="One shift entry screen for Grinder, Washline, Colour Sorter and Extrusion. Raw Material and Finished Goods quality testing is performed separately in the Quality Workbench."
     >
       <div className="factory-kpi-grid">
-        <KpiCard title="Grinder Recovery" value={grinderRecovery ? `${grinderRecovery}%` : "-"} tone={grinderRecovery ? "positive" : "neutral"} />
-        <KpiCard title="Wash Recovery" value={washRecovery ? `${washRecovery}%` : "—"} tone={washRecovery ? "positive" : "neutral"} />
-        <KpiCard title="Sorting Recovery" value={sorterRecovery ? `${sorterRecovery}%` : "—"} tone={sorterRecovery ? "positive" : "neutral"} />
-        <KpiCard title="Extrusion Recovery" value={extrusionRecovery ? `${extrusionRecovery}%` : "—"} tone={extrusionRecovery ? "positive" : "neutral"} />
-        <KpiCard title="Total Feed" value={`${totalFeedKg.toFixed(0)} Kg`} tone="neutral" />
+        <KpiCard title="White Buckets" value={`${availableKg("White Buckets").toFixed(0)} Kg`} tone="neutral" />
+        <KpiCard title="Mixed Buckets" value={`${availableKg("Mixed Buckets").toFixed(0)} Kg`} tone="neutral" />
+        <KpiCard title="Unwashed Regrind" value={`${availableKg("White Regrind (Unwashed)").toFixed(0)} Kg`} tone="neutral" />
+        <KpiCard title="Washed Regrind" value={`${availableKg("White Regrind (Washed)").toFixed(0)} Kg`} tone="neutral" />
+        <KpiCard title="Sorted Regrind" value={`${availableKg("White Sorted Regrind").toFixed(0)} Kg`} tone="neutral" />
       </div>
 
       {message && <div style={messageBox}>{message}</div>}

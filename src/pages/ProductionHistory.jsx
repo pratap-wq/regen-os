@@ -4,6 +4,11 @@ import { formatDate } from "../utils/date";
 import DataTable from "../components/DataTable";
 import { listFactoryMaster } from "../services/FactoryMasterService";
 import { normalizeInventoryMaterial } from "../services/inventoryEngine";
+import {
+  listProductionMaterialMaster,
+  normalizeProductionMaterialName,
+  productionMaterialAllowed,
+} from "../services/productionMaterialMaster";
 
 const SHIFT_OPTIONS = ["A", "B", "C"];
 const STATUS_OPTIONS = [
@@ -53,7 +58,7 @@ export default function ProductionHistory() {
   const [saving, setSaving] = useState(false);
   const [masterRows, setMasterRows] = useState({
     machines: [],
-    materials: [],
+    productionMaterials: [],
     grades: [],
   });
 
@@ -105,13 +110,13 @@ export default function ProductionHistory() {
   }
 
   async function loadEditMasters() {
-    const [machines, materials, grades] = await Promise.all([
+    const [machines, productionMaterials, grades] = await Promise.all([
       safeMasterList("machine"),
-      safeMasterList("material"),
+      safeProductionMaterials(),
       safeMasterList("productGrade"),
     ]);
 
-    setMasterRows({ machines, materials, grades });
+    setMasterRows({ machines, productionMaterials, grades });
   }
 
   async function safeMasterList(masterType) {
@@ -119,6 +124,15 @@ export default function ProductionHistory() {
       return await listFactoryMaster(masterType);
     } catch (err) {
       console.log(masterType, err);
+      return [];
+    }
+  }
+
+  async function safeProductionMaterials() {
+    try {
+      return await listProductionMaterialMaster();
+    } catch (err) {
+      console.log("productionMaterialMaster", err);
       return [];
     }
   }
@@ -681,6 +695,9 @@ export default function ProductionHistory() {
         });
 
         if (options && !options.includes(value)) {
+          if (type === "materialSelect" || type === "gradeSelect") {
+            return `${label} needs manual review. Select an approved production material before saving.`;
+          }
           return `${label} must be selected from the approved list.`;
         }
       }
@@ -939,26 +956,17 @@ function getSelectOptions(type, context) {
   }
 
   if (type === "materialSelect") {
-    return withCurrent(
-      (context.masterRows?.materials || []).map(itemLabel).filter(Boolean),
-      context.value
-    );
+    return (context.masterRows?.productionMaterials || [])
+      .filter((item) => productionMaterialAllowed(item, context.process, "INPUT"))
+      .map(itemLabel)
+      .filter(Boolean);
   }
 
   if (type === "gradeSelect") {
-    const gradeOptions = [
-      ...(context.masterRows?.grades || []).map(itemLabel),
-      ...(context.masterRows?.materials || [])
-        .filter((item) => String(item.category || item.materialType || "").toUpperCase() === "FG")
-        .map(itemLabel),
-      "E1",
-      "E2",
-      "E3",
-      "E4",
-      "E5",
-    ].filter(Boolean);
-
-    return withCurrent(gradeOptions, context.value);
+    return (context.masterRows?.productionMaterials || [])
+      .filter((item) => productionMaterialAllowed(item, "EXTRUSION", "OUTPUT"))
+      .map(itemLabel)
+      .filter(Boolean);
   }
 
   return null;
@@ -996,6 +1004,7 @@ function machineMatchesProcess(item, process) {
 function itemLabel(item) {
   return String(
     item?.name ||
+      item?.canonicalName ||
       item?.materialName ||
       item?.machineName ||
       item?.gradeName ||
@@ -1019,6 +1028,9 @@ function normalizeControlledValue(key, value) {
   }
   if (key === "productionGrade") {
     return normalizeInventoryMaterial(clean).toUpperCase();
+  }
+  if (key === "inputMaterial") {
+    return normalizeProductionMaterialName(clean);
   }
   return clean.replace(/\s+/g, " ");
 }

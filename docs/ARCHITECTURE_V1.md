@@ -41,6 +41,7 @@ firebase deploy --only hosting --project regenwebsiteregenplasticweb
 | Business concept | Source of truth |
 |---|---|
 | Material definitions | `Material_Master` |
+| Production dropdown materials | `Production_Material_Master` |
 | Machine definitions | `Machine_Master` |
 | Inventory | `Inventory_Ledger` |
 | Factory overhead | `Factory_Expenses` |
@@ -117,9 +118,10 @@ This doctrine is mandatory for RegenOS v1.
 4. Material names must be master-driven and normalized.
 5. Production History edits must use dropdowns for controlled fields.
 6. Free text is allowed only for remarks and notes.
-7. RegenMarketOS creates procurement intent only.
-8. RegenOS confirms physical stock.
-9. The website is separate from internal apps.
+7. Production material dropdowns must use `Production_Material_Master`, never Stores or general consumables.
+8. RegenMarketOS creates procurement intent only.
+9. RegenOS confirms physical stock.
+10. The website is separate from internal apps.
 
 ## Material Master
 
@@ -147,6 +149,46 @@ Approved categories:
 - `ADDITIVE`
 
 Inventory screens may display `materialName`, but ledger writes must resolve the material through `Material_Master`.
+
+## Production Material Master
+
+`Production_Material_Master` is the only approved source for Production Entry, Production History production edits, and Dispatch grade dropdowns.
+
+Stores items and general consumables must never appear in production material dropdowns. Store items remain in Stores modules only.
+
+Production dropdowns must show only active canonical production materials allowed for the current stage and direction.
+
+Canonical production materials:
+
+- `White Buckets`
+- `Mixed Buckets`
+- `White Regrind (Unwashed)`
+- `White Regrind (Washed)`
+- `White Sorted Regrind`
+- `E1`
+- `E2`
+- `E3`
+- `E4`
+- `E5`
+- `Dust`
+- `Metal Reject`
+- `Rubber Reject`
+- `Colour Reject`
+
+Aliases must normalize on new saves and edits:
+
+- `Unwashed White Flakes` -> `White Regrind (Unwashed)`
+- `White Flakes (Unwashed)` -> `White Regrind (Unwashed)`
+- `Grinder Flakes` -> `White Regrind (Unwashed)`
+- `Regrinds` -> `White Regrind (Unwashed)`
+- `Washed White Flakes` -> `White Regrind (Washed)`
+- `White Washed Flakes` -> `White Regrind (Washed)`
+- `Washed Regrind` -> `White Regrind (Washed)`
+- `White Sorted Flakes` -> `White Sorted Regrind`
+
+Unknown production material names must be reported as `Needs Manual Review`; they must not be auto-fixed blindly.
+
+`Material_Master` remains the ledger authority. `Production_Material_Master` is the production dropdown and validation authority.
 
 ## Recipe Model
 

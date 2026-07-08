@@ -5,6 +5,7 @@ import { formatDate } from "../utils/date";
 import DataTable from "../components/DataTable";
 import FormSection from "../components/FormSection";
 import FactoryDropdown from "../components/FactoryDropdown";
+import ProductionMaterialSelect from "../components/ProductionMaterialSelect";
 import { KpiCard, PageLayout } from "../components/factoryDesignSystem";
 import {
   materialInventoryFromLedgerBalances,
@@ -584,20 +585,15 @@ export default function Dispatch() {
           </Field>
 
           <Field label="Material">
-            <FactoryDropdown
-              masterType="material"
+            <ProductionMaterialSelect
               name="material"
               value={form.material}
               onChange={onChange}
               placeholder="Select Material"
               style={inputStyle}
               required
-              allowAddNew
-              approvalRequired
-              defaults={{ category: "FG", unit: "Kg" }}
-              filter={(item) =>
-                String(item.category || item.materialType || "").toUpperCase() === "FG"
-              }
+              stage="DISPATCH"
+              direction="INPUT"
             />
           </Field>
 

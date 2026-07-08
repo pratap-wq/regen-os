@@ -96,20 +96,62 @@ export function buildInventoryLots({
   });
 
   washRows.forEach((r) => {
+    const outputLines = parseMaterialLines(r.outputComposition)
+      .map((line) => ({
+        material: line.material || line.materialName || "",
+        quantityKg: n(line.quantityKg || line.qtyKg || line.quantity),
+      }))
+      .filter((line) => line.material && line.quantityKg > 0);
+
+    if (outputLines.length) {
+      outputLines.forEach((line, index) => {
+        lots.push({
+          lotId: `${r.washBatchId || r.id || "WB"}-${index + 1}`,
+          sourceType: "WASH",
+          material: line.material,
+          availableKg: line.quantityKg,
+          date: r.date || "",
+          label: `${r.washBatchId || "WB"} | ${line.material} | ${line.quantityKg} Kg`,
+        });
+      });
+      return;
+    }
+
     const qty = n(r.washedOutputKg);
     if (qty > 0) {
       lots.push({
         lotId: r.washBatchId || r.id || "",
         sourceType: "WASH",
-        material: r.inputMaterial || "Washed Material",
+        material: "White Regrind (Washed)",
         availableKg: qty,
         date: r.date || "",
-        label: `${r.washBatchId || "WB"} | ${r.inputMaterial || ""} | ${qty} Kg`,
+        label: `${r.washBatchId || "WB"} | White Regrind (Washed) | ${qty} Kg`,
       });
     }
   });
 
   sortingRows.forEach((r) => {
+    const outputLines = parseMaterialLines(r.outputComposition)
+      .map((line) => ({
+        material: line.material || line.materialName || "",
+        quantityKg: n(line.quantityKg || line.qtyKg || line.quantity),
+      }))
+      .filter((line) => line.material && line.quantityKg > 0);
+
+    if (outputLines.length) {
+      outputLines.forEach((line, index) => {
+        lots.push({
+          lotId: `${r.sortingBatchId || r.id || "SB"}-${index + 1}`,
+          sourceType: "SORTING",
+          material: line.material,
+          availableKg: line.quantityKg,
+          date: r.date || "",
+          label: `${r.sortingBatchId || "SB"} | ${line.material} | ${line.quantityKg} Kg`,
+        });
+      });
+      return;
+    }
+
     const qty =
       n(r.acceptedQtyKg) ||
       n(r.whiteSortedKg) +
@@ -121,10 +163,10 @@ export function buildInventoryLots({
       lots.push({
         lotId: r.sortingBatchId || r.id || "",
         sourceType: "SORTING",
-        material: r.inputMaterial || "Sorted Material",
+        material: "White Sorted Regrind",
         availableKg: qty,
         date: r.date || "",
-        label: `${r.sortingBatchId || "SB"} | ${r.inputMaterial || ""} | ${qty} Kg`,
+        label: `${r.sortingBatchId || "SB"} | White Sorted Regrind | ${qty} Kg`,
       });
     }
   });

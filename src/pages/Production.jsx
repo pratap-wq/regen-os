@@ -29,28 +29,23 @@ export default function Production() {
   ];
 
   const washOutputDefaults = [
-    { material: "Washed White Flakes", qtyKg: "" },
-    { material: "Sink Material", qtyKg: "" },
+    { material: "White Regrind (Washed)", qtyKg: "" },
     { material: "Dust", qtyKg: "" },
-    { material: "Other Colour Material", qtyKg: "" },
+    { material: "Rubber Reject", qtyKg: "" },
+    { material: "Metal Reject", qtyKg: "" },
   ];
 
   const sorterOutputDefaults = [
-    { material: "White Sorted", qtyKg: "" },
-    { material: "Mixed Sorted", qtyKg: "" },
-    { material: "Commodity", qtyKg: "" },
-    { material: "Reject", qtyKg: "" },
-    { material: "Dust", qtyKg: "" },
+    { material: "White Sorted Regrind", qtyKg: "" },
+    { material: "Colour Reject", qtyKg: "" },
   ];
 
   const extrusionOutputDefaults = [
     { material: "E1", qtyKg: "" },
     { material: "E2", qtyKg: "" },
     { material: "E3", qtyKg: "" },
-    { material: "Rework", qtyKg: "" },
-    { material: "Purging", qtyKg: "" },
-    { material: "Lumps", qtyKg: "" },
-    { material: "Waste", qtyKg: "" },
+    { material: "E4", qtyKg: "" },
+    { material: "E5", qtyKg: "" },
   ];
 
   const blank = {
@@ -798,7 +793,7 @@ export default function Production() {
             inventoryLots={inventoryLots}
             materialPlaceholder="Select Bucket Material"
             quantityLabel="Consume Qty"
-            filterCategories={["RM"]}
+            stage="GRINDER"
           />
 
           <ManufacturingOutputTable
@@ -806,7 +801,7 @@ export default function Production() {
             rows={grinderOutputRows}
             setRows={setGrinderOutputRows}
             materialPlaceholder="Select Output Material"
-            filterCategories={["WIP", "WASTE", "REWORK"]}
+            stage="GRINDER"
           />
 
           <ManufacturingSummary
@@ -854,7 +849,7 @@ export default function Production() {
             inventoryLots={inventoryLots}
             materialPlaceholder="Select Input Material"
             quantityLabel="Consume Qty"
-            filterCategories={["RM", "WIP", "REWORK", "ADDITIVE"]}
+            stage="WASH"
           />
 
           <ManufacturingOutputTable
@@ -862,7 +857,7 @@ export default function Production() {
             rows={washOutputRows}
             setRows={setWashOutputRows}
             materialPlaceholder="Select Output Material"
-            filterCategories={["WIP", "WASTE", "REWORK"]}
+            stage="WASH"
           />
 
           <ManufacturingSummary
@@ -899,7 +894,7 @@ export default function Production() {
             inventoryLots={inventoryLots}
             materialPlaceholder="Select Input Material"
             quantityLabel="Consume Qty"
-            filterCategories={["RM", "WIP", "REWORK", "ADDITIVE"]}
+            stage="SORTING"
           />
 
           <ManufacturingOutputTable
@@ -907,7 +902,7 @@ export default function Production() {
             rows={sorterOutputRows}
             setRows={setSorterOutputRows}
             materialPlaceholder="Select Output Material"
-            filterCategories={["WIP", "WASTE", "REWORK", "FG"]}
+            stage="SORTING"
           />
 
           <ManufacturingSummary
@@ -944,7 +939,7 @@ export default function Production() {
             inventoryLots={inventoryLots}
             materialPlaceholder="Select Feed Material"
             quantityLabel="Consume Qty"
-            filterCategories={["RM", "WIP", "REWORK", "ADDITIVE"]}
+            stage="EXTRUSION"
           />
 
           <Field label="Recovery / Rework %" value={recoveryMaterialPercent} readOnly />
@@ -957,7 +952,7 @@ export default function Production() {
             rows={extrusionOutputRows}
             setRows={setExtrusionOutputRows}
             materialPlaceholder="Select Output Material"
-            filterCategories={["FG", "WIP", "WASTE", "REWORK"]}
+            stage="EXTRUSION"
           />
 
           <ManufacturingSummary

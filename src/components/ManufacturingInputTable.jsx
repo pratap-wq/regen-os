@@ -1,4 +1,4 @@
-import FactoryDropdown from "./FactoryDropdown";
+import ProductionMaterialSelect from "./ProductionMaterialSelect";
 import { buildAvailabilityMap, materialKey } from "../utils/materialInventory";
 
 export default function ManufacturingInputTable({
@@ -8,7 +8,7 @@ export default function ManufacturingInputTable({
   title = "Input Materials",
   materialPlaceholder = "Select Material",
   quantityLabel = "Consume Qty",
-  filterCategories = ["RM", "WIP", "REWORK", "ADDITIVE"],
+  stage = "",
   showRemarks = true,
 }) {
   const availability = buildAvailabilityMap(inventoryLots);
@@ -73,21 +73,14 @@ export default function ManufacturingInputTable({
             return (
               <tr key={i}>
                 <td style={td}>
-                  <FactoryDropdown
-                    masterType="material"
+                  <ProductionMaterialSelect
                     name="sourceType"
                     value={r.sourceType || ""}
                     onChange={(e) => updateRow(i, "sourceType", e.target.value)}
                     placeholder={materialPlaceholder}
                     style={input}
-                    allowAddNew
-                    approvalRequired
-                    defaults={{ category: "RM", unit: "Kg" }}
-                    filter={(item) =>
-                      filterCategories.includes(
-                        String(item.category || item.materialType || "").toUpperCase()
-                      )
-                    }
+                    stage={stage}
+                    direction="INPUT"
                   />
                 </td>
 

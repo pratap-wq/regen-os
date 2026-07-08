@@ -1,11 +1,11 @@
-import FactoryDropdown from "./FactoryDropdown";
+import ProductionMaterialSelect from "./ProductionMaterialSelect";
 
 export default function ManufacturingOutputTable({
   rows,
   setRows,
   title = "Output Materials",
   materialPlaceholder = "Select Output Material",
-  filterCategories = ["FG", "WIP", "WASTE", "REWORK"],
+  stage = "",
 }) {
   function updateRow(index, key, value) {
     setRows(
@@ -52,21 +52,14 @@ export default function ManufacturingOutputTable({
           {(rows || []).map((r, i) => (
             <tr key={i}>
               <td style={td}>
-                <FactoryDropdown
-                  masterType="material"
+                <ProductionMaterialSelect
                   name="material"
                   value={r.material || ""}
                   onChange={(e) => updateRow(i, "material", e.target.value)}
                   placeholder={materialPlaceholder}
                   style={input}
-                  allowAddNew
-                  approvalRequired
-                  defaults={{ category: "WIP", unit: "Kg" }}
-                  filter={(item) =>
-                    filterCategories.includes(
-                      String(item.category || item.materialType || "").toUpperCase()
-                    )
-                  }
+                  stage={stage}
+                  direction="OUTPUT"
                 />
               </td>
 

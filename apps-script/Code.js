@@ -37,6 +37,8 @@ function doGet(e) {
     if (p.fn === "productionMaterials.add") return addProductionMaterial(p);
     if (p.fn === "productionMaterials.update") return updateProductionMaterial(p);
     if (p.fn === "productionMaterials.seedDefaults") return seedProductionMaterials();
+    if (p.fn === "productionMaterialMaster.list") return listProductionMaterialMaster(p);
+    if (p.fn === "productionMaterialMaster.seedDefaults") return seedProductionMaterialMaster(p);
     if (p.fn === "materialMaster.list") return listMaterialMaster(p);
     if (p.fn === "materialMaster.add") return addMaterialMaster(p);
     if (p.fn === "materialMaster.update") return updateMaterialMaster(p);
@@ -512,7 +514,7 @@ function output(obj) {
 // Never deletes data, never renames operational sheets.
 // ============================================================
 
-const REGEN_DB_SCHEMA_VERSION = "2026.07.08-v2-grinder";
+const REGEN_DB_SCHEMA_VERSION = "2026.07.08-v3-production-material-master";
 
 const REGEN_DB_SCHEMA = {
   Month_Close: [
@@ -792,6 +794,22 @@ const REGEN_DB_SCHEMA = {
     "status",
     "createdBy",
     "createdAt",
+  ],
+  Production_Material_Master: [
+    "materialId",
+    "materialName",
+    "canonicalName",
+    "category",
+    "stageAllowed",
+    "directionAllowed",
+    "active",
+    "aliases",
+    "sortOrder",
+    "remarks",
+    "createdBy",
+    "createdAt",
+    "updatedBy",
+    "updatedAt",
   ],
   RM_Inward: [
     "inwardId",
@@ -1836,6 +1854,252 @@ function seedProductionMaterials() {
   });
 }
 
+const PRODUCTION_MATERIAL_MASTER_DEFAULTS = [
+  ["White Buckets", "White Buckets", "RM", "GRINDER", "INPUT", "White Buckets"],
+  ["Mixed Buckets", "Mixed Buckets", "RM", "GRINDER", "INPUT", "Mixed Buckets"],
+  ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "WIP", "GRINDER,WASH", "OUTPUT,INPUT", "Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Regrinds"],
+  ["White Regrind (Washed)", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "Washed White Flakes|White Washed Flakes|Washed Regrind"],
+  ["White Sorted Regrind", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "White Sorted Flakes"],
+  ["E1", "E1", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E1"],
+  ["E2", "E2", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E2"],
+  ["E3", "E3", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E3"],
+  ["E4", "E4", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E4"],
+  ["E5", "E5", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E5"],
+  ["Dust", "Dust", "WASTE", "GRINDER,WASH", "OUTPUT", "Dust"],
+  ["Metal Reject", "Metal Reject", "WASTE", "GRINDER,WASH", "OUTPUT", "Metal Reject"],
+  ["Rubber Reject", "Rubber Reject", "WASTE", "WASH", "OUTPUT", "Rubber Reject"],
+  ["Colour Reject", "Colour Reject", "WASTE", "SORTING", "OUTPUT", "Colour Reject|Color Reject"],
+];
+
+const PRODUCTION_MATERIAL_ALIAS_MAP = {
+  "UNWASHED WHITE FLAKES": "White Regrind (Unwashed)",
+  "WHITE FLAKES (UNWASHED)": "White Regrind (Unwashed)",
+  "GRINDER FLAKES": "White Regrind (Unwashed)",
+  "REGRINDS": "White Regrind (Unwashed)",
+  "WASHED WHITE FLAKES": "White Regrind (Washed)",
+  "WHITE WASHED FLAKES": "White Regrind (Washed)",
+  "WASHED REGRIND": "White Regrind (Washed)",
+  "WHITE SORTED FLAKES": "White Sorted Regrind",
+};
+
+function productionMaterialMasterHeaders_() {
+  return REGEN_DB_SCHEMA.Production_Material_Master;
+}
+
+function productionMaterialRowsFromDefaults_() {
+  return PRODUCTION_MATERIAL_MASTER_DEFAULTS.map(function(row, index) {
+    return {
+      materialId: "PMM-" + (index + 1),
+      materialName: row[0],
+      canonicalName: row[1],
+      category: row[2],
+      stageAllowed: row[3],
+      directionAllowed: row[4],
+      active: "TRUE",
+      aliases: row[5],
+      sortOrder: index + 1,
+      remarks: "Canonical production material",
+      createdBy: "System",
+      createdAt: new Date(),
+    };
+  });
+}
+
+function seedProductionMaterialMaster() {
+  createSheetIfMissing_("Production_Material_Master", productionMaterialMasterHeaders_());
+  const sh = getSheet("Production_Material_Master");
+  ensureHeaders_("Production_Material_Master", productionMaterialMasterHeaders_());
+
+  const existing = {};
+  getRowsAsObjects("Production_Material_Master").forEach(function(row) {
+    existing[materialCode_(row.canonicalName || row.materialName)] = true;
+  });
+
+  let inserted = 0;
+  productionMaterialRowsFromDefaults_().forEach(function(row) {
+    const key = materialCode_(row.canonicalName);
+    if (existing[key]) return;
+    appendObjectRow(sh, row);
+    existing[key] = true;
+    inserted += 1;
+  });
+
+  return output({
+    ok: true,
+    inserted,
+    rows: getProductionMaterialMasterRows_(),
+    message: "Production Material Master seed completed",
+  });
+}
+
+function listProductionMaterialMaster(data = {}) {
+  createSheetIfMissing_("Production_Material_Master", productionMaterialMasterHeaders_());
+  ensureHeaders_("Production_Material_Master", productionMaterialMasterHeaders_());
+
+  if (!getRowsAsObjects("Production_Material_Master").filter(function(row) { return !isDeleted_(row); }).length) {
+    seedProductionMaterialMaster();
+  }
+
+  const stage = String(data.stage || "").trim().toUpperCase();
+  const direction = String(data.direction || "").trim().toUpperCase();
+
+  let rows = getProductionMaterialMasterRows_();
+  if (stage && direction) {
+    rows = rows.filter(function(row) {
+      return productionMaterialAllowedFor_(row, stage, direction);
+    });
+  }
+
+  rows.sort(function(a, b) {
+    return num(a.sortOrder) - num(b.sortOrder);
+  });
+
+  return output({ ok: true, rows });
+}
+
+function getProductionMaterialMasterRows_() {
+  createSheetIfMissing_("Production_Material_Master", productionMaterialMasterHeaders_());
+  ensureHeaders_("Production_Material_Master", productionMaterialMasterHeaders_());
+  const rows = getRowsAsObjects("Production_Material_Master")
+    .filter(function(row) { return !isDeleted_(row); });
+  return rows.length ? rows : productionMaterialRowsFromDefaults_();
+}
+
+function productionMaterialAllowedFor_(row, stage, direction) {
+  const active = String(row.active || row.isActive || row.status || "TRUE").toUpperCase();
+  if (active === "FALSE" || active === "INACTIVE" || active === "DELETED" || active === "DISABLED") return false;
+
+  const stages = String(row.stageAllowed || "").toUpperCase().split(",").map(function(x) { return x.trim(); });
+  const directions = String(row.directionAllowed || "").toUpperCase().split(",").map(function(x) { return x.trim(); });
+
+  return stages.indexOf(String(stage || "").toUpperCase()) !== -1 &&
+    directions.indexOf(String(direction || "").toUpperCase()) !== -1;
+}
+
+function normalizeProductionMaterialName_(value) {
+  const clean = String(value || "").trim().replace(/\s+/g, " ");
+  if (!clean) return { canonicalName: "", known: false, originalName: "" };
+
+  const upper = clean.toUpperCase();
+  const alias = PRODUCTION_MATERIAL_ALIAS_MAP[upper];
+  const rows = getProductionMaterialMasterRows_();
+  const match = rows.find(function(row) {
+    const canonical = String(row.canonicalName || row.materialName || "").trim().toUpperCase();
+    const materialName = String(row.materialName || "").trim().toUpperCase();
+    const aliases = String(row.aliases || "").toUpperCase().split("|").map(function(x) { return x.trim(); });
+    return canonical === upper || materialName === upper || aliases.indexOf(upper) !== -1;
+  });
+
+  if (match) {
+    return {
+      canonicalName: match.canonicalName || match.materialName,
+      known: true,
+      originalName: clean,
+    };
+  }
+
+  if (alias) {
+    return {
+      canonicalName: alias,
+      known: true,
+      originalName: clean,
+    };
+  }
+
+  return {
+    canonicalName: clean,
+    known: false,
+    originalName: clean,
+  };
+}
+
+function assertProductionMaterialAllowed_(value, stage, direction, label) {
+  const normalized = normalizeProductionMaterialName_(value);
+  if (!normalized.canonicalName) return "";
+
+  if (!normalized.known) {
+    throw new Error((label || "Production material") + " needs manual review: " + normalized.originalName);
+  }
+
+  const row = getProductionMaterialMasterRows_().find(function(item) {
+    return String(item.canonicalName || item.materialName || "").trim().toUpperCase() ===
+      normalized.canonicalName.toUpperCase();
+  });
+
+  if (!row || !productionMaterialAllowedFor_(row, stage, direction)) {
+    throw new Error(
+      (label || "Production material") +
+        " is not allowed for " +
+        stage +
+        " " +
+        direction +
+        ": " +
+        normalized.canonicalName
+    );
+  }
+
+  return normalized.canonicalName;
+}
+
+function normalizeProductionComposition_(value, stage, direction, label) {
+  if (!value) return "";
+
+  let rows = value;
+  if (typeof value === "string") {
+    try {
+      rows = JSON.parse(value);
+    } catch (err) {
+      throw new Error((label || "Production composition") + " is invalid JSON.");
+    }
+  }
+
+  if (!Array.isArray(rows)) return "";
+
+  const isInput = String(direction || "").toUpperCase() === "INPUT";
+
+  return JSON.stringify(rows.map(function(row) {
+    const material = ["material", "materialType", "sourceType", "inputBucket", "outputMaterial"]
+      .map(function(key) { return row[key]; })
+      .find(function(v) { return String(v || "").trim(); });
+    const canonical = assertProductionMaterialAllowed_(material, stage, direction, label);
+    const next = { ...row };
+
+    if (canonical) {
+      if (isInput) {
+        next.sourceType = canonical;
+        next.materialType = canonical;
+      } else {
+        next.material = canonical;
+      }
+    }
+
+    return next;
+  }));
+}
+
+function normalizeProductionBatchPayload_(data, stage) {
+  const next = { ...data };
+  const stageName = String(stage || "").toUpperCase();
+
+  if (next.feedComposition) {
+    next.feedComposition = normalizeProductionComposition_(next.feedComposition, stageName, "INPUT", stageName + " input material");
+  }
+
+  if (next.outputComposition) {
+    next.outputComposition = normalizeProductionComposition_(next.outputComposition, stageName, "OUTPUT", stageName + " output material");
+  }
+
+  if (next.inputMaterial && String(next.inputMaterial).indexOf(":") === -1 && String(next.inputMaterial).indexOf("+") === -1) {
+    next.inputMaterial = assertProductionMaterialAllowed_(next.inputMaterial, stageName, "INPUT", stageName + " input material");
+  }
+
+  if (next.productionGrade) {
+    next.productionGrade = assertProductionMaterialAllowed_(next.productionGrade, "EXTRUSION", "OUTPUT", "Production grade");
+  }
+
+  return next;
+}
+
 const MATERIAL_MASTER_CATEGORIES = ["RM", "WIP", "FG", "REWORK", "WASTE", "STORE", "ADDITIVE"];
 
 function materialMasterHeaders_() {
@@ -2093,6 +2357,7 @@ function collectExistingMaterialNames_() {
   collectMaterialFields_(entries, "Stores_Inward", ["itemName"], "inwardId");
   collectMaterialFields_(entries, "Stores_Issue", ["itemName"], "issueId");
   collectMaterialFields_(entries, "Production_Materials", ["materialName"], "materialId");
+  collectMaterialFields_(entries, "Production_Material_Master", ["materialName", "canonicalName", "aliases"], "materialId");
 
   addKnownOutputMaterials_(entries);
 
@@ -2297,7 +2562,7 @@ function categorizeMaterialBuilderName_(name, entry = {}) {
   if (sourceSheet === "RM_INWARD") return { category: "RM", confidence: 95, reason: "RM inward source" };
   if (sourceField.indexOf("PRODUCTIONGRADE") !== -1 || sourceField.indexOf("GRADE") !== -1) return { category: "FG", confidence: 92, reason: "Grade field" };
   if (/VIRGIN|MASTERBATCH|ANTIOXIDANT|ADDITIVE|MB\b/.test(text)) return { category: "ADDITIVE", confidence: 92, reason: "Additive keyword" };
-  if (/WHITE\s+REGRIND.*UNWASHED|UNWASHED.*REGRIND/.test(text)) return { category: "WIP", confidence: 94, reason: "Grinder WIP output" };
+  if (/WHITE\s+REGRIND.*UNWASHED|UNWASHED.*REGRIND|WHITE\s+REGRIND.*WASHED|WASHED.*REGRIND/.test(text)) return { category: "WIP", confidence: 94, reason: "Production regrind WIP" };
   if (/REWORK|LUMP|PURGING|REGRIND/.test(text)) return { category: "REWORK", confidence: 88, reason: "Rework keyword" };
   if (/WASTE|REJECT|DUST|SINK|SLUDGE|RAFFIA|WRAPPER|SPILLAGE|VACUUM|MESH/.test(text)) return { category: "WASTE", confidence: 90, reason: "Waste keyword" };
   if (/WASHED|SORTED|COMMODITY|FLAKES - WASHED|FLAKES - SEMI/.test(text)) return { category: "WIP", confidence: 82, reason: "WIP keyword" };
@@ -2372,9 +2637,11 @@ function seedMaterialMasterDefaults() {
     ["LIDS", "Lids", "RM"],
     ["PP_MIXED", "PP Mixed", "RM"],
     ["WHITE_REGRIND_UNWASHED", "White Regrind (Unwashed)", "WIP"],
+    ["WHITE_REGRIND_WASHED", "White Regrind (Washed)", "WIP"],
     ["WASHED_WHITE_FLAKES", "Washed White Flakes", "WIP"],
     ["WASHED_MIXED", "Washed Mixed", "WIP"],
     ["WHITE_SORTED", "White Sorted", "WIP"],
+    ["WHITE_SORTED_REGRIND", "White Sorted Regrind", "WIP"],
     ["COMMODITY", "Commodity", "WIP"],
     ["MIXED_SORTED", "Mixed Sorted", "WIP"],
     ["REWORK_MATERIAL", "Rework Material", "REWORK"],
@@ -2388,8 +2655,10 @@ function seedMaterialMasterDefaults() {
     ["ANTIOXIDANT", "Antioxidant", "ADDITIVE"],
     ["SINK_MATERIAL", "Sink Material", "WASTE"],
     ["COLOR_REJECT", "Color Reject", "WASTE"],
+    ["COLOUR_REJECT", "Colour Reject", "WASTE"],
     ["DUST", "Dust", "WASTE"],
     ["METAL_REJECT", "Metal Reject", "WASTE"],
+    ["RUBBER_REJECT", "Rubber Reject", "WASTE"],
     ["EXTRUSION_WASTE", "Extrusion Waste", "WASTE"],
     ["LUMPS", "Lumps", "REWORK"],
     ["PURGING", "Purging", "REWORK"],
@@ -3627,7 +3896,7 @@ function materialCategory_(materialName) {
   const name = String(materialName || "").toUpperCase();
   if (/^E[1-5]$/.test(name)) return "FG";
   if (name.indexOf("WASTE") !== -1 || name.indexOf("REJECT") !== -1 || name.indexOf("DUST") !== -1 || name.indexOf("SINK") !== -1 || name.indexOf("PURGING") !== -1 || name.indexOf("LUMP") !== -1) return "WASTE";
-  if (name.indexOf("WHITE REGRIND (UNWASHED)") !== -1 || (name.indexOf("REGRIND") !== -1 && name.indexOf("UNWASHED") !== -1)) return "WIP";
+  if (name.indexOf("WHITE REGRIND (UNWASHED)") !== -1 || name.indexOf("WHITE REGRIND (WASHED)") !== -1 || (name.indexOf("REGRIND") !== -1 && (name.indexOf("UNWASHED") !== -1 || name.indexOf("WASHED") !== -1))) return "WIP";
   if (name.indexOf("WASHED") !== -1 || name.indexOf("SORTED") !== -1 || name.indexOf("COMMODITY") !== -1 || name.indexOf("REWORK") !== -1) return "WIP";
   return "RM";
 }
@@ -5189,6 +5458,7 @@ function grinderOutputQtyFromComposition_(outputComposition) {
 
 function addGrinderBatch(data = {}) {
   validateOperationalWrite_(data);
+  data = normalizeProductionBatchPayload_(data, "GRINDER");
 
   const sh = getSheet("Grinder_Batches");
   ensureHeaders_("Grinder_Batches", [
@@ -5305,6 +5575,7 @@ function updateGrinderBatch(data = {}) {
     data,
     getRowById_("Grinder_Batches", "grinderBatchId", idValue)
   );
+  data = normalizeProductionBatchPayload_(data, "GRINDER");
 
   const date = normalizeDateOnly_(data.date || todayYmd());
   const outputComposition = normalizeGrinderOutputComposition_(data);
@@ -5358,6 +5629,7 @@ function updateGrinderBatch(data = {}) {
 function addWashBatch(data = {}) {
 
   validateOperationalWrite_(data);
+  data = normalizeProductionBatchPayload_(data, "WASH");
 
   const sh = getSheet("Wash_Batches");
 
@@ -5481,6 +5753,7 @@ function updateWashBatch(data = {}) {
     data,
     getRowById_("Wash_Batches", "washBatchId", idValue)
   );
+  data = normalizeProductionBatchPayload_(data, "WASH");
 
   return updateById(
     "Wash_Batches",
@@ -5579,6 +5852,7 @@ function listWashAvailableForExtrusion(){
 function addSortingBatch(data={}){
 
     validateOperationalWrite_(data);
+    data = normalizeProductionBatchPayload_(data, "SORTING");
 
     const sh=getSheet("Sorting_Batches");
 
@@ -5668,6 +5942,7 @@ function updateSortingBatch(data={}){
         data,
         getRowById_("Sorting_Batches", "sortingBatchId", data.sortingBatchId)
     );
+    data = normalizeProductionBatchPayload_(data, "SORTING");
 
     return updateById(
         "Sorting_Batches",
@@ -5732,6 +6007,7 @@ function listSortingAvailableForExtrusion(){
 
 function addExtrusionBatch(data = {}) {
   validateOperationalWrite_(data);
+  data = normalizeProductionBatchPayload_(data, "EXTRUSION");
 
   const sh = getSheet("Extrusion_Batches");
 
@@ -5934,6 +6210,7 @@ function updateExtrusionBatch(data = {}) {
     { ...data, date },
     getRowById_("Extrusion_Batches", "extrusionBatchId", idValue)
   );
+  data = normalizeProductionBatchPayload_(data, "EXTRUSION");
 
   return updateById(
     "Extrusion_Batches",
@@ -6090,7 +6367,8 @@ function parseDispatchLines_(dispatchLines) {
 function normalizeDispatchFgGrade_(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
-  return normalizeDispatchGrade_(raw);
+  const grade = normalizeDispatchGrade_(raw);
+  return assertProductionMaterialAllowed_(grade, "DISPATCH", "INPUT", "Dispatch material");
 }
 
 function dispatchLineGrade_(line = {}, fallbackGrade) {

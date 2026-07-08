@@ -12,9 +12,9 @@ export const PRODUCTION_MATERIAL_ALIASES = {
 };
 
 export const FALLBACK_PRODUCTION_MATERIALS = [
-  ["White Buckets", "White Buckets", "RM", "GRINDER", "INPUT", "White Buckets"],
-  ["Mixed Buckets", "Mixed Buckets", "RM", "GRINDER", "INPUT", "Mixed Buckets"],
-  ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "WIP", "GRINDER,WASH", "OUTPUT,INPUT", "Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Regrinds"],
+  ["White Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "White Buckets"],
+  ["Mixed Buckets", "Mixed Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "Mixed Buckets"],
+  ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "OUTPUT,INPUT", "Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Regrinds"],
   ["White Regrind (Washed)", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "Washed White Flakes|White Washed Flakes|Washed Regrind"],
   ["White Sorted Regrind", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "White Sorted Flakes"],
   ["E1", "E1", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E1"],

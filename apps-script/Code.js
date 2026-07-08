@@ -1855,9 +1855,9 @@ function seedProductionMaterials() {
 }
 
 const PRODUCTION_MATERIAL_MASTER_DEFAULTS = [
-  ["White Buckets", "White Buckets", "RM", "GRINDER", "INPUT", "White Buckets"],
-  ["Mixed Buckets", "Mixed Buckets", "RM", "GRINDER", "INPUT", "Mixed Buckets"],
-  ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "WIP", "GRINDER,WASH", "OUTPUT,INPUT", "Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Regrinds"],
+  ["White Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "White Buckets"],
+  ["Mixed Buckets", "Mixed Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "Mixed Buckets"],
+  ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "OUTPUT,INPUT", "Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Regrinds"],
   ["White Regrind (Washed)", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "Washed White Flakes|White Washed Flakes|Washed Regrind"],
   ["White Sorted Regrind", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "White Sorted Flakes"],
   ["E1", "E1", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E1"],
@@ -1962,7 +1962,40 @@ function getProductionMaterialMasterRows_() {
   ensureHeaders_("Production_Material_Master", productionMaterialMasterHeaders_());
   const rows = getRowsAsObjects("Production_Material_Master")
     .filter(function(row) { return !isDeleted_(row); });
-  return rows.length ? rows : productionMaterialRowsFromDefaults_();
+  if (!rows.length) return productionMaterialRowsFromDefaults_();
+
+  const defaultsByCanonical = {};
+  productionMaterialRowsFromDefaults_().forEach(function(row) {
+    defaultsByCanonical[materialCode_(row.canonicalName || row.materialName)] = row;
+  });
+
+  return rows.map(function(row) {
+    const defaultRow = defaultsByCanonical[materialCode_(row.canonicalName || row.materialName)];
+    if (!defaultRow) return row;
+    return {
+      ...defaultRow,
+      ...row,
+      stageAllowed: mergeCsvValues_(row.stageAllowed, defaultRow.stageAllowed),
+      directionAllowed: mergeCsvValues_(row.directionAllowed, defaultRow.directionAllowed),
+      aliases: row.aliases || defaultRow.aliases,
+    };
+  });
+}
+
+function mergeCsvValues_(primary, fallback) {
+  const seen = {};
+  return String(primary || "")
+    .split(",")
+    .concat(String(fallback || "").split(","))
+    .map(function(value) { return value.trim(); })
+    .filter(function(value) {
+      if (!value) return false;
+      const key = value.toUpperCase();
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
+    })
+    .join(",");
 }
 
 function productionMaterialAllowedFor_(row, stage, direction) {
@@ -4581,7 +4614,16 @@ function validateManufacturingCutover(data = {}) {
 }
 // RM
 
-function parseRmMaterialLines_(value, fallbackMaterial, fallbackQty) {
+function normalizeRmMaterialForReceiving_(value, strict) {
+  if (!String(value || "").trim()) return "";
+  if (strict) return assertProductionMaterialAllowed_(value, "RM_INWARD", "INPUT", "RM inward material");
+
+  const normalized = normalizeProductionMaterialName_(value);
+  return normalized.known ? normalized.canonicalName : String(value || "").trim();
+}
+
+function parseRmMaterialLines_(value, fallbackMaterial, fallbackQty, options) {
+  const opts = options || {};
   let rows = value;
 
   if (typeof value === "string" && value.trim()) {
@@ -4597,7 +4639,7 @@ function parseRmMaterialLines_(value, fallbackMaterial, fallbackQty) {
   const parsed = rows
     .map(function(row) {
       return {
-        material: String(row.material || row.materialName || "").trim(),
+        material: normalizeRmMaterialForReceiving_(row.material || row.materialName, opts.strict),
         quantityKg: num(row.quantityKg || row.qtyKg || row.quantity || row.netWeight),
         remarks: row.remarks || "",
         rate: num(row.rate || row.ratePerKg),
@@ -4610,7 +4652,7 @@ function parseRmMaterialLines_(value, fallbackMaterial, fallbackQty) {
 
   if (!parsed.length && fallbackMaterial && num(fallbackQty) > 0) {
     parsed.push({
-      material: String(fallbackMaterial).trim(),
+      material: normalizeRmMaterialForReceiving_(fallbackMaterial, opts.strict),
       quantityKg: num(fallbackQty),
       remarks: "",
       rate: 0,
@@ -4735,7 +4777,7 @@ function addRM(data = {}) {
 
   const date = normalizeDateOnly_(data.date || todayYmd());
   const inwardId = data.inwardId || data.batchId || generateRmReceivingRef_(date, data.supplier);
-  const lines = parseRmMaterialLines_(data.materialLines, data.material, data.netWeight || data.quantityKg);
+  const lines = parseRmMaterialLines_(data.materialLines, data.material, data.netWeight || data.quantityKg, { strict: true });
   const totalQty = lines.reduce(function(sum, line) { return sum + num(line.quantityKg); }, 0);
   const taxableValue = num(data.taxableValue) || lines.reduce(function(sum, line) { return sum + num(line.amount); }, 0);
   const gstPercent = num(data.gstPercent);
@@ -4837,7 +4879,7 @@ function updateRM(data = {}) {
     "commercialRemarks",
   ]);
 
-  const lines = parseRmMaterialLines_(data.materialLines, data.material, data.netWeight || data.quantityKg);
+  const lines = parseRmMaterialLines_(data.materialLines, data.material, data.netWeight || data.quantityKg, { strict: true });
   const totalQty = lines.reduce(function(sum, line) { return sum + num(line.quantityKg); }, 0);
   const taxableValue = num(data.taxableValue) || lines.reduce(function(sum, line) { return sum + num(line.amount); }, 0);
   const gstPercent = num(data.gstPercent);

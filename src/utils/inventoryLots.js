@@ -26,6 +26,9 @@ export function buildInventoryLots({
       text === "UNWASHED WHITE FLAKES" ||
       text === "WHITE FLAKES (UNWASHED)" ||
       text === "GRINDER FLAKES" ||
+      text === "UNWASHED REGRIND" ||
+      text === "WHITE REGRIND" ||
+      text === "WHITE REGRIND UNWASHED" ||
       text === "REGRINDS" ||
       text === "WHITE FLAKES" ||
       (text.includes("REGRIND") && text.includes("UNWASHED"))

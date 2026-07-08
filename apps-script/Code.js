@@ -1858,9 +1858,12 @@ function seedProductionMaterials() {
 const PRODUCTION_MATERIAL_MASTER_DEFAULTS = [
   ["White Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "White Buckets"],
   ["Mixed Buckets", "Mixed Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "Mixed Buckets"],
-  ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "OUTPUT,INPUT", "Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Regrinds"],
-  ["White Regrind (Washed)", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "Washed White Flakes|White Washed Flakes|Washed Regrind"],
+  ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "OUTPUT,INPUT", "Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Unwashed Regrind|White Regrind|White Regrind Unwashed|Regrinds"],
+  ["White Regrind (Washed)", "White Regrind (Washed)", "WIP", "RM_INWARD,WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "Washed White Flakes|White Washed Flakes|Washed Regrind|White Regrind Washed"],
   ["White Sorted Regrind", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "White Sorted Flakes"],
+  ["Virgin PPCP", "Virgin PPCP", "ADDITIVE", "RM_INWARD,EXTRUSION", "INPUT", "Virgin PP|Virgin Material|Virgin"],
+  ["Battery PPCP", "Battery PPCP", "RM_CONSUMABLE", "RM_INWARD,EXTRUSION", "INPUT", "Battery Scrap|Battery Flakes|Battery Regrind"],
+  ["Masterbatch", "Masterbatch", "ADDITIVE", "RM_INWARD,EXTRUSION", "INPUT", "Master Batch|Colour Masterbatch|Color Masterbatch"],
   ["E1", "E1", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E1"],
   ["E2", "E2", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E2"],
   ["E3", "E3", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E3"],
@@ -1876,10 +1879,23 @@ const PRODUCTION_MATERIAL_ALIAS_MAP = {
   "UNWASHED WHITE FLAKES": "White Regrind (Unwashed)",
   "WHITE FLAKES (UNWASHED)": "White Regrind (Unwashed)",
   "GRINDER FLAKES": "White Regrind (Unwashed)",
+  "UNWASHED REGRIND": "White Regrind (Unwashed)",
+  "WHITE REGRIND": "White Regrind (Unwashed)",
+  "WHITE REGRIND UNWASHED": "White Regrind (Unwashed)",
   "REGRINDS": "White Regrind (Unwashed)",
   "WASHED WHITE FLAKES": "White Regrind (Washed)",
   "WHITE WASHED FLAKES": "White Regrind (Washed)",
   "WASHED REGRIND": "White Regrind (Washed)",
+  "WHITE REGRIND WASHED": "White Regrind (Washed)",
+  "VIRGIN PP": "Virgin PPCP",
+  "VIRGIN MATERIAL": "Virgin PPCP",
+  "VIRGIN": "Virgin PPCP",
+  "BATTERY SCRAP": "Battery PPCP",
+  "BATTERY FLAKES": "Battery PPCP",
+  "BATTERY REGRIND": "Battery PPCP",
+  "MASTER BATCH": "Masterbatch",
+  "COLOUR MASTERBATCH": "Masterbatch",
+  "COLOR MASTERBATCH": "Masterbatch",
   "WHITE SORTED FLAKES": "White Sorted Regrind",
 };
 
@@ -2661,42 +2677,7 @@ function seedMaterialMasterDefaults() {
   const sh = getSheet("Material_Master");
   ensureHeaders_("Material_Master", materialMasterHeaders_());
 
-  const defaults = [
-    ["WHITE_FLAKES", "White Flakes", "RM"],
-    ["WHITE_BUCKETS", "White Buckets", "RM"],
-    ["MIXED_BUCKETS", "Mixed Buckets", "RM"],
-    ["BATTERY_SCRAP", "Battery Scrap", "RM"],
-    ["BATTERY_REGRIND", "Battery Regrind", "RM"],
-    ["JARS", "Jars", "RM"],
-    ["LIDS", "Lids", "RM"],
-    ["PP_MIXED", "PP Mixed", "RM"],
-    ["WHITE_REGRIND_UNWASHED", "White Regrind (Unwashed)", "WIP"],
-    ["WHITE_REGRIND_WASHED", "White Regrind (Washed)", "WIP"],
-    ["WASHED_WHITE_FLAKES", "Washed White Flakes", "WIP"],
-    ["WASHED_MIXED", "Washed Mixed", "WIP"],
-    ["WHITE_SORTED", "White Sorted", "WIP"],
-    ["WHITE_SORTED_REGRIND", "White Sorted Regrind", "WIP"],
-    ["COMMODITY", "Commodity", "WIP"],
-    ["MIXED_SORTED", "Mixed Sorted", "WIP"],
-    ["REWORK_MATERIAL", "Rework Material", "REWORK"],
-    ["E1", "E1", "FG"],
-    ["E2", "E2", "FG"],
-    ["E3", "E3", "FG"],
-    ["E4", "E4", "FG"],
-    ["E5", "E5", "FG"],
-    ["VIRGIN_PP", "Virgin PP", "ADDITIVE"],
-    ["MASTERBATCH", "Masterbatch", "ADDITIVE"],
-    ["ANTIOXIDANT", "Antioxidant", "ADDITIVE"],
-    ["SINK_MATERIAL", "Sink Material", "WASTE"],
-    ["COLOR_REJECT", "Color Reject", "WASTE"],
-    ["COLOUR_REJECT", "Colour Reject", "WASTE"],
-    ["DUST", "Dust", "WASTE"],
-    ["METAL_REJECT", "Metal Reject", "WASTE"],
-    ["RUBBER_REJECT", "Rubber Reject", "WASTE"],
-    ["EXTRUSION_WASTE", "Extrusion Waste", "WASTE"],
-    ["LUMPS", "Lumps", "REWORK"],
-    ["PURGING", "Purging", "REWORK"],
-  ];
+  const defaults = materialMasterDefaultRows_();
 
   const existing = {};
   getMaterialMasterRows_().forEach((row) => {
@@ -3112,9 +3093,41 @@ function mergeFactoryMaster(data = {}) {
 
 function getMaterialMasterRows_() {
   try {
-    return getRowsAsObjects("Material_Master").filter((row) => !isDeleted_(row));
+    const rows = getRowsAsObjects("Material_Master").filter((row) => !isDeleted_(row));
+    const existing = {};
+
+    rows.forEach(function(row) {
+      existing[materialCode_(row.materialCode || row.materialName)] = true;
+    });
+
+    materialMasterDefaultRows_().forEach(function(row) {
+      const code = row[0];
+      if (existing[code]) return;
+      rows.push({
+        materialId: "DEFAULT-" + code,
+        materialCode: code,
+        materialName: row[1],
+        category: row[2],
+        unit: "Kg",
+        status: "ACTIVE",
+        defaultQualityRequired: "NO",
+        defaultStorageLocation: "",
+      });
+      existing[code] = true;
+    });
+
+    return rows;
   } catch (err) {
-    return [];
+    return materialMasterDefaultRows_().map(function(row) {
+      return {
+        materialId: "DEFAULT-" + row[0],
+        materialCode: row[0],
+        materialName: row[1],
+        category: row[2],
+        unit: "Kg",
+        status: "ACTIVE",
+      };
+    });
   }
 }
 function num(v) {
@@ -4621,6 +4634,47 @@ function normalizeRmMaterialForReceiving_(value, strict) {
 
   const normalized = normalizeProductionMaterialName_(value);
   return normalized.known ? normalized.canonicalName : String(value || "").trim();
+}
+
+function materialMasterDefaultRows_() {
+  return [
+    ["WHITE_FLAKES", "White Flakes", "RM"],
+    ["WHITE_BUCKETS", "White Buckets", "RM"],
+    ["MIXED_BUCKETS", "Mixed Buckets", "RM"],
+    ["BATTERY_SCRAP", "Battery Scrap", "RM"],
+    ["BATTERY_REGRIND", "Battery Regrind", "RM"],
+    ["JARS", "Jars", "RM"],
+    ["LIDS", "Lids", "RM"],
+    ["PP_MIXED", "PP Mixed", "RM"],
+    ["WHITE_REGRIND_UNWASHED", "White Regrind (Unwashed)", "WIP"],
+    ["WHITE_REGRIND_WASHED", "White Regrind (Washed)", "WIP"],
+    ["WASHED_WHITE_FLAKES", "Washed White Flakes", "WIP"],
+    ["WASHED_MIXED", "Washed Mixed", "WIP"],
+    ["WHITE_SORTED", "White Sorted", "WIP"],
+    ["WHITE_SORTED_REGRIND", "White Sorted Regrind", "WIP"],
+    ["COMMODITY", "Commodity", "WIP"],
+    ["MIXED_SORTED", "Mixed Sorted", "WIP"],
+    ["REWORK_MATERIAL", "Rework Material", "REWORK"],
+    ["E1", "E1", "FG"],
+    ["E2", "E2", "FG"],
+    ["E3", "E3", "FG"],
+    ["E4", "E4", "FG"],
+    ["E5", "E5", "FG"],
+    ["VIRGIN_PP", "Virgin PP", "ADDITIVE"],
+    ["VIRGIN_PPCP", "Virgin PPCP", "ADDITIVE"],
+    ["BATTERY_PPCP", "Battery PPCP", "RM"],
+    ["MASTERBATCH", "Masterbatch", "ADDITIVE"],
+    ["ANTIOXIDANT", "Antioxidant", "ADDITIVE"],
+    ["SINK_MATERIAL", "Sink Material", "WASTE"],
+    ["COLOR_REJECT", "Color Reject", "WASTE"],
+    ["COLOUR_REJECT", "Colour Reject", "WASTE"],
+    ["DUST", "Dust", "WASTE"],
+    ["METAL_REJECT", "Metal Reject", "WASTE"],
+    ["RUBBER_REJECT", "Rubber Reject", "WASTE"],
+    ["EXTRUSION_WASTE", "Extrusion Waste", "WASTE"],
+    ["LUMPS", "Lumps", "REWORK"],
+    ["PURGING", "Purging", "REWORK"],
+  ];
 }
 
 function parseRmMaterialLines_(value, fallbackMaterial, fallbackQty, options) {

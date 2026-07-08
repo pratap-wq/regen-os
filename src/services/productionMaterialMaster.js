@@ -4,19 +4,26 @@ export const PRODUCTION_MATERIAL_ALIASES = {
   "UNWASHED WHITE FLAKES": "White Regrind (Unwashed)",
   "WHITE FLAKES (UNWASHED)": "White Regrind (Unwashed)",
   "GRINDER FLAKES": "White Regrind (Unwashed)",
+  "UNWASHED REGRIND": "White Regrind (Unwashed)",
+  "WHITE REGRIND": "White Regrind (Unwashed)",
+  "WHITE REGRIND UNWASHED": "White Regrind (Unwashed)",
   REGRINDS: "White Regrind (Unwashed)",
   "WASHED WHITE FLAKES": "White Regrind (Washed)",
   "WHITE WASHED FLAKES": "White Regrind (Washed)",
   "WASHED REGRIND": "White Regrind (Washed)",
+  "WHITE REGRIND WASHED": "White Regrind (Washed)",
   "WHITE SORTED FLAKES": "White Sorted Regrind",
 };
 
 export const FALLBACK_PRODUCTION_MATERIALS = [
   ["White Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "White Buckets"],
   ["Mixed Buckets", "Mixed Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "Mixed Buckets"],
-  ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "OUTPUT,INPUT", "Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Regrinds"],
-  ["White Regrind (Washed)", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "Washed White Flakes|White Washed Flakes|Washed Regrind"],
+  ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "OUTPUT,INPUT", "Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Unwashed Regrind|White Regrind|White Regrind Unwashed|Regrinds"],
+  ["White Regrind (Washed)", "White Regrind (Washed)", "WIP", "RM_INWARD,WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "Washed White Flakes|White Washed Flakes|Washed Regrind|White Regrind Washed"],
   ["White Sorted Regrind", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "White Sorted Flakes"],
+  ["Virgin PPCP", "Virgin PPCP", "ADDITIVE", "RM_INWARD,EXTRUSION", "INPUT", "Virgin PP|Virgin Material|Virgin"],
+  ["Battery PPCP", "Battery PPCP", "RM_CONSUMABLE", "RM_INWARD,EXTRUSION", "INPUT", "Battery Scrap|Battery Flakes|Battery Regrind"],
+  ["Masterbatch", "Masterbatch", "ADDITIVE", "RM_INWARD,EXTRUSION", "INPUT", "Master Batch|Colour Masterbatch|Color Masterbatch"],
   ["E1", "E1", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E1"],
   ["E2", "E2", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E2"],
   ["E3", "E3", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E3"],
@@ -64,14 +71,56 @@ export async function listProductionMaterialMaster({ stage = "", direction = "" 
       stage,
       direction,
     });
-    const rows = Array.isArray(res.rows) && res.rows.length ? res.rows : FALLBACK_PRODUCTION_MATERIALS;
-    return rows.map(normalizeProductionMaterialRow);
+    const rows = mergeProductionMaterialRows(res.rows || FALLBACK_PRODUCTION_MATERIALS);
+    return rows
+      .map(normalizeProductionMaterialRow)
+      .filter((row) => !stage || !direction || productionMaterialAllowed(row, stage, direction));
   } catch (err) {
     console.log("productionMaterialMaster.list", err);
     return FALLBACK_PRODUCTION_MATERIALS.filter((row) =>
       !stage || !direction || productionMaterialAllowed(row, stage, direction)
     );
   }
+}
+
+function mergeProductionMaterialRows(rows = []) {
+  const byName = new Map();
+
+  FALLBACK_PRODUCTION_MATERIALS.forEach((row) => {
+    byName.set(materialKey(row.canonicalName || row.materialName), { ...row });
+  });
+
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const key = materialKey(row.canonicalName || row.materialName);
+    if (!key) return;
+    const fallback = byName.get(key) || {};
+    byName.set(key, {
+      ...fallback,
+      ...row,
+      stageAllowed: mergeCsv(row.stageAllowed, fallback.stageAllowed),
+      directionAllowed: mergeCsv(row.directionAllowed, fallback.directionAllowed),
+      aliases: row.aliases || fallback.aliases || "",
+    });
+  });
+
+  return [...byName.values()].sort((a, b) => Number(a.sortOrder || 999) - Number(b.sortOrder || 999));
+}
+
+function materialKey(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function mergeCsv(primary, fallback) {
+  const seen = new Set();
+  return `${primary || ""},${fallback || ""}`
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => {
+      if (!value || seen.has(value.toUpperCase())) return false;
+      seen.add(value.toUpperCase());
+      return true;
+    })
+    .join(",");
 }
 
 function normalizeProductionMaterialRow(row) {

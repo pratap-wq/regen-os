@@ -137,6 +137,74 @@ export default function RMInward() {
       .join(" + ");
   }
 
+  function displayMaterialSummary(row) {
+    const lines = cleanLines(parseMaterialLines(
+      row.materialLines,
+      row.material,
+      row.netWeight || row.quantityKg,
+      row.ratePerKg
+    ));
+    return materialSummary(lines) || row.materialSummary || row.material || "";
+  }
+
+  function inferRmMaterial(quantityKg) {
+    return n(quantityKg) < 5000 ? "White Buckets" : "White Regrind (Unwashed)";
+  }
+
+  function parseMaterialLines(value, fallbackMaterial, fallbackQty, fallbackRate = 0) {
+    let parsed = [];
+
+    if (Array.isArray(value)) {
+      parsed = value;
+    } else if (typeof value === "string" && value.trim()) {
+      try {
+        const rows = JSON.parse(value);
+        parsed = Array.isArray(rows) ? rows : [];
+      } catch (err) {
+        parsed = String(value)
+          .split("+")
+          .map((part) => {
+            const match = part.trim().match(/^(.+?):\s*([\d,.]+)/);
+            if (!match) return null;
+            return {
+              material: match[1].trim(),
+              quantityKg: n(match[2].replace(/,/g, "")),
+            };
+          })
+          .filter(Boolean);
+      }
+    }
+
+    if (!parsed.length && n(fallbackQty) > 0) {
+      parsed = [
+        {
+          material: fallbackMaterial || inferRmMaterial(fallbackQty),
+          quantityKg: n(fallbackQty),
+          rate: n(fallbackRate),
+          remarks: "",
+        },
+      ];
+    }
+
+    return parsed.map((line) => {
+      const qty = n(line.quantityKg || line.qtyKg || line.quantity || line.netWeight);
+      const rate = n(line.rate || line.ratePerKg || fallbackRate);
+      const rawMaterial = line.material || line.materialName || fallbackMaterial || "";
+      const material = rawMaterial
+        ? normalizeProductionMaterialName(rawMaterial)
+        : qty > 0
+          ? inferRmMaterial(qty)
+          : "";
+      return {
+        material,
+        quantityKg: qty,
+        remarks: line.remarks || "",
+        rate,
+        amount: n(line.amount) || qty * rate,
+      };
+    });
+  }
+
   function calculateCommercialTotals(sourceForm = form, lines = materialLines) {
     const taxable = totalLineAmount(lines);
     const gstPercent = n(sourceForm.gstPercent);
@@ -179,12 +247,13 @@ export default function RMInward() {
   }
 
   function updateLine(index, key, value) {
+    const cleanValue = value && value.target ? value.target.value : value;
     setMaterialLines((lines) =>
       lines.map((line, i) => {
         if (i !== index) return line;
-        const next = { ...line, [key]: value };
+        const next = { ...line, [key]: cleanValue };
         if (key === "quantityKg" || key === "rate") {
-          const amount = n(key === "quantityKg" ? value : next.quantityKg) * n(key === "rate" ? value : next.rate);
+          const amount = n(key === "quantityKg" ? cleanValue : next.quantityKg) * n(key === "rate" ? cleanValue : next.rate);
           next.amount = amount > 0 ? amount.toFixed(2) : "";
         }
         return next;
@@ -250,6 +319,12 @@ export default function RMInward() {
   }
 
   function editRow(row) {
+    const lines = parseMaterialLines(
+      row.materialLines,
+      row.material,
+      row.netWeight || row.quantityKg,
+      row.ratePerKg
+    );
     setEditingRow({
       ...blankForm,
       ...row,
@@ -257,7 +332,68 @@ export default function RMInward() {
       invoiceDate: dateForInput(row.invoiceDate),
       otherCharges: row.otherCharges || row.transportCharges || "",
       grandTotal: row.grandTotal || row.invoiceTotal || "",
+      material: lines[0]?.material || row.material || "",
+      materialLines: JSON.stringify(lines.length ? lines : [{ ...blankLine }]),
+      materialSummary: materialSummary(lines),
     });
+  }
+
+  function editMaterialLines() {
+    if (!editingRow) return [];
+    return parseMaterialLines(
+      editingRow.materialLines,
+      editingRow.material,
+      editingRow.netWeight || editingRow.quantityKg,
+      editingRow.ratePerKg
+    );
+  }
+
+  function updateEditLine(index, key, value) {
+    const cleanValue = value && value.target ? value.target.value : value;
+    const updatedLines = editMaterialLines().map((line, i) => {
+      if (i !== index) return line;
+      const next = { ...line, [key]: cleanValue };
+      if (key === "quantityKg" || key === "rate") {
+        const amount = n(key === "quantityKg" ? cleanValue : next.quantityKg) * n(key === "rate" ? cleanValue : next.rate);
+        next.amount = amount > 0 ? amount.toFixed(2) : "";
+      }
+      return next;
+    });
+    const clean = cleanLines(updatedLines);
+    const totalQty = totalQuantity(updatedLines);
+    setEditingRow(calculateEdit({
+      ...editingRow,
+      material: clean[0]?.material || "",
+      materialLines: JSON.stringify(updatedLines),
+      materialSummary: materialSummary(updatedLines),
+      quantityKg: totalQty,
+      netWeight: totalQty,
+      taxableValue: totalLineAmount(updatedLines),
+      ratePerKg: totalQty > 0 ? totalLineAmount(updatedLines) / totalQty : editingRow.ratePerKg,
+    }));
+  }
+
+  function addEditLine() {
+    const updatedLines = [...editMaterialLines(), { ...blankLine }];
+    setEditingRow({
+      ...editingRow,
+      materialLines: JSON.stringify(updatedLines),
+    });
+  }
+
+  function removeEditLine(index) {
+    const updatedLines = editMaterialLines().filter((_, i) => i !== index);
+    const nextLines = updatedLines.length ? updatedLines : [{ ...blankLine }];
+    const totalQty = totalQuantity(nextLines);
+    setEditingRow(calculateEdit({
+      ...editingRow,
+      material: cleanLines(nextLines)[0]?.material || "",
+      materialLines: JSON.stringify(nextLines),
+      materialSummary: materialSummary(nextLines),
+      quantityKg: totalQty,
+      netWeight: totalQty,
+      taxableValue: totalLineAmount(nextLines),
+    }));
   }
 
   async function deleteRow(row) {
@@ -280,6 +416,8 @@ export default function RMInward() {
 
   async function saveEdit() {
     if (!editingRow) return;
+    const lines = cleanLines(editMaterialLines());
+    if (lines.length === 0) return alert("Add at least one material line");
     try {
       const res = await apiCall({
         fn: "rm.update",
@@ -287,6 +425,11 @@ export default function RMInward() {
         date: dateForInput(editingRow.date),
         invoiceDate: dateForInput(editingRow.invoiceDate),
         inwardId: editingRow.inwardId,
+        material: lines[0].material,
+        materialLines: JSON.stringify(lines),
+        materialSummary: materialSummary(lines),
+        quantityKg: totalQuantity(lines),
+        netWeight: totalQuantity(lines),
       });
 
       if (res.ok === false) {
@@ -428,7 +571,7 @@ export default function RMInward() {
                       stage="RM_INWARD"
                       direction="INPUT"
                       value={line.material}
-                      onChange={(value) => updateLine(index, "material", value)}
+                      onChange={(e) => updateLine(index, "material", e)}
                       placeholder="Select RM material"
                       style={inputStyle}
                     />
@@ -567,7 +710,7 @@ export default function RMInward() {
           { key: "poNumber", label: "PO" },
           { key: "supplierGrnNumber", label: "Supplier GRN" },
           { key: "supplierInvoiceNumber", label: "Invoice" },
-          { key: "material", label: "Materials", render: (r) => r.materialSummary || r.material },
+          { key: "material", label: "Materials", render: (r) => displayMaterialSummary(r) },
           { key: "netWeight", label: "Quantity Kg" },
           { key: "taxableValue", label: "Taxable", render: (r) => `₹ ${n(r.taxableValue).toFixed(0)}` },
           { key: "invoiceTotal", label: "Invoice Total", render: (r) => `₹ ${n(r.invoiceTotal).toFixed(0)}` },
@@ -614,6 +757,77 @@ export default function RMInward() {
                   />
                 </Field>
               ))}
+
+              <SectionTitle text="Material Lines" />
+              <div style={tableWrap}>
+                <table style={table}>
+                  <thead>
+                    <tr style={head}>
+                      <th style={th}>Material</th>
+                      <th style={th}>Quantity (Kg)</th>
+                      <th style={th}>Rate/Kg</th>
+                      <th style={th}>Amount</th>
+                      <th style={th}>Remarks</th>
+                      <th style={th}>Delete</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {editMaterialLines().map((line, index) => (
+                      <tr key={index}>
+                        <td style={td}>
+                          <ProductionMaterialSelect
+                            stage="RM_INWARD"
+                            direction="INPUT"
+                            value={line.material}
+                            onChange={(e) => updateEditLine(index, "material", e)}
+                            placeholder="Select RM material"
+                            style={inputStyle}
+                          />
+                        </td>
+                        <td style={td}>
+                          <input
+                            type="number"
+                            value={line.quantityKg}
+                            onChange={(e) => updateEditLine(index, "quantityKg", e.target.value)}
+                            style={inputStyle}
+                          />
+                        </td>
+                        <td style={td}>
+                          <input
+                            type="number"
+                            value={line.rate}
+                            onChange={(e) => updateEditLine(index, "rate", e.target.value)}
+                            style={inputStyle}
+                          />
+                        </td>
+                        <td style={td}>
+                          <input
+                            readOnly
+                            value={(n(line.quantityKg) * n(line.rate) || 0).toFixed(2)}
+                            style={readonlyStyle}
+                          />
+                        </td>
+                        <td style={td}>
+                          <input
+                            value={line.remarks}
+                            onChange={(e) => updateEditLine(index, "remarks", e.target.value)}
+                            style={inputStyle}
+                          />
+                        </td>
+                        <td style={td}>
+                          <button type="button" onClick={() => removeEditLine(index)} style={deleteButton}>
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <button type="button" onClick={addEditLine} style={addButton}>+ Add Material</button>
+                <div style={lineTotal}>
+                  Total Quantity: {totalQuantity(editMaterialLines()).toFixed(2)} Kg | Taxable Value: Rs. {totalLineAmount(editMaterialLines()).toFixed(2)}
+                </div>
+              </div>
 
               <Field label="Payment Status">
                 <select

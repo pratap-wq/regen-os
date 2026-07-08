@@ -425,6 +425,7 @@ function updateFactoryCostMaster(data = {}) {
     if (p.fn === "inventoryLedger.list") return listMaster("Inventory_Ledger");
     if (p.fn === "inventoryLedger.add") return addInventoryLedger(p);
     if (p.fn === "inventoryLedger.balance") return getInventoryLedgerBalance();
+    if (p.fn === "inventoryLedger.liveBalance") return getInventoryLedgerLiveBalance(p);
     if (p.fn === "inventoryLedger.audit") return auditInventoryLedger(p);
     if (p.fn === "inventoryLedger.rebuild") return rebuildInventoryLedger(p);
     if (p.fn === "materialFlow.auditJune2026") return auditJuneMaterialFlowV1(p);
@@ -7203,6 +7204,228 @@ function getInventoryLedgerBalance(){
         rows:Object.values(balance)
     });
 
+}
+
+function getInventoryLedgerLiveBalance(data = {}) {
+  const ledgerRows = getRowsAsObjects("Inventory_Ledger")
+    .filter(function(row) { return !isDeleted_(row); });
+  const productionRows = liveInventoryProductionMaterialRows_();
+  const productionIndex = {};
+  const aliasIndex = {};
+  const groups = {};
+  const manualGroups = {};
+  const skipped = {
+    storeRows: 0,
+    additiveRows: 0,
+  };
+
+  productionRows.forEach(function(row) {
+    const canonicalName = String(row.canonicalName || row.materialName || "").trim();
+    if (!canonicalName) return;
+    const category = normalizeLiveInventoryCategory_(row.category);
+    if (!category) return;
+
+    const canonicalKey = canonicalName.toUpperCase();
+    productionIndex[canonicalKey] = {
+      material: canonicalName,
+      category,
+      materialId: row.materialId || "",
+      sortOrder: num(row.sortOrder),
+    };
+    aliasIndex[canonicalKey] = productionIndex[canonicalKey];
+    aliasIndex[String(row.materialName || canonicalName).trim().toUpperCase()] = productionIndex[canonicalKey];
+    String(row.aliases || "")
+      .split("|")
+      .map(function(alias) { return alias.trim(); })
+      .filter(function(alias) { return alias; })
+      .forEach(function(alias) {
+        aliasIndex[alias.toUpperCase()] = productionIndex[canonicalKey];
+      });
+  });
+
+  ledgerRows.forEach(function(row) {
+    const rawName = String(row.itemName || row.material || row.grade || "").trim();
+    const itemType = normalizeMaterialCategoryForLedger_(row.itemType);
+    const qtyIn = num(row.qtyIn);
+    const qtyOut = num(row.qtyOut);
+    if (!rawName || (qtyIn <= 0 && qtyOut <= 0)) return;
+
+    if (itemType === "STORE") {
+      skipped.storeRows += 1;
+      return;
+    }
+    if (itemType === "ADDITIVE") {
+      skipped.additiveRows += 1;
+      return;
+    }
+
+    const normalized = normalizeLiveInventoryMaterial_(rawName, aliasIndex);
+
+    if (!normalized.known) {
+      const manualKey = rawName.toUpperCase() + "|" + (itemType || "MANUAL_REVIEW");
+      if (!manualGroups[manualKey]) {
+        manualGroups[manualKey] = {
+          material: rawName,
+          canonicalMaterial: "Needs Manual Review",
+          category: "MANUAL_REVIEW",
+          sourceCategory: itemType || row.itemType || "",
+          qtyIn: 0,
+          qtyOut: 0,
+          balanceKg: 0,
+          movementCount: 0,
+          examples: [],
+        };
+      }
+      manualGroups[manualKey].qtyIn += qtyIn;
+      manualGroups[manualKey].qtyOut += qtyOut;
+      manualGroups[manualKey].balanceKg += qtyIn - qtyOut;
+      manualGroups[manualKey].movementCount += 1;
+      if (manualGroups[manualKey].examples.length < 5) {
+        manualGroups[manualKey].examples.push({
+          date: normalizeDateOnly_(row.date || ""),
+          module: row.module || "",
+          movementType: row.movementType || "",
+          sourceRef: row.sourceRef || "",
+          targetRef: row.targetRef || "",
+          qtyIn,
+          qtyOut,
+        });
+      }
+      return;
+    }
+
+    const key = normalized.material.toUpperCase();
+    if (!groups[key]) {
+      groups[key] = {
+        material: normalized.material,
+        canonicalMaterial: normalized.material,
+        category: normalized.category,
+        materialId: normalized.materialId || "",
+        qtyIn: 0,
+        qtyOut: 0,
+        balanceKg: 0,
+        movementCount: 0,
+        sortOrder: normalized.sortOrder || 999,
+      };
+    }
+
+    groups[key].qtyIn += qtyIn;
+    groups[key].qtyOut += qtyOut;
+    groups[key].balanceKg += qtyIn - qtyOut;
+    groups[key].movementCount += 1;
+  });
+
+  const rows = Object.values(groups)
+    .map(roundLiveInventoryBalanceRow_)
+    .sort(function(a, b) {
+      return num(a.sortOrder) - num(b.sortOrder) ||
+        String(a.material).localeCompare(String(b.material), undefined, { numeric: true });
+    });
+
+  const manualReviewRows = Object.values(manualGroups)
+    .map(roundLiveInventoryBalanceRow_)
+    .sort(function(a, b) {
+      return Math.abs(num(b.balanceKg)) - Math.abs(num(a.balanceKg)) ||
+        String(a.material).localeCompare(String(b.material), undefined, { numeric: true });
+    });
+
+  const summary = rows.reduce(function(acc, row) {
+    acc[row.category] = (acc[row.category] || 0) + num(row.balanceKg);
+    acc.totalProductionKg += num(row.balanceKg);
+    return acc;
+  }, {
+    RM: 0,
+    WIP: 0,
+    FG: 0,
+    WASTE: 0,
+    totalProductionKg: 0,
+    manualReviewCount: manualReviewRows.length,
+    manualReviewBalanceKg: manualReviewRows.reduce(function(sum, row) { return sum + num(row.balanceKg); }, 0),
+    ledgerRows: ledgerRows.length,
+    skipped,
+  });
+
+  return output({
+    ok: true,
+    route: "inventoryLedger.liveBalance",
+    source: "Inventory_Ledger",
+    rows,
+    manualReviewRows,
+    summary,
+    canonicalMaterials: productionRows.map(function(row) {
+      return row.canonicalName || row.materialName || "";
+    }).filter(function(name) { return name; }),
+    note: "Live Inventory is grouped from Inventory_Ledger using canonical Production_Material_Master names. Stores and additives are excluded from production inventory.",
+  });
+}
+
+function normalizeLiveInventoryMaterial_(value, aliasIndex) {
+  const clean = String(value || "").trim().replace(/\s+/g, " ");
+  if (!clean) return { known: false, material: "", category: "MANUAL_REVIEW" };
+
+  const productionMatch = aliasIndex[clean.toUpperCase()];
+  if (productionMatch) {
+    return {
+      known: true,
+      material: productionMatch.material,
+      category: productionMatch.category,
+      materialId: productionMatch.materialId || "",
+      sortOrder: productionMatch.sortOrder || 999,
+    };
+  }
+
+  const normalized = normalizeProductionMaterialName_(clean);
+  const normalizedMatch = aliasIndex[String(normalized.canonicalName || "").toUpperCase()];
+  if (normalized.known && normalizedMatch) {
+    return {
+      known: true,
+      material: normalizedMatch.material,
+      category: normalizedMatch.category,
+      materialId: normalizedMatch.materialId || "",
+      sortOrder: normalizedMatch.sortOrder || 999,
+    };
+  }
+
+  return { known: false, material: clean, category: "MANUAL_REVIEW" };
+}
+
+function liveInventoryProductionMaterialRows_() {
+  const byCanonical = {};
+
+  productionMaterialRowsFromDefaults_().forEach(function(row) {
+    const key = String(row.canonicalName || row.materialName || "").trim().toUpperCase();
+    if (key) byCanonical[key] = row;
+  });
+
+  getProductionMaterialMasterRows_().forEach(function(row) {
+    const key = String(row.canonicalName || row.materialName || "").trim().toUpperCase();
+    if (!key) return;
+    const fallback = byCanonical[key] || {};
+    byCanonical[key] = {
+      ...fallback,
+      ...row,
+      stageAllowed: mergeCsvValues_(row.stageAllowed, fallback.stageAllowed),
+      directionAllowed: mergeCsvValues_(row.directionAllowed, fallback.directionAllowed),
+      aliases: row.aliases || fallback.aliases || "",
+    };
+  });
+
+  return Object.values(byCanonical);
+}
+
+function normalizeLiveInventoryCategory_(value) {
+  const category = normalizeMaterialCategoryForLedger_(value);
+  if (category === "RM" || category === "WIP" || category === "FG" || category === "WASTE") return category;
+  return "";
+}
+
+function roundLiveInventoryBalanceRow_(row) {
+  return {
+    ...row,
+    qtyIn: round2(num(row.qtyIn)),
+    qtyOut: round2(num(row.qtyOut)),
+    balanceKg: round2(num(row.balanceKg)),
+  };
 }
 
 function rebuildInventoryLedger(data = {}) {

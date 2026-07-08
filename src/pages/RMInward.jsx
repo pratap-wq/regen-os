@@ -3,6 +3,8 @@ import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 import DataTable from "../components/DataTable";
 import FactoryDropdown from "../components/FactoryDropdown";
+import ProductionMaterialSelect from "../components/ProductionMaterialSelect";
+import { normalizeProductionMaterialName } from "../services/productionMaterialMaster";
 import { KpiCard, PageLayout } from "../components/factoryDesignSystem";
 
 const blankLine = {
@@ -112,7 +114,7 @@ export default function RMInward() {
   function cleanLines(lines = materialLines) {
     return lines
       .map((line) => ({
-        material: String(line.material || "").trim(),
+        material: normalizeProductionMaterialName(line.material),
         quantityKg: n(line.quantityKg),
         remarks: line.remarks || "",
         rate: n(line.rate),
@@ -422,20 +424,13 @@ export default function RMInward() {
               {materialLines.map((line, index) => (
                 <tr key={index}>
                   <td style={td}>
-                    <FactoryDropdown
-                      masterType="material"
+                    <ProductionMaterialSelect
+                      stage="RM_INWARD"
+                      direction="INPUT"
                       value={line.material}
-                      onChange={(e) => updateLine(index, "material", e.target.value)}
-                      placeholder="Select Material"
+                      onChange={(value) => updateLine(index, "material", value)}
+                      placeholder="Select RM material"
                       style={inputStyle}
-                      allowAddNew
-                      approvalRequired
-                      defaults={{ category: "RM", unit: "Kg" }}
-                      filter={(item) =>
-                        ["RM", "WIP", "REWORK"].includes(
-                          String(item.category || item.materialType || "").toUpperCase()
-                        )
-                      }
                     />
                   </td>
                   <td style={td}>

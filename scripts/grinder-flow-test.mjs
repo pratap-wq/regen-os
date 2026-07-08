@@ -276,8 +276,12 @@ const legacyMonthClose = calculateMonthClose({
   periodMonth: PERIOD,
 });
 
-const liveInventoryLedgerAligned = liveInventorySource.includes('apiCall({ fn: "inventoryLedger.balance" })') &&
-  liveInventorySource.includes('apiCall({ fn: "grinder.list" })');
+const liveInventoryLedgerAligned = liveInventorySource.includes('apiCall({ fn: "inventoryLedger.liveBalance" })') &&
+  !liveInventorySource.includes('apiCall({ fn: "rm.list" })') &&
+  !liveInventorySource.includes('apiCall({ fn: "wash.list" })') &&
+  !liveInventorySource.includes('apiCall({ fn: "sorting.list" })') &&
+  !liveInventorySource.includes('apiCall({ fn: "extrusion.list" })') &&
+  !liveInventorySource.includes('apiCall({ fn: "dispatch.list" })');
 const monthCloseEngineGrinderAware = monthCloseSource.includes("grinderRows");
 
 const report = {
@@ -313,7 +317,7 @@ const report = {
   },
   alignmentNotes: {
     liveInventory: liveInventoryLedgerAligned
-      ? "Live Inventory reads ledger and Grinder rows."
+      ? "Live Inventory reads canonical Inventory_Ledger live balances; Grinder is included through ledger movements."
       : "LiveInventory.jsx still calculates from RM/Wash/Sorting/Extrusion/Dispatch source rows and does not load Grinder_Batches; ledger balances above are correct, but Live Inventory needs separate ledger alignment.",
     monthClose: monthCloseEngineGrinderAware
       ? "monthCloseEngine accepts Grinder rows."

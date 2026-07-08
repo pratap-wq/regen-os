@@ -20,6 +20,14 @@ export default function Production() {
     remarks: "",
   };
 
+  const grinderOutputMaterial = "White Regrind (Unwashed)";
+
+  const grinderOutputDefaults = [
+    { material: grinderOutputMaterial, qtyKg: "" },
+    { material: "Dust", qtyKg: "" },
+    { material: "Metal Reject", qtyKg: "" },
+  ];
+
   const washOutputDefaults = [
     { material: "Washed White Flakes", qtyKg: "" },
     { material: "Sink Material", qtyKg: "" },
@@ -55,11 +63,14 @@ export default function Production() {
 
     washOperatorName: "",
     washSupervisorName: "",
+    grinderOperatorName: "",
+    grinderSupervisorName: "",
     sorterOperatorName: "",
     sorterSupervisorName: "",
     extruderOperatorName: "",
     extruderSupervisorName: "",
 
+    machineGrinder: "",
     machineWash: "",
     machineSorter: "",
     machineExtruder: "",
@@ -94,14 +105,17 @@ export default function Production() {
   };
 
   const [form, setForm] = useState(blank);
+  const [grinderFeedRows, setGrinderFeedRows] = useState([{ ...blankFeedRow }]);
   const [washFeedRows, setWashFeedRows] = useState([{ ...blankFeedRow }]);
   const [sorterFeedRows, setSorterFeedRows] = useState([{ ...blankFeedRow }]);
   const [feedRows, setFeedRows] = useState([{ ...blankFeedRow }]);
+  const [grinderOutputRows, setGrinderOutputRows] = useState(grinderOutputDefaults);
   const [washOutputRows, setWashOutputRows] = useState(washOutputDefaults);
   const [sorterOutputRows, setSorterOutputRows] = useState(sorterOutputDefaults);
   const [extrusionOutputRows, setExtrusionOutputRows] = useState(extrusionOutputDefaults);
 
   const [rmRows, setRmRows] = useState([]);
+  const [grinderRows, setGrinderRows] = useState([]);
   const [washRows, setWashRows] = useState([]);
   const [sortingRows, setSortingRows] = useState([]);
   const [extrusionRows, setExtrusionRows] = useState([]);
@@ -128,12 +142,14 @@ export default function Production() {
     try {
       const [
         rmData,
+        grinderData,
         washData,
         sortingData,
         extrusionData,
         dispatchData,
       ] = await Promise.all([
         safeList("rm.list"),
+        safeList("grinder.list"),
         safeList("wash.list"),
         safeList("sorting.list"),
         safeList("extrusion.list"),
@@ -141,6 +157,7 @@ export default function Production() {
       ]);
 
       setRmRows(rmData);
+      setGrinderRows(grinderData);
       setWashRows(washData);
       setSortingRows(sortingData);
       setExtrusionRows(extrusionData);
@@ -153,12 +170,13 @@ export default function Production() {
   const inventoryLots = useMemo(() => {
     return buildInventoryLots({
       rmRows,
+      grinderRows,
       washRows,
       sortingRows,
       extrusionRows,
       dispatchRows,
     });
-  }, [rmRows, washRows, sortingRows, extrusionRows, dispatchRows]);
+  }, [rmRows, grinderRows, washRows, sortingRows, extrusionRows, dispatchRows]);
 
   function n(v) {
     return Number(v || 0);
@@ -202,9 +220,11 @@ export default function Production() {
     fresh.extrusionBatchId = buildExtrusionBatchId(fresh);
 
     setForm(fresh);
+    setGrinderFeedRows([{ ...blankFeedRow }]);
     setWashFeedRows([{ ...blankFeedRow }]);
     setSorterFeedRows([{ ...blankFeedRow }]);
     setFeedRows([{ ...blankFeedRow }]);
+    setGrinderOutputRows(grinderOutputDefaults);
     setWashOutputRows(washOutputDefaults);
     setSorterOutputRows(sorterOutputDefaults);
     setExtrusionOutputRows(extrusionOutputDefaults);
@@ -216,6 +236,10 @@ export default function Production() {
 
   function cleanWashRows() {
     return cleanRows(washFeedRows);
+  }
+
+  function cleanGrinderRows() {
+    return cleanRows(grinderFeedRows);
   }
 
   function cleanFeedRows() {
@@ -289,6 +313,14 @@ export default function Production() {
     return rowsSummary(washFeedRows);
   }
 
+  function grinderFeedTotalKg() {
+    return rowsTotalKg(grinderFeedRows);
+  }
+
+  function grinderFeedSummary() {
+    return rowsSummary(grinderFeedRows);
+  }
+
   function sorterFeedTotalKg() {
     return rowsTotalKg(sorterFeedRows);
   }
@@ -357,6 +389,12 @@ export default function Production() {
   const washRecovery = washSummary.recoveryPercent;
   const washVariance = washSummary.varianceKg;
 
+  const grinderOutputKg = outputTotalKg(grinderOutputRows);
+  const grinderRegrindOutputKg = outputKgByName(grinderOutputRows, ["REGRIND"]);
+  const grinderSummary = processSummary(grinderFeedTotalKg(), grinderOutputKg);
+  const grinderRecovery = grinderSummary.recoveryPercent;
+  const grinderVariance = grinderSummary.varianceKg;
+
   const sorterOutputKg = outputTotalKg(sorterOutputRows);
   const sorterSummary = processSummary(sorterFeedTotalKg(), sorterOutputKg);
   const sorterRecovery = sorterSummary.recoveryPercent;
@@ -415,14 +453,76 @@ export default function Production() {
     setMessage("");
 
     try {
+      let grinderBatchId = "";
       let washBatchId = "";
       let sortingBatchId = "";
+      const finalGrinderRows = cleanGrinderRows();
+      const grinderTotalKg = grinderFeedTotalKg();
+      const finalGrinderOutputRows = cleanOutputRows(grinderOutputRows);
       const finalWashRows = cleanWashRows();
       const washTotalKg = washFeedTotalKg();
       const finalWashOutputRows = cleanOutputRows(washOutputRows);
       const finalSorterRows = cleanSorterRows();
       const sorterTotalKg = sorterFeedTotalKg();
       const finalSorterOutputRows = cleanOutputRows(sorterOutputRows);
+
+      if (grinderTotalKg > 0 || grinderOutputKg > 0) {
+        if (finalGrinderRows.length === 0 || grinderTotalKg <= 0) {
+          setMessage("Grinder: add at least one bucket input material with consume quantity.");
+          setSaving(false);
+          return;
+        }
+
+        if (grinderRegrindOutputKg <= 0) {
+          setMessage(`Grinder: add ${grinderOutputMaterial} output quantity.`);
+          setSaving(false);
+          return;
+        }
+
+        const grinderValidation = validateMaterialRows(grinderFeedRows, "Grinder");
+        if (grinderValidation) {
+          setMessage(grinderValidation);
+          setSaving(false);
+          return;
+        }
+
+        const fgOutput = finalGrinderOutputRows.find((row) =>
+          /^E[1-5]$/i.test(String(row.material || "").trim())
+        );
+
+        if (fgOutput) {
+          setMessage("Grinder cannot create finished goods grades. Send output to Wash as White Regrind (Unwashed).");
+          setSaving(false);
+          return;
+        }
+
+        const grinder = await apiCall({
+          fn: "grinder.add",
+          date: form.date,
+          shift: form.shift,
+          machine: form.machineGrinder,
+          inputMaterial: grinderFeedSummary(),
+          inputWeightKg: grinderTotalKg,
+          feedComposition: JSON.stringify(finalGrinderRows),
+          outputComposition: JSON.stringify(finalGrinderOutputRows),
+          regrindOutputKg: grinderRegrindOutputKg,
+          dustKg: outputKgByName(grinderOutputRows, ["DUST"]),
+          metalRejectKg: outputKgByName(grinderOutputRows, ["METAL"]),
+          grinderVarianceKg: grinderVariance,
+          recoveryPercent: grinderRecovery,
+          status: "READY_FOR_WASH",
+          nextProcess: "Wash",
+          operatorName: form.grinderOperatorName,
+          supervisorName: form.grinderSupervisorName,
+          machineRunningHours: form.machineRunningHours,
+          downtimeHours: form.downtimeHours,
+          downtimeReason: form.downtimeReason,
+          remarks: form.remarks,
+          createdBy: "Production Screen",
+        });
+
+        grinderBatchId = grinder.grinderBatchId || "";
+      }
 
       if (washTotalKg > 0 || washOutputKg > 0) {
         if (finalWashRows.length === 0 || washTotalKg <= 0) {
@@ -440,6 +540,7 @@ export default function Production() {
 
         const wash = await apiCall({
           fn: "wash.add",
+          sourceGrinderBatchId: grinderBatchId,
           date: form.date,
           shift: form.shift,
           machine: form.machineWash,
@@ -600,11 +701,12 @@ export default function Production() {
 
       if (
         washTotalKg <= 0 &&
+        grinderTotalKg <= 0 &&
         sorterTotalKg <= 0 &&
         totalFeedKg <= 0 &&
         extrusionTotalOutput <= 0
       ) {
-        setMessage("Enter wash, sorting or extrusion data before saving.");
+        setMessage("Enter grinder, wash, sorting or extrusion data before saving.");
         setSaving(false);
         return;
       }
@@ -622,9 +724,10 @@ export default function Production() {
   return (
     <PageLayout
       title="Production Entry"
-      subtitle="One shift entry screen for Washline, Colour Sorter and Extrusion. Raw Material and Finished Goods quality testing is performed separately in the Quality Workbench."
+      subtitle="One shift entry screen for Grinder, Washline, Colour Sorter and Extrusion. Raw Material and Finished Goods quality testing is performed separately in the Quality Workbench."
     >
       <div className="factory-kpi-grid">
+        <KpiCard title="Grinder Recovery" value={grinderRecovery ? `${grinderRecovery}%` : "-"} tone={grinderRecovery ? "positive" : "neutral"} />
         <KpiCard title="Wash Recovery" value={washRecovery ? `${washRecovery}%` : "—"} tone={washRecovery ? "positive" : "neutral"} />
         <KpiCard title="Sorting Recovery" value={sorterRecovery ? `${sorterRecovery}%` : "—"} tone={sorterRecovery ? "positive" : "neutral"} />
         <KpiCard title="Extrusion Recovery" value={extrusionRecovery ? `${extrusionRecovery}%` : "—"} tone={extrusionRecovery ? "positive" : "neutral"} />
@@ -656,6 +759,62 @@ export default function Production() {
             value={form.shift}
             onChange={onChange}
             options={["A", "B", "C"]}
+          />
+        </FormSection>
+
+        <FormSection title="Grinder">
+          <Field
+            label="Operator"
+            name="grinderOperatorName"
+            value={form.grinderOperatorName}
+            onChange={onChange}
+          />
+
+          <Field
+            label="Supervisor"
+            name="grinderSupervisorName"
+            value={form.grinderSupervisorName}
+            onChange={onChange}
+          />
+
+          <FactorySelectField
+            label="Machine"
+            masterType="machine"
+            name="machineGrinder"
+            value={form.machineGrinder}
+            onChange={onChange}
+            placeholder="Select Machine"
+            defaults={{ processType: "GRINDER" }}
+            filter={(item) => {
+              const process = String(item.processType || item.machineType || "").toUpperCase();
+              return !process || process.includes("GRIND");
+            }}
+          />
+
+          <ManufacturingInputTable
+            title="Grinder Input Materials"
+            rows={grinderFeedRows}
+            setRows={setGrinderFeedRows}
+            inventoryLots={inventoryLots}
+            materialPlaceholder="Select Bucket Material"
+            quantityLabel="Consume Qty"
+            filterCategories={["RM"]}
+          />
+
+          <ManufacturingOutputTable
+            title="Grinder Output Materials"
+            rows={grinderOutputRows}
+            setRows={setGrinderOutputRows}
+            materialPlaceholder="Select Output Material"
+            filterCategories={["WIP", "WASTE", "REWORK"]}
+          />
+
+          <ManufacturingSummary
+            totalInputKg={grinderSummary.totalInputKg}
+            totalOutputKg={grinderSummary.totalOutputKg}
+            recoveryPercent={grinderSummary.recoveryPercent}
+            varianceKg={grinderSummary.varianceKg}
+            difference={grinderSummary.difference}
           />
         </FormSection>
 

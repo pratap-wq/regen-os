@@ -239,6 +239,7 @@ function inferMaterialCategory(name, hint = "") {
 
   if (/\b(E[1-5])\b/.test(text) || text.includes("FINISHED")) return "FG";
   if (text.includes("WASTE") || text.includes("REJECT") || text.includes("DUST") || text.includes("SINK")) return "WASTE";
+  if (text.includes("WHITE REGRIND (UNWASHED)") || (text.includes("REGRIND") && text.includes("UNWASHED"))) return "WIP";
   if (text.includes("REWORK") || text.includes("LUMP") || text.includes("PURGING")) return "REWORK";
   if (text.includes("ADDITIVE") || text.includes("MASTERBATCH") || text.includes("ANTIOXIDANT") || text.includes("VIRGIN")) return "ADDITIVE";
   if (text.includes("WASHED") || text.includes("SORTED") || text.includes("WIP") || text.includes("COMMODITY")) return "WIP";

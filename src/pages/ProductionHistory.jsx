@@ -8,6 +8,7 @@ import { normalizeInventoryMaterial } from "../services/inventoryEngine";
 const SHIFT_OPTIONS = ["A", "B", "C"];
 const STATUS_OPTIONS = [
   "ACTIVE",
+  "READY_FOR_WASH",
   "WASH_COMPLETED",
   "READY_FOR_SORTING",
   "READY_FOR_EXTRUSION",
@@ -16,6 +17,7 @@ const STATUS_OPTIONS = [
   "HOLD",
 ];
 const NEXT_PROCESS_OPTIONS = [
+  "Wash",
   "Colour Sorting",
   "Extrusion",
   "Dispatch",
@@ -32,11 +34,12 @@ const SOURCE_TYPE_OPTIONS = [
   "WIP",
   "ADDITIVE",
 ];
-const PROCESS_OPTIONS = ["Wash", "Sorting", "Extrusion"];
+const PROCESS_OPTIONS = ["Grinder", "Wash", "Sorting", "Extrusion"];
 
 export default function ProductionHistory() {
   const now = new Date();
 
+  const [grinderRows, setGrinderRows] = useState([]);
   const [washRows, setWashRows] = useState([]);
   const [sortingRows, setSortingRows] = useState([]);
   const [extrusionRows, setExtrusionRows] = useState([]);
@@ -71,11 +74,16 @@ export default function ProductionHistory() {
 
   async function loadData() {
     try {
-      const [wash, sorting, extrusion] = await Promise.all([
+      const [grinder, wash, sorting, extrusion] = await Promise.all([
+        safeList("grinder.list"),
         safeList("wash.list"),
         safeList("sorting.list"),
         safeList("extrusion.list"),
       ]);
+
+      setGrinderRows(
+        grinder.filter((r) => String(r.status || "").toUpperCase() !== "DELETED")
+      );
 
       setWashRows(
         wash.filter((r) => String(r.status || "").toUpperCase() !== "DELETED")
@@ -147,6 +155,10 @@ export default function ProductionHistory() {
     return n(row.washedOutputKg);
   }
 
+  function grinderOutput(row) {
+    return n(row.regrindOutputKg);
+  }
+
   function sortingOutput(row) {
     return (
       n(row.acceptedQtyKg) ||
@@ -167,6 +179,29 @@ export default function ProductionHistory() {
 
   const rows = useMemo(() => {
     const all = [];
+
+    grinderRows.forEach((r) => {
+      all.push({
+        id: r.grinderBatchId || r.batchId || r.id || "",
+        process: "Grinder",
+        updateFn: "grinder.update",
+        idKey: "grinderBatchId",
+        date: r.date,
+        shift: r.shift,
+        material: r.inputMaterial,
+        machine: r.machine,
+        inputKg: n(r.inputWeightKg),
+        outputKg: grinderOutput(r),
+        recovery:
+          n(r.inputWeightKg) > 0
+            ? (grinderOutput(r) / n(r.inputWeightKg)) * 100
+            : 0,
+        operator: r.operatorName,
+        supervisor: r.supervisorName,
+        status: r.status,
+        source: r,
+      });
+    });
 
     washRows.forEach((r) => {
       all.push({
@@ -243,13 +278,57 @@ export default function ProductionHistory() {
           String(dateForInput(a.date || ""))
         )
       );
-  }, [washRows, sortingRows, extrusionRows, month, year]);
+  }, [grinderRows, washRows, sortingRows, extrusionRows, month, year]);
 
   const totalInput = rows.reduce((s, r) => s + n(r.inputKg), 0);
   const totalOutput = rows.reduce((s, r) => s + n(r.outputKg), 0);
   const avgRecovery = totalInput > 0 ? (totalOutput / totalInput) * 100 : 0;
 
   function getEditSections(row) {
+    if (row.process === "Grinder") {
+      return [
+        {
+          title: "Batch Details",
+          fields: [
+            ["__process", "Process", "processSelect"],
+            ["date", "Date", "date"],
+            ["shift", "Shift", "shiftSelect"],
+            ["machine", "Machine", "machineSelect"],
+            ["inputMaterial", "Input Material", "materialSelect"],
+            ["inputWeightKg", "Input Kg", "number"],
+            ["regrindOutputKg", "White Regrind (Unwashed) Kg", "number"],
+          ],
+        },
+        {
+          title: "Grinder Outputs",
+          fields: [
+            ["dustKg", "Dust Kg", "number"],
+            ["metalRejectKg", "Metal Reject Kg", "number"],
+            ["grinderVarianceKg", "Grinder Variance Kg", "number"],
+            ["recoveryPercent", "Recovery %", "number"],
+          ],
+        },
+        {
+          title: "Downtime",
+          fields: [
+            ["machineRunningHours", "Machine Running Hours", "number"],
+            ["downtimeHours", "Downtime Hours", "number"],
+            ["downtimeReason", "Downtime Reason", "textarea"],
+          ],
+        },
+        {
+          title: "People / Status",
+          fields: [
+            ["operatorName", "Operator", "text"],
+            ["supervisorName", "Supervisor", "text"],
+            ["nextProcess", "Next Process", "nextProcessSelect"],
+            ["status", "Status", "statusSelect"],
+            ["remarks", "Remarks", "textarea"],
+          ],
+        },
+      ];
+    }
+
     if (row.process === "Wash") {
       return [
         {
@@ -421,6 +500,17 @@ export default function ProductionHistory() {
     const source = { ...(row.source || {}) };
     source.__process = row.process;
     source.date = dateForInput(source.date || row.date);
+
+    if (row.process === "Grinder") {
+      source.grinderBatchId = source.grinderBatchId || row.id;
+      source.inputMaterial = source.inputMaterial || row.material || "";
+      source.inputWeightKg = source.inputWeightKg || row.inputKg || "";
+      source.regrindOutputKg = source.regrindOutputKg || row.outputKg || "";
+      source.operatorName = source.operatorName || row.operator || "";
+      source.supervisorName = source.supervisorName || row.supervisor || "";
+      source.nextProcess = source.nextProcess || "Wash";
+      source.status = source.status || row.status || "";
+    }
 
     if (row.process === "Wash") {
       source.washBatchId = source.washBatchId || row.id;
@@ -606,7 +696,7 @@ export default function ProductionHistory() {
           <div style={eyebrow}>Operations Review</div>
           <h1 style={title}>Production History</h1>
           <div style={subtitle}>
-            Complete history of Wash, Sorting and Extrusion batches with full popup editing.
+            Complete history of Grinder, Wash, Sorting and Extrusion batches with full popup editing.
           </div>
         </div>
 
@@ -893,6 +983,7 @@ function machineMatchesProcess(item, process) {
   if (!rowProcess) return true;
 
   const current = String(process || "").toUpperCase();
+  if (current === "GRINDER") return rowProcess.includes("GRIND");
   if (current === "WASH") return rowProcess.includes("WASH");
   if (current === "SORTING") return rowProcess.includes("SORT");
   if (current === "EXTRUSION") {

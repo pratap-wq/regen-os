@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test:grinder": "node scripts/grinder-flow-test.mjs",
     "lint": "eslint .",
     "preview": "vite preview"
   },

@@ -73,6 +73,11 @@ function doGet(e) {
     if (p.fn === "suppliers.list") return listMaster("Suppliers");
     if (p.fn === "customers.list") return listMaster("Customers");
 
+    // Grinder
+    if (p.fn === "grinder.add") return addGrinderBatch(p);
+    if (p.fn === "grinder.list") return listMaster("Grinder_Batches");
+    if (p.fn === "grinder.update") return updateGrinderBatch(p);
+
     // Wash
     if (p.fn === "wash.add") return addWashBatch(p);
     if (p.fn === "wash.list") return listMaster("Wash_Batches");
@@ -507,7 +512,7 @@ function output(obj) {
 // Never deletes data, never renames operational sheets.
 // ============================================================
 
-const REGEN_DB_SCHEMA_VERSION = "2026.07.06-v1";
+const REGEN_DB_SCHEMA_VERSION = "2026.07.08-v2-grinder";
 
 const REGEN_DB_SCHEMA = {
   Month_Close: [
@@ -876,6 +881,36 @@ const REGEN_DB_SCHEMA = {
     "freightPerKg",
     "status",
   ],
+  Grinder_Batches: [
+    "grinderBatchId",
+    "batchId",
+    "date",
+    "periodMonth",
+    "shift",
+    "machine",
+    "entryMode",
+    "inputMaterial",
+    "inputWeightKg",
+    "feedComposition",
+    "outputComposition",
+    "regrindOutputKg",
+    "dustKg",
+    "metalRejectKg",
+    "grinderVarianceKg",
+    "recoveryPercent",
+    "operatorName",
+    "supervisorName",
+    "machineRunningHours",
+    "downtimeHours",
+    "downtimeReason",
+    "remarks",
+    "status",
+    "nextProcess",
+    "linkedWashBatchId",
+    "createdBy",
+    "createdAt",
+    "updatedAt",
+  ],
   Wash_Batches: [
     "washBatchId",
     "date",
@@ -903,6 +938,7 @@ const REGEN_DB_SCHEMA = {
     "sortingRequired",
     "nextProcess",
     "sourceRmInwardId",
+    "sourceGrinderBatchId",
     "linkedSortingBatchId",
     "linkedExtrusionBatchId",
     "supervisorName",
@@ -2261,6 +2297,7 @@ function categorizeMaterialBuilderName_(name, entry = {}) {
   if (sourceSheet === "RM_INWARD") return { category: "RM", confidence: 95, reason: "RM inward source" };
   if (sourceField.indexOf("PRODUCTIONGRADE") !== -1 || sourceField.indexOf("GRADE") !== -1) return { category: "FG", confidence: 92, reason: "Grade field" };
   if (/VIRGIN|MASTERBATCH|ANTIOXIDANT|ADDITIVE|MB\b/.test(text)) return { category: "ADDITIVE", confidence: 92, reason: "Additive keyword" };
+  if (/WHITE\s+REGRIND.*UNWASHED|UNWASHED.*REGRIND/.test(text)) return { category: "WIP", confidence: 94, reason: "Grinder WIP output" };
   if (/REWORK|LUMP|PURGING|REGRIND/.test(text)) return { category: "REWORK", confidence: 88, reason: "Rework keyword" };
   if (/WASTE|REJECT|DUST|SINK|SLUDGE|RAFFIA|WRAPPER|SPILLAGE|VACUUM|MESH/.test(text)) return { category: "WASTE", confidence: 90, reason: "Waste keyword" };
   if (/WASHED|SORTED|COMMODITY|FLAKES - WASHED|FLAKES - SEMI/.test(text)) return { category: "WIP", confidence: 82, reason: "WIP keyword" };
@@ -2334,6 +2371,7 @@ function seedMaterialMasterDefaults() {
     ["JARS", "Jars", "RM"],
     ["LIDS", "Lids", "RM"],
     ["PP_MIXED", "PP Mixed", "RM"],
+    ["WHITE_REGRIND_UNWASHED", "White Regrind (Unwashed)", "WIP"],
     ["WASHED_WHITE_FLAKES", "Washed White Flakes", "WIP"],
     ["WASHED_MIXED", "Washed Mixed", "WIP"],
     ["WHITE_SORTED", "White Sorted", "WIP"],
@@ -3589,6 +3627,7 @@ function materialCategory_(materialName) {
   const name = String(materialName || "").toUpperCase();
   if (/^E[1-5]$/.test(name)) return "FG";
   if (name.indexOf("WASTE") !== -1 || name.indexOf("REJECT") !== -1 || name.indexOf("DUST") !== -1 || name.indexOf("SINK") !== -1 || name.indexOf("PURGING") !== -1 || name.indexOf("LUMP") !== -1) return "WASTE";
+  if (name.indexOf("WHITE REGRIND (UNWASHED)") !== -1 || (name.indexOf("REGRIND") !== -1 && name.indexOf("UNWASHED") !== -1)) return "WIP";
   if (name.indexOf("WASHED") !== -1 || name.indexOf("SORTED") !== -1 || name.indexOf("COMMODITY") !== -1 || name.indexOf("REWORK") !== -1) return "WIP";
   return "RM";
 }
@@ -5060,6 +5099,262 @@ function postManufacturingCompositionLedger_(options) {
   return result;
 }
 
+const GRINDER_OUTPUT_MATERIAL = "White Regrind (Unwashed)";
+
+function normalizeGrinderOutputComposition_(data = {}) {
+  let rows = [];
+
+  if (data.outputComposition) {
+    try {
+      const parsed = typeof data.outputComposition === "string"
+        ? JSON.parse(data.outputComposition)
+        : data.outputComposition;
+      rows = Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      rows = [];
+    }
+  }
+
+  rows = rows
+    .map(function(row) {
+      const material = String(row.material || row.materialType || row.outputMaterial || "").trim();
+      const qtyKg = num(row.qtyKg || row.quantityKg || row.outputQty || row.quantity);
+      if (!material || qtyKg <= 0) return null;
+
+      const upper = material.toUpperCase();
+      if (/^E[1-5]$/.test(upper)) {
+        throw new Error("Grinder cannot create finished goods grade " + material + ". Use " + GRINDER_OUTPUT_MATERIAL + ".");
+      }
+
+      return {
+        material: upper.indexOf("REGRIND") !== -1 ? GRINDER_OUTPUT_MATERIAL : material,
+        qtyKg: qtyKg,
+        remarks: row.remarks || "",
+      };
+    })
+    .filter(function(row) { return row; });
+
+  const hasRegrind = rows.some(function(row) {
+    return String(row.material || "").toUpperCase() === GRINDER_OUTPUT_MATERIAL.toUpperCase();
+  });
+
+  if (!hasRegrind && num(data.regrindOutputKg) > 0) {
+    rows.unshift({
+      material: GRINDER_OUTPUT_MATERIAL,
+      qtyKg: num(data.regrindOutputKg),
+      remarks: "",
+    });
+  }
+
+  const hasDust = rows.some(function(row) {
+    return String(row.material || "").toUpperCase().indexOf("DUST") !== -1;
+  });
+
+  if (!hasDust && num(data.dustKg) > 0) {
+    rows.push({
+      material: "Dust",
+      qtyKg: num(data.dustKg),
+      remarks: "",
+    });
+  }
+
+  const hasMetalReject = rows.some(function(row) {
+    return String(row.material || "").toUpperCase().indexOf("METAL") !== -1;
+  });
+
+  if (!hasMetalReject && num(data.metalRejectKg) > 0) {
+    rows.push({
+      material: "Metal Reject",
+      qtyKg: num(data.metalRejectKg),
+      remarks: "",
+    });
+  }
+
+  if (!rows.length) return "";
+  return JSON.stringify(rows);
+}
+
+function grinderOutputQtyFromComposition_(outputComposition) {
+  return parseManufacturingCompositionRows_(
+    outputComposition,
+    ["material", "materialType", "outputMaterial"],
+    ["qtyKg", "quantityKg", "outputQty", "quantity"]
+  )
+    .filter(function(row) {
+      return String(row.material || "").toUpperCase() === GRINDER_OUTPUT_MATERIAL.toUpperCase() ||
+        String(row.material || "").toUpperCase().indexOf("REGRIND") !== -1;
+    })
+    .reduce(function(sum, row) { return sum + num(row.qtyKg); }, 0);
+}
+
+function addGrinderBatch(data = {}) {
+  validateOperationalWrite_(data);
+
+  const sh = getSheet("Grinder_Batches");
+  ensureHeaders_("Grinder_Batches", [
+    "grinderBatchId",
+    "batchId",
+    "date",
+    "periodMonth",
+    "shift",
+    "machine",
+    "entryMode",
+    "inputMaterial",
+    "inputWeightKg",
+    "feedComposition",
+    "outputComposition",
+    "regrindOutputKg",
+    "dustKg",
+    "metalRejectKg",
+    "grinderVarianceKg",
+    "recoveryPercent",
+    "operatorName",
+    "supervisorName",
+    "machineRunningHours",
+    "downtimeHours",
+    "downtimeReason",
+    "remarks",
+    "status",
+    "nextProcess",
+    "linkedWashBatchId",
+    "createdBy",
+    "createdAt",
+    "updatedAt",
+  ]);
+
+  const grinderBatchId = data.grinderBatchId || data.batchId || generateBatchId("GB");
+  const date = normalizeDateOnly_(data.date || todayYmd());
+  const outputComposition = normalizeGrinderOutputComposition_(data);
+  const inputWeightKg = num(data.inputWeightKg);
+  const regrindOutputKg = num(data.regrindOutputKg) || grinderOutputQtyFromComposition_(outputComposition);
+  const dustKg = num(data.dustKg);
+  const metalRejectKg = num(data.metalRejectKg);
+  const totalOutputKg = regrindOutputKg + dustKg + metalRejectKg;
+  const grinderVarianceKg =
+    data.grinderVarianceKg !== undefined && data.grinderVarianceKg !== ""
+      ? num(data.grinderVarianceKg)
+      : inputWeightKg - totalOutputKg;
+  const recoveryPercent =
+    data.recoveryPercent !== undefined && data.recoveryPercent !== ""
+      ? num(data.recoveryPercent)
+      : inputWeightKg > 0
+      ? round2((regrindOutputKg / inputWeightKg) * 100)
+      : 0;
+
+  if (inputWeightKg <= 0) {
+    throw new Error("Grinder input weight is required.");
+  }
+
+  if (regrindOutputKg <= 0) {
+    throw new Error("Grinder output must include " + GRINDER_OUTPUT_MATERIAL + ".");
+  }
+
+  appendObjectRow(sh, {
+    grinderBatchId,
+    batchId: grinderBatchId,
+    date,
+    periodMonth: data.periodMonth || getPeriodMonth(date),
+    shift: data.shift || "",
+    machine: data.machine || "",
+    entryMode: data.entryMode || "DAILY",
+    inputMaterial: data.inputMaterial || "",
+    inputWeightKg,
+    feedComposition: data.feedComposition || "",
+    outputComposition,
+    regrindOutputKg,
+    dustKg,
+    metalRejectKg,
+    grinderVarianceKg,
+    recoveryPercent,
+    operatorName: data.operatorName || "",
+    supervisorName: data.supervisorName || "",
+    machineRunningHours: num(data.machineRunningHours),
+    downtimeHours: num(data.downtimeHours),
+    downtimeReason: data.downtimeReason || "",
+    remarks: data.remarks || "",
+    status: data.status || "READY_FOR_WASH",
+    nextProcess: data.nextProcess || "Wash",
+    linkedWashBatchId: data.linkedWashBatchId || "",
+    createdBy: data.createdBy || "System",
+    createdAt: new Date(),
+    updatedAt: "",
+  });
+
+  const ledger = postManufacturingCompositionLedger_({
+    date,
+    module: "GRINDER",
+    sourceRef: grinderBatchId,
+    targetRef: grinderBatchId,
+    inputs: data.feedComposition,
+    outputs: outputComposition,
+    createdBy: data.createdBy || "System",
+  });
+
+  return output({
+    ok: true,
+    grinderBatchId,
+    batchId: grinderBatchId,
+    outputMaterial: GRINDER_OUTPUT_MATERIAL,
+    ledger,
+  });
+}
+
+function updateGrinderBatch(data = {}) {
+  const idValue = data.grinderBatchId || data.batchId;
+  validateOperationalWrite_(
+    data,
+    getRowById_("Grinder_Batches", "grinderBatchId", idValue)
+  );
+
+  const date = normalizeDateOnly_(data.date || todayYmd());
+  const outputComposition = normalizeGrinderOutputComposition_(data);
+  const inputWeightKg = num(data.inputWeightKg);
+  const regrindOutputKg = num(data.regrindOutputKg) || grinderOutputQtyFromComposition_(outputComposition);
+  const dustKg = num(data.dustKg);
+  const metalRejectKg = num(data.metalRejectKg);
+  const totalOutputKg = regrindOutputKg + dustKg + metalRejectKg;
+
+  return updateById(
+    "Grinder_Batches",
+    "grinderBatchId",
+    idValue,
+    {
+      date,
+      periodMonth: data.periodMonth || getPeriodMonth(date),
+      shift: data.shift || "",
+      machine: data.machine || "",
+      entryMode: data.entryMode || "DAILY",
+      inputMaterial: data.inputMaterial || "",
+      inputWeightKg,
+      feedComposition: data.feedComposition || "",
+      outputComposition,
+      regrindOutputKg,
+      dustKg,
+      metalRejectKg,
+      grinderVarianceKg:
+        data.grinderVarianceKg !== undefined && data.grinderVarianceKg !== ""
+          ? num(data.grinderVarianceKg)
+          : inputWeightKg - totalOutputKg,
+      recoveryPercent:
+        data.recoveryPercent !== undefined && data.recoveryPercent !== ""
+          ? num(data.recoveryPercent)
+          : inputWeightKg > 0
+          ? round2((regrindOutputKg / inputWeightKg) * 100)
+          : 0,
+      operatorName: data.operatorName || "",
+      supervisorName: data.supervisorName || "",
+      machineRunningHours: num(data.machineRunningHours),
+      downtimeHours: num(data.downtimeHours),
+      downtimeReason: data.downtimeReason || "",
+      remarks: data.remarks || "",
+      status: data.status || "",
+      nextProcess: data.nextProcess || "",
+      linkedWashBatchId: data.linkedWashBatchId || "",
+      updatedAt: new Date(),
+    }
+  );
+}
+
 function addWashBatch(data = {}) {
 
   validateOperationalWrite_(data);
@@ -5068,6 +5363,7 @@ function addWashBatch(data = {}) {
 
   ensureHeaders_("Wash_Batches",[
     "washBatchId","batchId","sourceRMId","sourceRmInwardId","supplier",
+    "sourceGrinderBatchId",
     "availableRMQty","date","shift","machine","entryMode","periodMonth",
     "inputMaterial","inputWeightKg","feedComposition","outputComposition","washedOutputKg",
     "raffiaKg","wrappersKg","microPlasticKg","sinkMaterialKg",
@@ -5112,6 +5408,7 @@ function addWashBatch(data = {}) {
 
     sourceRMId:data.sourceRMId||"",
     sourceRmInwardId:data.sourceRmInwardId||"",
+    sourceGrinderBatchId:data.sourceGrinderBatchId||"",
     supplier:data.supplier||"",
     availableRMQty:num(data.availableRMQty),
 
@@ -5193,6 +5490,7 @@ function updateWashBatch(data = {}) {
 
       sourceRMId:data.sourceRMId||"",
       sourceRmInwardId:data.sourceRmInwardId||"",
+      sourceGrinderBatchId:data.sourceGrinderBatchId||"",
       supplier:data.supplier||"",
       availableRMQty:num(data.availableRMQty),
 
@@ -6711,6 +7009,7 @@ function buildInventoryLedgerRowsFromSources_() {
   };
 
   rebuildFromRmInward_(ctx);
+  rebuildFromGrinderBatches_(ctx);
   rebuildFromWashBatches_(ctx);
   rebuildFromSortingBatches_(ctx);
   rebuildFromExtrusionBatches_(ctx);
@@ -6799,6 +7098,75 @@ function rebuildFromRmInward_(ctx) {
         qtyOut: 0,
         unit: "Kg",
         remarks: "Approved RM receiving rebuilt from RM_Inward",
+        createdBy: row.createdBy || "Ledger Rebuild",
+      });
+    });
+  });
+}
+
+function rebuildFromGrinderBatches_(ctx) {
+  const rows = getRowsAsObjects("Grinder_Batches").filter((row) => !isDeleted_(row));
+  rows.forEach((row, index) => {
+    const sourceId = String(row.grinderBatchId || row.batchId || "GRIND-" + (index + 1));
+    const inputLines = parseManufacturingCompositionRows_(
+      row.feedComposition,
+      ["material", "materialType", "sourceType", "inputBucket"],
+      ["qtyKg", "quantityKg", "consumeQty", "quantity"]
+    );
+
+    const inputs = inputLines.length
+      ? inputLines
+      : [{ material: materialName_(row.inputMaterial, "White Buckets"), qtyKg: num(row.inputWeightKg) }];
+
+    inputs.forEach(function(input) {
+      const inputMaterial = materialName_(input.material, "White Buckets");
+      pushRebuiltLedgerRow_(ctx, "Grinder_Batches", sourceId, {
+        date: row.date,
+        module: "GRINDER",
+        movementType: "OUT",
+        itemType: materialCategory_(inputMaterial),
+        itemName: inputMaterial,
+        sourceRef: sourceId,
+        targetRef: sourceId,
+        qtyIn: 0,
+        qtyOut: num(input.qtyKg),
+        unit: "Kg",
+        remarks: "Grinder input consumption rebuilt from Grinder_Batches",
+        createdBy: row.createdBy || "Ledger Rebuild",
+      });
+    });
+
+    const outputLines = parseManufacturingCompositionRows_(
+      row.outputComposition,
+      ["material", "materialType", "outputMaterial"],
+      ["qtyKg", "quantityKg", "outputQty", "quantity"]
+    );
+
+    const outputs = outputLines.length
+      ? outputLines
+      : [
+          { material: GRINDER_OUTPUT_MATERIAL, qtyKg: num(row.regrindOutputKg) },
+          { material: "Dust", qtyKg: num(row.dustKg) },
+          { material: "Metal Reject", qtyKg: num(row.metalRejectKg) },
+        ];
+
+    outputs.forEach(function(outputRow) {
+      const outputMaterial = String(outputRow.material || "").toUpperCase().indexOf("REGRIND") !== -1
+        ? GRINDER_OUTPUT_MATERIAL
+        : materialName_(outputRow.material, "");
+
+      pushRebuiltLedgerRow_(ctx, "Grinder_Batches", sourceId, {
+        date: row.date,
+        module: "GRINDER",
+        movementType: "IN",
+        itemType: materialCategory_(outputMaterial),
+        itemName: outputMaterial,
+        sourceRef: sourceId,
+        targetRef: sourceId,
+        qtyIn: num(outputRow.qtyKg),
+        qtyOut: 0,
+        unit: "Kg",
+        remarks: "Grinder output rebuilt from Grinder_Batches",
         createdBy: row.createdBy || "Ledger Rebuild",
       });
     });
@@ -8392,7 +8760,7 @@ function juneLedgerV1CompactSummary_(beforeBalances, afterBalances, rowsToReplac
 function juneManufacturingMonthCloseMaterials_() {
   return [
     "White Flakes",
-    "White Regrind",
+    "White Regrind (Unwashed)",
     "Mixed Material",
     "Washed White Flakes",
     "Washed Mixed",

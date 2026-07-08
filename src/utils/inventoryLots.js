@@ -4,12 +4,14 @@ export function n(value) {
 
 export function buildInventoryLots({
   rmRows = [],
+  grinderRows = [],
   washRows = [],
   sortingRows = [],
   extrusionRows = [],
   dispatchRows = [],
 }) {
   const lots = [];
+  const GRINDER_OUTPUT_MATERIAL = "White Regrind (Unwashed)";
 
   function parseMaterialLines(value) {
     if (!value) return [];
@@ -61,6 +63,34 @@ export function buildInventoryLots({
         availableKg: qty,
         date: r.date || "",
         label: `${r.inwardId || "RM"} | ${r.material || ""} | ${qty} Kg`,
+      });
+    }
+  });
+
+  grinderRows.forEach((r) => {
+    const outputLines = parseMaterialLines(r.outputComposition)
+      .map((line) => ({
+        material: line.material || line.materialName || "",
+        quantityKg: n(line.quantityKg || line.qtyKg || line.quantity),
+      }))
+      .filter((line) => line.material && line.quantityKg > 0);
+
+    const regrindLines = outputLines.filter((line) =>
+      String(line.material || "").toUpperCase().includes("REGRIND")
+    );
+
+    const qty =
+      regrindLines.reduce((s, line) => s + line.quantityKg, 0) ||
+      n(r.regrindOutputKg);
+
+    if (qty > 0) {
+      lots.push({
+        lotId: r.grinderBatchId || r.batchId || r.id || "",
+        sourceType: "GRINDER",
+        material: GRINDER_OUTPUT_MATERIAL,
+        availableKg: qty,
+        date: r.date || "",
+        label: `${r.grinderBatchId || "GB"} | ${GRINDER_OUTPUT_MATERIAL} | ${qty} Kg`,
       });
     }
   });

@@ -99,7 +99,7 @@ Production flow:
 RM Inward -> Grinder optional -> Wash -> Colour Sorter optional -> Extrusion -> Finished Goods -> Dispatch
 ```
 
-Grinder is the optional first production process before Wash. It consumes in-house RM buckets and produces the controlled WIP material `Unwashed White Regrind`. Grinder must not create finished goods directly. Wash can consume either RM material directly or `Unwashed White Regrind` from grinder output stock.
+Grinder is the optional first production process before Wash. It consumes in-house RM buckets and produces the controlled WIP material `White Regrind (Unwashed)`. Grinder must not create finished goods directly. Wash can consume either RM material directly or `White Regrind (Unwashed)` from grinder output stock.
 
 Traceability is drill-down only:
 
@@ -204,6 +204,7 @@ Ledger rows must not store:
 ```mermaid
 flowchart TD
   MM["Material_Master"] --> RM["RM_Inward"]
+  MM --> Grinder["Grinder_Batches"]
   MM --> Wash["Wash_Batches"]
   MM --> Sort["Sorting_Batches"]
   MM --> Ext["Extrusion_Batches"]
@@ -212,6 +213,7 @@ flowchart TD
   Recipe["Production_Recipes"] --> Components["Recipe_Components"]
   Components --> Ext
   RM --> Ledger["Inventory_Ledger"]
+  Grinder --> Ledger
   Wash --> Ledger
   Sort --> Ledger
   Ext --> Ledger
@@ -269,8 +271,8 @@ No historical source-sheet migration is required for this stabilization pass.
 ## Current Priority Roadmap
 
 1. Dispatch FG-stock fix: completed.
-2. Production History dropdown edits: next.
-3. Grinder production stage: next after dropdowns.
+2. Production History dropdown edits: completed.
+3. Grinder production stage: completed.
 4. Month Close inventory unification.
 5. Live Inventory ledger alignment.
 6. Historical ledger repair utility.

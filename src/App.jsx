@@ -43,6 +43,7 @@ import StoresCosting from "./pages/StoresCosting";
 
 import AlertSettings from "./pages/AlertSettings";
 import AlertCenter from "./pages/AlertCenter";
+import SystemHealth from "./pages/SystemHealth";
 export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -145,6 +146,7 @@ export default function App() {
               <Route path="/factory-expenses" element={<FactoryExpenses />} />
               <Route path="/alert-center" element={<AlertCenter />} />
               <Route path="/alert-settings" element={<AlertSettings />} />
+              <Route path="/system-health" element={<SystemHealth />} />
 
               <Route path="*" element={<Navigate to="/dashboard" />} />
             </Routes>

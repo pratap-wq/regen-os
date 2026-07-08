@@ -68,7 +68,7 @@ const sample = {
       inputWeightKg: 8000,
       feedComposition: JSON.stringify([{ sourceType: "GRINDER", materialType: REGRIND, qtyKg: 8000 }]),
       outputComposition: JSON.stringify([
-        { material: "Washed White Flakes", qtyKg: 7200 },
+        { material: "White Regrind (Washed)", qtyKg: 7200 },
         { material: "Sink Material", qtyKg: 500 },
         { material: "Dust", qtyKg: 100 },
       ]),
@@ -89,11 +89,11 @@ const sample = {
       shift: "A",
       machine: "TEST-SORTER-01",
       sourceWashBatchId: `${TEST_RUN_ID}-WB-001`,
-      inputMaterial: "Washed White Flakes",
+      inputMaterial: "White Regrind (Washed)",
       inputWeightKg: 7000,
-      feedComposition: JSON.stringify([{ sourceType: "WASH", materialType: "Washed White Flakes", qtyKg: 7000 }]),
+      feedComposition: JSON.stringify([{ sourceType: "WASH", materialType: "White Regrind (Washed)", qtyKg: 7000 }]),
       outputComposition: JSON.stringify([
-        { material: "White Sorted", qtyKg: 6500 },
+        { material: "White Sorted Regrind", qtyKg: 6500 },
         { material: "Color Reject", qtyKg: 300 },
         { material: "Dust", qtyKg: 100 },
       ]),
@@ -116,10 +116,10 @@ const sample = {
       machine: "TEST-EXTRUDER-01",
       sourceSortingBatchId: `${TEST_RUN_ID}-SB-001`,
       sourceType: "PRODUCTION_SHIFT",
-      inputMaterial: "White Sorted",
+      inputMaterial: "White Sorted Regrind",
       inputWeightKg: 6400,
       totalInputKg: 6400,
-      feedComposition: JSON.stringify([{ sourceType: "SORTING", materialType: "White Sorted", qtyKg: 6400 }]),
+      feedComposition: JSON.stringify([{ sourceType: "SORTING", materialType: "White Sorted Regrind", qtyKg: 6400 }]),
       outputComposition: JSON.stringify([
         { material: "E1", qtyKg: 5600 },
         { material: "Rework Material", qtyKg: 500 },
@@ -190,20 +190,20 @@ function ledgerRowsFromSample() {
 
   sample.washRows.forEach((row) => {
     push({ ledgerId: `${TEST_RUN_ID}-LED-WASH-OUT-001`, module: "WASH", movementType: "OUT", itemType: "WIP", itemName: REGRIND, sourceRef: row.sourceGrinderBatchId, targetRef: row.washBatchId, qtyIn: 0, qtyOut: 8000 });
-    push({ ledgerId: `${TEST_RUN_ID}-LED-WASH-IN-001`, module: "WASH", movementType: "IN", itemType: "WIP", itemName: "Washed White Flakes", sourceRef: row.washBatchId, targetRef: row.washBatchId, qtyIn: 7200, qtyOut: 0 });
+    push({ ledgerId: `${TEST_RUN_ID}-LED-WASH-IN-001`, module: "WASH", movementType: "IN", itemType: "WIP", itemName: "White Regrind (Washed)", sourceRef: row.washBatchId, targetRef: row.washBatchId, qtyIn: 7200, qtyOut: 0 });
     push({ ledgerId: `${TEST_RUN_ID}-LED-WASH-SINK-001`, module: "WASH", movementType: "IN", itemType: "WASTE", itemName: "Sink Material", sourceRef: row.washBatchId, targetRef: row.washBatchId, qtyIn: 500, qtyOut: 0 });
     push({ ledgerId: `${TEST_RUN_ID}-LED-WASH-DUST-001`, module: "WASH", movementType: "IN", itemType: "WASTE", itemName: "Dust", sourceRef: row.washBatchId, targetRef: row.washBatchId, qtyIn: 100, qtyOut: 0 });
   });
 
   sample.sortingRows.forEach((row) => {
-    push({ ledgerId: `${TEST_RUN_ID}-LED-SORT-OUT-001`, module: "SORTING", movementType: "OUT", itemType: "WIP", itemName: "Washed White Flakes", sourceRef: row.sourceWashBatchId, targetRef: row.sortingBatchId, qtyIn: 0, qtyOut: 7000 });
-    push({ ledgerId: `${TEST_RUN_ID}-LED-SORT-IN-001`, module: "SORTING", movementType: "IN", itemType: "WIP", itemName: "White Sorted", sourceRef: row.sortingBatchId, targetRef: row.sortingBatchId, qtyIn: 6500, qtyOut: 0 });
+    push({ ledgerId: `${TEST_RUN_ID}-LED-SORT-OUT-001`, module: "SORTING", movementType: "OUT", itemType: "WIP", itemName: "White Regrind (Washed)", sourceRef: row.sourceWashBatchId, targetRef: row.sortingBatchId, qtyIn: 0, qtyOut: 7000 });
+    push({ ledgerId: `${TEST_RUN_ID}-LED-SORT-IN-001`, module: "SORTING", movementType: "IN", itemType: "WIP", itemName: "White Sorted Regrind", sourceRef: row.sortingBatchId, targetRef: row.sortingBatchId, qtyIn: 6500, qtyOut: 0 });
     push({ ledgerId: `${TEST_RUN_ID}-LED-SORT-REJECT-001`, module: "SORTING", movementType: "IN", itemType: "WASTE", itemName: "Color Reject", sourceRef: row.sortingBatchId, targetRef: row.sortingBatchId, qtyIn: 300, qtyOut: 0 });
     push({ ledgerId: `${TEST_RUN_ID}-LED-SORT-DUST-001`, module: "SORTING", movementType: "IN", itemType: "WASTE", itemName: "Dust", sourceRef: row.sortingBatchId, targetRef: row.sortingBatchId, qtyIn: 100, qtyOut: 0 });
   });
 
   sample.extrusionRows.forEach((row) => {
-    push({ ledgerId: `${TEST_RUN_ID}-LED-EXT-OUT-001`, module: "EXTRUSION", movementType: "OUT", itemType: "WIP", itemName: "White Sorted", sourceRef: row.sourceSortingBatchId, targetRef: row.extrusionBatchId, qtyIn: 0, qtyOut: 6400 });
+    push({ ledgerId: `${TEST_RUN_ID}-LED-EXT-OUT-001`, module: "EXTRUSION", movementType: "OUT", itemType: "WIP", itemName: "White Sorted Regrind", sourceRef: row.sourceSortingBatchId, targetRef: row.extrusionBatchId, qtyIn: 0, qtyOut: 6400 });
     push({ ledgerId: `${TEST_RUN_ID}-LED-FG-IN-001`, module: "EXTRUSION", movementType: "IN", itemType: "FG", itemName: "E1", sourceRef: row.extrusionBatchId, targetRef: row.extrusionBatchId, qtyIn: 5600, qtyOut: 0 });
     push({ ledgerId: `${TEST_RUN_ID}-LED-EXT-REWORK-001`, module: "EXTRUSION", movementType: "IN", itemType: "REWORK", itemName: "Rework Material", sourceRef: row.extrusionBatchId, targetRef: row.extrusionBatchId, qtyIn: 500, qtyOut: 0 });
     push({ ledgerId: `${TEST_RUN_ID}-LED-EXT-WASTE-001`, module: "EXTRUSION", movementType: "IN", itemType: "WASTE", itemName: "Extrusion Waste", sourceRef: row.extrusionBatchId, targetRef: row.extrusionBatchId, qtyIn: 200, qtyOut: 0 });
@@ -299,8 +299,8 @@ const report = {
   ledgerAfter: {
     [TEST_RM]: balance(ledgerRows, TEST_RM),
     [REGRIND]: balance(ledgerRows, REGRIND),
-    "Washed White Flakes": balance(ledgerRows, "Washed White Flakes"),
-    "White Sorted": balance(ledgerRows, "White Sorted"),
+    "White Regrind (Washed)": balance(ledgerRows, "White Regrind (Washed)"),
+    "White Sorted Regrind": balance(ledgerRows, "White Sorted Regrind"),
     E1: balance(ledgerRows, "E1"),
   },
   checks: {

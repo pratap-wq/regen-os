@@ -45,7 +45,12 @@ export function buildInventoryLots({
       return "White Regrind (Washed)";
     }
 
-    if (text === "WHITE SORTED" || text === "WHITE SORTED FLAKES") {
+    if (
+      text === "WHITE SORTED" ||
+      text === "WHITE SORTED FLAKES" ||
+      text === "SORTED WHITE" ||
+      text === "SORTED MATERIAL"
+    ) {
       return "White Sorted Regrind";
     }
 

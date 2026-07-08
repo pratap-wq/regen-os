@@ -42,11 +42,40 @@ firebase deploy --only hosting --project regenwebsiteregenplasticweb
 |---|---|
 | Material definitions | `Material_Master` |
 | Production dropdown materials | `Production_Material_Master` |
+| Material alias normalization | `Material_Alias_Map` |
 | Machine definitions | `Machine_Master` |
 | Inventory | `Inventory_Ledger` |
 | Factory overhead | `Factory_Expenses` |
 | Production recipes | `Production_Recipes` and `Recipe_Components` |
 | Quality results | `RM_Quality` and `FG_Quality` |
+
+## Master Connectivity Principle
+
+RegenOS must behave as one connected material system. Adding, renaming, disabling, or reclassifying a material must flow through master data and validation before it affects operations.
+
+Critical connectivity rule:
+
+- `Material_Master` is the ledger authority for every inventory-affecting item.
+- `Production_Material_Master` is the production-stage permission layer for operator dropdowns.
+- `Stores_Master` is the stores authority for general consumables and spare items.
+- A production-approved consumable must be linked to `Material_Master` and allowed in `Production_Material_Master` only for the correct stage/direction.
+- General Stores items must never appear in Production Entry, Production History, Dispatch, or production material repair utilities.
+- Alias normalization must be centralized so RM Inward, Production Entry, Production History, Inventory Ledger, Live Inventory, Dispatch, Month Close, and migration/repair utilities all resolve the same canonical material names.
+
+When a material is added or changed, RegenOS must check these connected impacts before use:
+
+- RM Inward allowed material list
+- Production Entry stage/direction dropdowns
+- Production History controlled edit dropdowns
+- Inventory Ledger validation and category
+- Live Inventory grouping
+- Dispatch grade/material validation
+- Month Close opening, movement, and closing balances
+- Migration and repair utilities
+
+No module should keep a private material naming rule that can diverge from the masters.
+
+`Material_Alias_Map` is the central source for approved old-name to canonical-name mappings. Backend normalization must prefer `Material_Alias_Map`, then fall back to built-in defaults only for backward compatibility. Health checks and migration previews must report aliases that are missing, inactive, or mapped to unknown canonical names.
 
 ## Inventory-First Manufacturing Doctrine
 
@@ -170,6 +199,9 @@ Canonical production materials:
 - `E3`
 - `E4`
 - `E5`
+- `Virgin PPCP`
+- `Battery PPCP`
+- `Masterbatch`
 - `Dust`
 - `Metal Reject`
 - `Rubber Reject`
@@ -185,6 +217,29 @@ Aliases must normalize on new saves and edits:
 - `White Washed Flakes` -> `White Regrind (Washed)`
 - `Washed Regrind` -> `White Regrind (Washed)`
 - `White Sorted Flakes` -> `White Sorted Regrind`
+- `White Sorted` -> `White Sorted Regrind`
+- `Sorted White` -> `White Sorted Regrind`
+- `Sorted Material` -> `White Sorted Regrind`
+- `Virgin PP` -> `Virgin PPCP`
+- `Virgin Material` -> `Virgin PPCP`
+- `Battery Scrap` -> `Battery PPCP`
+- `Battery Flakes` -> `Battery PPCP`
+- `Battery Regrind` -> `Battery PPCP`
+- `Master Batch` -> `Masterbatch`
+
+Approved production consumables/additives are not general Stores items:
+
+- `Virgin PPCP` is allowed for RM Inward when procured and for Extrusion input only.
+- `Battery PPCP` is allowed for RM Inward when procured and for Extrusion input only; ledger category should normalize to `RM`.
+- `Masterbatch` is allowed for RM Inward when procured and for Extrusion input only.
+- These materials must not appear as Grinder, Wash, Colour Sorter, or Dispatch materials.
+
+Official classification for production-approved consumables:
+
+- `Virgin PPCP`: `Material_Master` category `ADDITIVE`, `Production_Material_Master` stage `RM_INWARD,EXTRUSION`, direction `INPUT`.
+- `Battery PPCP`: `Material_Master` category `RM`, `Production_Material_Master` stage `RM_INWARD,EXTRUSION`, direction `INPUT`.
+- `Masterbatch`: `Material_Master` category `ADDITIVE`, `Production_Material_Master` stage `RM_INWARD,EXTRUSION`, direction `INPUT`.
+- If purchased or stocked through Stores, the Stores transaction must link back to the same `Material_Master` item instead of creating a separate production name.
 
 Unknown production material names must be reported as `Needs Manual Review`; they must not be auto-fixed blindly.
 
@@ -240,6 +295,32 @@ Ledger rows must not store:
 - Dispatch summaries such as `E1: 25000 Kg`
 
 `Inventory_Ledger` now carries `materialId` so balances can be tied back to `Material_Master`.
+
+Production-approved consumable consumption must also post ledger OUT rows when used in production. Extrusion usage of `Virgin PPCP`, `Battery PPCP`, and `Masterbatch` must reduce their available stock through the same ledger source of truth used by Live Inventory and Month Close.
+
+Stores issue to production must not bypass inventory logic. If a Stores item is issued for production consumption, the issue must either:
+
+- post a ledger movement against the linked `Material_Master` item, or
+- create an approved production consumption event that posts the ledger movement.
+
+This connection is mandatory before Month Close can reconcile consumable opening stock, inward/purchases, issues to production, production usage, and closing stock reliably.
+
+## Month Close Connectivity
+
+Month Close must reconcile from `Inventory_Ledger`, not from private stage calculations.
+
+Required Month Close model:
+
+- opening balance by canonical material and category
+- inward/purchase movements
+- production consumption movements
+- production output movements
+- dispatch movements
+- stores issue/consumable usage movements
+- physical closing stock
+- variance and approved adjustment movements
+
+Month Close must use the same alias normalization and canonical names as Live Inventory. Any material that resolves to `Needs Manual Review` must be blocked from automatic closing until reviewed or explicitly adjusted.
 
 ## Data flow
 

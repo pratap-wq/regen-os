@@ -6,6 +6,7 @@ const CATEGORY_LABELS = {
   RM: "Raw Material",
   WIP: "Work In Process",
   FG: "Finished Goods",
+  ADDITIVE: "Production Additives",
   WASTE: "Waste / Rejects",
 };
 
@@ -44,7 +45,7 @@ export default function LiveInventory() {
   }, [rows]);
 
   const categoryTotals = useMemo(() => {
-    return ["RM", "WIP", "FG", "WASTE"].map((category) => ({
+    return ["RM", "WIP", "FG", "ADDITIVE", "WASTE"].map((category) => ({
       category,
       label: CATEGORY_LABELS[category],
       balanceKg: Number(summary[category] || 0),
@@ -78,6 +79,7 @@ export default function LiveInventory() {
         <Card title="RM Stock" value={`${Number(summary.RM || 0).toFixed(0)} Kg`} />
         <Card title="WIP Stock" value={`${Number(summary.WIP || 0).toFixed(0)} Kg`} />
         <Card title="FG Stock" value={`${Number(summary.FG || 0).toFixed(0)} Kg`} />
+        <Card title="Additives" value={`${Number(summary.ADDITIVE || 0).toFixed(0)} Kg`} />
         <Card title="Waste / Rejects" value={`${Number(summary.WASTE || 0).toFixed(0)} Kg`} />
       </div>
 
@@ -172,8 +174,8 @@ export default function LiveInventory() {
       </div>
 
       <div style={note}>
-        Live Inventory now reads Inventory_Ledger as source of truth. Stores and consumables are
-        excluded from production inventory; use Stores Inventory for those items.
+        Live Inventory now reads Inventory_Ledger as source of truth. Stores and general
+        consumables are excluded; approved extrusion additives are shown separately.
       </div>
     </div>
   );

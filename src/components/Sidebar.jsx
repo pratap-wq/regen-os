@@ -53,6 +53,7 @@ export default function Sidebar() {
     {
       section: "Administration",
       items: [
+        { label: "System Health", path: "/system-health" },
         { label: "Alert Center", path: "/alert-center" },
         { label: "Alert Settings", path: "/alert-settings" },
       ],

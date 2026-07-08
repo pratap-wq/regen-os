@@ -13,6 +13,9 @@ export const PRODUCTION_MATERIAL_ALIASES = {
   "WASHED REGRIND": "White Regrind (Washed)",
   "WHITE REGRIND WASHED": "White Regrind (Washed)",
   "WHITE SORTED FLAKES": "White Sorted Regrind",
+  "WHITE SORTED": "White Sorted Regrind",
+  "SORTED WHITE": "White Sorted Regrind",
+  "SORTED MATERIAL": "White Sorted Regrind",
 };
 
 export const FALLBACK_PRODUCTION_MATERIALS = [
@@ -20,7 +23,7 @@ export const FALLBACK_PRODUCTION_MATERIALS = [
   ["Mixed Buckets", "Mixed Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "Mixed Buckets"],
   ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "OUTPUT,INPUT", "Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Unwashed Regrind|White Regrind|White Regrind Unwashed|Regrinds"],
   ["White Regrind (Washed)", "White Regrind (Washed)", "WIP", "RM_INWARD,WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "Washed White Flakes|White Washed Flakes|Washed Regrind|White Regrind Washed"],
-  ["White Sorted Regrind", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "White Sorted Flakes"],
+  ["White Sorted Regrind", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "White Sorted Flakes|White Sorted|Sorted White|Sorted Material"],
   ["Virgin PPCP", "Virgin PPCP", "ADDITIVE", "RM_INWARD,EXTRUSION", "INPUT", "Virgin PP|Virgin Material|Virgin"],
   ["Battery PPCP", "Battery PPCP", "RM_CONSUMABLE", "RM_INWARD,EXTRUSION", "INPUT", "Battery Scrap|Battery Flakes|Battery Regrind"],
   ["Masterbatch", "Masterbatch", "ADDITIVE", "RM_INWARD,EXTRUSION", "INPUT", "Master Batch|Colour Masterbatch|Color Masterbatch"],

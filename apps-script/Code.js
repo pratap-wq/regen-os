@@ -1979,14 +1979,15 @@ function seedProductionMaterials() {
 }
 
 const PRODUCTION_MATERIAL_MASTER_DEFAULTS = [
-  ["White Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "White Buckets"],
+  ["White Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "White Buckets|White PPCP Buckets"],
   ["Mixed Buckets", "Mixed Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "Mixed Buckets"],
-  ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "OUTPUT,INPUT", "Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Unwashed Regrind|White Regrind|White Regrind Unwashed|Regrinds"],
-  ["White Regrind (Washed)", "White Regrind (Washed)", "WIP", "RM_INWARD,WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "Washed White Flakes|White Washed Flakes|Washed Regrind|White Regrind Washed"],
+  ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "OUTPUT,INPUT", "Flakes|Flakes Unwashed|Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Unwashed Regrind|Unwashed Regrinds|White Regrind|White Regrind Unwashed|Regrinds"],
+  ["White Regrind (Washed)", "White Regrind (Washed)", "WIP", "RM_INWARD,WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "Washed Flakes|Washed White Flakes|White Washed Flakes|Washed Regrind|White Regrind Washed|Washed Mixed"],
   ["White Sorted Regrind", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "White Sorted Flakes|White Sorted|Sorted White|Sorted Material"],
   ["Virgin PPCP", "Virgin PPCP", "ADDITIVE", "RM_INWARD,EXTRUSION", "INPUT", "Virgin PP|Virgin Material|Virgin"],
   ["Battery PPCP", "Battery PPCP", "RM_CONSUMABLE", "RM_INWARD,EXTRUSION", "INPUT", "Battery Scrap|Battery Flakes|Battery Regrind"],
   ["Masterbatch", "Masterbatch", "ADDITIVE", "RM_INWARD,EXTRUSION", "INPUT", "Master Batch|Colour Masterbatch|Color Masterbatch"],
+  ["Antioxidant", "Antioxidant", "ADDITIVE", "EXTRUSION", "INPUT", "ANTIOXIDANT|Anti Oxidant"],
   ["E1", "E1", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E1"],
   ["E2", "E2", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E2"],
   ["E3", "E3", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E3"],
@@ -1995,27 +1996,43 @@ const PRODUCTION_MATERIAL_MASTER_DEFAULTS = [
   ["Dust", "Dust", "WASTE", "GRINDER,WASH", "OUTPUT", "Dust"],
   ["Metal Reject", "Metal Reject", "WASTE", "GRINDER,WASH", "OUTPUT", "Metal Reject"],
   ["Rubber Reject", "Rubber Reject", "WASTE", "WASH", "OUTPUT", "Rubber Reject"],
-  ["Colour Reject", "Colour Reject", "WASTE", "SORTING", "OUTPUT", "Colour Reject|Color Reject"],
+  ["Wrapper Reject", "Wrapper Reject", "WASTE", "WASH", "OUTPUT", "Wrapper Reject|Wrappers"],
+  ["Sink Material", "Sink Material", "WASTE", "WASH", "OUTPUT", "Sink Material"],
+  ["Micro Plastic Reject", "Micro Plastic Reject", "WASTE", "EXTRUSION", "OUTPUT", "Micro Plastic"],
+  ["Lumps", "Lumps", "WASTE", "EXTRUSION", "OUTPUT", "Lumps"],
+  ["Rework Material", "Rework Material", "REWORK", "EXTRUSION", "OUTPUT,INPUT", "Rework Material"],
+  ["Extrusion Waste", "Extrusion Waste", "WASTE", "EXTRUSION", "OUTPUT", "Extrusion Waste"],
+  ["Purging Waste", "Purging Waste", "WASTE", "EXTRUSION", "OUTPUT", "Purging"],
+  ["Colour Reject", "Colour Reject", "WASTE", "SORTING", "OUTPUT", "Colour Reject|Color Reject|Flakes Dominant Colour"],
+  ["Raffia Reject", "Raffia Reject", "WASTE", "WASH,SORTING", "OUTPUT", "Raffia Reject"],
 ];
 
 const PRODUCTION_MATERIAL_ALIAS_MAP = {
+  "FLAKES": "White Regrind (Unwashed)",
   "UNWASHED WHITE FLAKES": "White Regrind (Unwashed)",
   "WHITE FLAKES (UNWASHED)": "White Regrind (Unwashed)",
   "GRINDER FLAKES": "White Regrind (Unwashed)",
   "UNWASHED REGRIND": "White Regrind (Unwashed)",
+  "UNWASHED REGRINDS": "White Regrind (Unwashed)",
+  "FLAKES UNWASHED": "White Regrind (Unwashed)",
+  "WHITE PPCP BUCKETS": "White Buckets",
   "WHITE REGRIND": "White Regrind (Unwashed)",
   "WHITE REGRIND UNWASHED": "White Regrind (Unwashed)",
   "REGRINDS": "White Regrind (Unwashed)",
+  "WASHED FLAKES": "White Regrind (Washed)",
   "WASHED WHITE FLAKES": "White Regrind (Washed)",
   "WHITE WASHED FLAKES": "White Regrind (Washed)",
   "WASHED REGRIND": "White Regrind (Washed)",
   "WHITE REGRIND WASHED": "White Regrind (Washed)",
+  "WASHED MIXED": "White Regrind (Washed)",
   "VIRGIN PP": "Virgin PPCP",
   "VIRGIN MATERIAL": "Virgin PPCP",
   "VIRGIN": "Virgin PPCP",
   "BATTERY SCRAP": "Battery PPCP",
   "BATTERY FLAKES": "Battery PPCP",
   "BATTERY REGRIND": "Battery PPCP",
+  "BATTERY_REGRIND": "Battery PPCP",
+  "MASTERBATCH": "Masterbatch",
   "MASTER BATCH": "Masterbatch",
   "COLOUR MASTERBATCH": "Masterbatch",
   "COLOR MASTERBATCH": "Masterbatch",
@@ -2023,12 +2040,28 @@ const PRODUCTION_MATERIAL_ALIAS_MAP = {
   "WHITE SORTED": "White Sorted Regrind",
   "SORTED WHITE": "White Sorted Regrind",
   "SORTED MATERIAL": "White Sorted Regrind",
+  "ANTIOXIDANT": "Antioxidant",
+  "ANTI OXIDANT": "Antioxidant",
+  "WRAPPER REJECT": "Wrapper Reject",
+  "SINK MATERIAL": "Sink Material",
+  "FLAKES DOMINANT COLOUR": "Colour Reject",
+  "RAFFIA REJECT": "Raffia Reject",
+  "MICRO PLASTIC": "Micro Plastic Reject",
+  "LUMPS": "Lumps",
+  "REWORK MATERIAL": "Rework Material",
+  "EXTRUSION WASTE": "Extrusion Waste",
+  "PURGING": "Purging Waste",
+  "MIXED PPCP BUCKETS": "Mixed Buckets",
 };
 
 const MATERIAL_ALIAS_MAP_DEFAULTS = [
+  ["Flakes", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 95, "seed"],
+  ["Flakes Unwashed", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 95, "seed"],
+  ["White PPCP Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "TRUE", 100, "seed"],
   ["Unwashed White Flakes", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 100, "seed"],
   ["White Flakes (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 100, "seed"],
   ["Unwashed Regrind", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 100, "seed"],
+  ["Unwashed Regrinds", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 100, "seed"],
   ["White Regrind", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 95, "seed"],
   ["White Regrind Unwashed", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 100, "seed"],
   ["Grinder Flakes", "White Regrind (Unwashed)", "WIP", "GRINDER,WASH", "OUTPUT,INPUT", "TRUE", 100, "seed"],
@@ -2037,6 +2070,8 @@ const MATERIAL_ALIAS_MAP_DEFAULTS = [
   ["White Washed Flakes", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
   ["Washed Regrind", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
   ["White Regrind Washed", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
+  ["Washed Flakes", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
+  ["Washed Mixed", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 95, "seed"],
   ["White Sorted", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
   ["White Sorted Flakes", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
   ["Sorted White", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
@@ -2045,6 +2080,20 @@ const MATERIAL_ALIAS_MAP_DEFAULTS = [
   ["Virgin Material", "Virgin PPCP", "ADDITIVE", "RM_INWARD,EXTRUSION", "INPUT", "TRUE", 100, "seed"],
   ["Battery Scrap", "Battery PPCP", "RM", "RM_INWARD,EXTRUSION", "INPUT", "TRUE", 100, "seed"],
   ["Battery Flakes", "Battery PPCP", "RM", "RM_INWARD,EXTRUSION", "INPUT", "TRUE", 100, "seed"],
+  ["Battery Regrind", "Battery PPCP", "RM", "RM_INWARD,EXTRUSION", "INPUT", "TRUE", 100, "seed"],
+  ["BATTERY_REGRIND", "Battery PPCP", "RM", "RM_INWARD,EXTRUSION", "INPUT", "TRUE", 100, "seed"],
+  ["MASTERBATCH", "Masterbatch", "ADDITIVE", "RM_INWARD,EXTRUSION", "INPUT", "TRUE", 100, "seed"],
+  ["ANTIOXIDANT", "Antioxidant", "ADDITIVE", "EXTRUSION", "INPUT", "TRUE", 100, "seed"],
+  ["Wrapper Reject", "Wrapper Reject", "WASTE", "WASH", "OUTPUT", "TRUE", 100, "seed"],
+  ["Sink Material", "Sink Material", "WASTE", "WASH", "OUTPUT", "TRUE", 100, "seed"],
+  ["Flakes Dominant Colour", "Colour Reject", "WASTE", "SORTING", "OUTPUT", "TRUE", 100, "seed"],
+  ["Raffia Reject", "Raffia Reject", "WASTE", "WASH,SORTING", "OUTPUT", "TRUE", 100, "seed"],
+  ["Micro Plastic", "Micro Plastic Reject", "WASTE", "EXTRUSION", "OUTPUT", "TRUE", 100, "seed"],
+  ["Lumps", "Lumps", "WASTE", "EXTRUSION", "OUTPUT", "TRUE", 100, "seed"],
+  ["Rework Material", "Rework Material", "REWORK", "EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
+  ["Extrusion Waste", "Extrusion Waste", "WASTE", "EXTRUSION", "OUTPUT", "TRUE", 100, "seed"],
+  ["Purging", "Purging Waste", "WASTE", "EXTRUSION", "OUTPUT", "TRUE", 100, "seed"],
+  ["Mixed PPCP Buckets", "Mixed Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "TRUE", 100, "seed"],
 ];
 
 function productionMaterialMasterHeaders_() {
@@ -4927,14 +4976,17 @@ function materialMasterDefaultRows_() {
     ["MASTERBATCH", "Masterbatch", "ADDITIVE"],
     ["ANTIOXIDANT", "Antioxidant", "ADDITIVE"],
     ["SINK_MATERIAL", "Sink Material", "WASTE"],
+    ["MICRO_PLASTIC_REJECT", "Micro Plastic Reject", "WASTE"],
+    ["WRAPPER_REJECT", "Wrapper Reject", "WASTE"],
+    ["RAFFIA_REJECT", "Raffia Reject", "WASTE"],
     ["COLOR_REJECT", "Color Reject", "WASTE"],
     ["COLOUR_REJECT", "Colour Reject", "WASTE"],
     ["DUST", "Dust", "WASTE"],
     ["METAL_REJECT", "Metal Reject", "WASTE"],
     ["RUBBER_REJECT", "Rubber Reject", "WASTE"],
     ["EXTRUSION_WASTE", "Extrusion Waste", "WASTE"],
-    ["LUMPS", "Lumps", "REWORK"],
-    ["PURGING", "Purging", "REWORK"],
+    ["LUMPS", "Lumps", "WASTE"],
+    ["PURGING_WASTE", "Purging Waste", "WASTE"],
   ];
 }
 
@@ -10426,6 +10478,30 @@ function materialNormalizationDecision_(value, sheetName, field, row) {
     };
   }
 
+  const storesOnly = materialNormalizationStoresOnly_(original) || materialNormalizationStoresOnly_(clean);
+  if (storesOnly) {
+    return {
+      action: "IGNORE",
+      originalName: original,
+      normalizedName: storesOnly.canonicalName,
+      category: "STORES_ONLY",
+      reason: storesOnly.reason,
+      risk: "NONE",
+    };
+  }
+
+  const contextAlias = materialNormalizationContextAlias_(clean, sheetName, field);
+  if (contextAlias) {
+    return {
+      action: materialNormalizationKey_(clean) === materialNormalizationKey_(contextAlias.canonicalName) ? "UNCHANGED" : "NORMALIZE",
+      originalName: original,
+      normalizedName: contextAlias.canonicalName,
+      category: contextAlias.category,
+      reason: contextAlias.reason,
+      risk: materialNormalizationRisk_(sheetName, field),
+    };
+  }
+
   const grade = materialNormalizationFgGrade_(clean);
   if (grade && grade !== clean.toUpperCase()) {
     return {
@@ -10488,6 +10564,59 @@ function materialNormalizationDecision_(value, sheetName, field, row) {
     reason: production.known ? "Production material alias" : "Material flow alias",
     risk: materialNormalizationRisk_(sheetName, field),
   };
+}
+
+function materialNormalizationStoresOnly_(value) {
+  const key = materialAliasKey_(value);
+  const storesOnly = {
+    "CUT RESISTANCE HAND GLOVES": "Cut Resistance Hand Gloves",
+    "3 PLY MASK": "3 PLY Mask",
+    "PERMANENT MARKER": "Permanent Marker",
+    "SAFETY GOGGLES": "Safety Goggles",
+    "COTTON HAND GLOVES": "Cotton Hand Gloves",
+    "DETTOL ANTI SPECTIC LIQUID": "Dettol Anti-Spectic liquid",
+    "DFC BLADES": "DFC Blades",
+    "25 KG PP WOVEN SACKS": "25 Kg PP Woven Sacks",
+    "COUNTRY WOOD PALLETS 1200 MM X 1000 MM": "Country Wood Pallets 1200 mm X 1000 mm",
+    "HEAD CAP": "Head Cap",
+    "LIZOL 1LTR": "LIZOL 1LTR",
+    "NOSE MASK": "Nose Mask",
+    "STAPLER SMALL": "Stapler Small",
+    "TISSUE PAPER": "TISSUE PAPER",
+    "ZIP LOCK COVER 6X8": "ZIP Lock Cover 6X8",
+    "25KG BAG": "25kg Bag",
+    "4 CUTTING WHEEL": "4\" Cutting Wheel",
+    "CAUSTIC FLAKES": "Caustic Flakes",
+    "2 1 2 X 2 UPVC BUSH": "2 1/2\" X 2\" UPVC Bush",
+    "2 UPVC FTA": "2\" UPVC FTA",
+    "2 UPVC MTA": "2\" UPVC MTA",
+  };
+  if (!storesOnly[key]) return null;
+  return {
+    canonicalName: storesOnly[key],
+    reason: "Stores-only item excluded from production material migration",
+  };
+}
+
+function materialNormalizationContextAlias_(value, sheetName, field) {
+  const key = materialAliasKey_(value);
+  const sheet = String(sheetName || "").toUpperCase();
+  const sourceField = String(field || "").toUpperCase();
+  if (key === "MIXED REGRIND" && sheet === "WASH_BATCHES" && (sourceField.indexOf("INPUT") !== -1 || sourceField.indexOf("FEED") !== -1 || sourceField.indexOf("MATERIAL") !== -1)) {
+    return {
+      canonicalName: "White Regrind (Unwashed)",
+      category: "WIP",
+      reason: "Context mapping: Mixed Regrind in Wash input/feed means unwashed regrind input",
+    };
+  }
+  if (sheet === "EXTRUSION_BATCHES" && sourceField.indexOf("FEEDCOMPOSITION") !== -1 && key === "WHITE FLAKES") {
+    return {
+      canonicalName: "White Regrind (Washed)",
+      category: "WIP",
+      reason: "Context mapping: WHITE_FLAKES in Extrusion feed means washed regrind input",
+    };
+  }
+  return null;
 }
 
 function materialNormalizationFgGrade_(value) {
@@ -10726,7 +10855,10 @@ function healthCheckProductionMaterialCell_(issues, row, index, config, field, d
   entries.forEach(function(entry) {
     const value = String(entry.value || "").trim();
     if (!value || materialFlowIsQualityReference_(value)) return;
-    const normalized = normalizeProductionMaterialName_(value);
+    const contextAlias = materialNormalizationContextAlias_(materialFlowCleanName_(value), config.sheet, field);
+    const normalized = contextAlias
+      ? { known: true, canonicalName: contextAlias.canonicalName }
+      : normalizeProductionMaterialName_(value);
     if (!normalized.known) {
       issues.push({
         sheet: config.sheet,

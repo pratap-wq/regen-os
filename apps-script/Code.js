@@ -6441,6 +6441,50 @@ function parseManufacturingCompositionRows_(value, materialKeys, qtyKeys) {
     });
 }
 
+function normalizeProductionMaterialAlias_(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const key = text.toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+  if (key === "MIXED PPCP BUCKET" || key === "MIXED PPCP BUCKETS") {
+    return "White PPCP Buckets";
+  }
+  return text;
+}
+
+function normalizeProductionMaterialAliasesInText_(value) {
+  return String(value || "").replace(/\bMixed\s+PPCP\s+Buckets?\b/gi, "White PPCP Buckets");
+}
+
+function normalizeProductionCompositionAliases_(value) {
+  if (!value) return "";
+
+  let rows = value;
+  let parsedJson = false;
+
+  if (typeof value === "string") {
+    try {
+      rows = JSON.parse(value);
+      parsedJson = true;
+    } catch (err) {
+      return normalizeProductionMaterialAliasesInText_(value);
+    }
+  }
+
+  if (!Array.isArray(rows)) {
+    return parsedJson ? JSON.stringify(rows) : normalizeProductionMaterialAliasesInText_(value);
+  }
+
+  const normalized = rows.map(function(row) {
+    const copy = Object.assign({}, row);
+    ["material", "materialType", "sourceType", "inputBucket", "outputBucket", "outputMaterial"].forEach(function(key) {
+      if (copy[key]) copy[key] = normalizeProductionMaterialAlias_(copy[key]);
+    });
+    return copy;
+  });
+
+  return JSON.stringify(normalized);
+}
+
 function postManufacturingCompositionLedger_(options) {
   const inputs = parseManufacturingCompositionRows_(
     options.inputs,
@@ -6792,6 +6836,8 @@ function addWashBatch(data = {}) {
 
   const inputWeightKg = num(data.inputWeightKg);
   const washedOutputKg = num(data.washedOutputKg);
+  const inputMaterial = normalizeProductionMaterialAliasesInText_(data.inputMaterial || "");
+  const feedComposition = normalizeProductionCompositionAliases_(data.feedComposition || "");
 
   const estimatedRecovery =
     inputWeightKg > 0
@@ -6827,9 +6873,9 @@ function addWashBatch(data = {}) {
     entryMode:data.entryMode||"DAILY",
     periodMonth:data.periodMonth||getPeriodMonth(data.date),
 
-    inputMaterial:data.inputMaterial||"",
+    inputMaterial,
     inputWeightKg,
-    feedComposition:data.feedComposition||"",
+    feedComposition,
     outputComposition:data.outputComposition||"",
     washedOutputKg,
 
@@ -6869,7 +6915,7 @@ function addWashBatch(data = {}) {
     module: "WASH",
     sourceRef: washBatchId,
     targetRef: washBatchId,
-    inputs: data.feedComposition,
+    inputs: feedComposition,
     outputs: data.outputComposition,
     createdBy: data.createdBy||"System"
   });
@@ -6892,6 +6938,9 @@ function updateWashBatch(data = {}) {
   );
   data = normalizeProductionBatchPayload_(data, "WASH");
 
+  const inputMaterial = normalizeProductionMaterialAliasesInText_(data.inputMaterial || "");
+  const feedComposition = normalizeProductionCompositionAliases_(data.feedComposition || "");
+
   return updateById(
     "Wash_Batches",
     "washBatchId",
@@ -6910,8 +6959,9 @@ function updateWashBatch(data = {}) {
       entryMode:data.entryMode||"DAILY",
       periodMonth:data.periodMonth||getPeriodMonth(data.date),
 
-      inputMaterial:data.inputMaterial||"",
+      inputMaterial,
       inputWeightKg:num(data.inputWeightKg),
+      feedComposition,
       washedOutputKg:num(data.washedOutputKg),
 
       raffiaKg:num(data.raffiaKg),

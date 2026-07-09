@@ -53,6 +53,7 @@ export default function ProductionHistory() {
     String(now.getMonth() + 1).padStart(2, "0")
   );
   const [year, setYear] = useState(String(now.getFullYear()));
+  const [dateFilterMode, setDateFilterMode] = useState("production");
   const [status, setStatus] = useState("");
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -149,6 +150,19 @@ export default function ProductionHistory() {
     return text.slice(0, 10);
   }
 
+  function periodFromValue(value) {
+    if (!value) return "";
+    const text = String(value).trim();
+    if (/^\d{4}-\d{2}/.test(text)) return text.slice(0, 7);
+    const cleanDate = dateForInput(text);
+    if (/^\d{4}-\d{2}/.test(cleanDate)) return cleanDate.slice(0, 7);
+    const parsed = new Date(text);
+    if (!isNaN(parsed.getTime())) {
+      return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, "0")}`;
+    }
+    return "";
+  }
+
   function n(value) {
     return Number(value || 0);
   }
@@ -157,12 +171,20 @@ export default function ProductionHistory() {
     return (Number(kg || 0) / 1000).toFixed(1);
   }
 
-  function monthMatch(value) {
-    const clean = dateForInput(value);
-    if (!clean) return false;
+  function rowFilterPeriod(row) {
+    if (dateFilterMode === "created") {
+      return periodFromValue(row.createdAt);
+    }
 
-    const [y, m] = clean.split("-");
-    return String(y) === year && String(m) === month;
+    return (
+      periodFromValue(row.date) ||
+      periodFromValue(row.periodMonth) ||
+      periodFromValue(row.source?.periodMonth)
+    );
+  }
+
+  function monthMatch(row) {
+    return rowFilterPeriod(row) === `${year}-${month}`;
   }
 
   function washOutput(row) {
@@ -201,6 +223,8 @@ export default function ProductionHistory() {
         updateFn: "grinder.update",
         idKey: "grinderBatchId",
         date: r.date,
+        periodMonth: r.periodMonth,
+        createdAt: r.createdAt,
         shift: r.shift,
         material: r.inputMaterial,
         machine: r.machine,
@@ -224,6 +248,8 @@ export default function ProductionHistory() {
         updateFn: "wash.update",
         idKey: "washBatchId",
         date: r.date,
+        periodMonth: r.periodMonth,
+        createdAt: r.createdAt,
         shift: r.shift,
         material: r.inputMaterial,
         machine: r.machine,
@@ -249,6 +275,8 @@ export default function ProductionHistory() {
         updateFn: "sorting.update",
         idKey: "sortingBatchId",
         date: r.date,
+        periodMonth: r.periodMonth,
+        createdAt: r.createdAt,
         shift: r.shift,
         material: r.inputMaterial,
         machine: r.machine,
@@ -272,6 +300,8 @@ export default function ProductionHistory() {
         updateFn: "extrusion.update",
         idKey: "extrusionBatchId",
         date: r.date,
+        periodMonth: r.periodMonth,
+        createdAt: r.createdAt,
         shift: r.shift,
         material: r.inputMaterial || r.productionGrade,
         machine: r.machine,
@@ -286,13 +316,13 @@ export default function ProductionHistory() {
     });
 
     return all
-      .filter((r) => monthMatch(r.date))
+      .filter((r) => monthMatch(r))
       .sort((a, b) =>
-        String(dateForInput(b.date || "")).localeCompare(
-          String(dateForInput(a.date || ""))
+        String(dateForInput((dateFilterMode === "created" ? b.createdAt : b.date) || b.createdAt || "")).localeCompare(
+          String(dateForInput((dateFilterMode === "created" ? a.createdAt : a.date) || a.createdAt || ""))
         )
       );
-  }, [grinderRows, washRows, sortingRows, extrusionRows, month, year]);
+  }, [grinderRows, washRows, sortingRows, extrusionRows, month, year, dateFilterMode]);
 
   const totalInput = rows.reduce((s, r) => s + n(r.inputKg), 0);
   const totalOutput = rows.reduce((s, r) => s + n(r.outputKg), 0);
@@ -738,7 +768,21 @@ export default function ProductionHistory() {
             <option>2026</option>
             <option>2027</option>
           </select>
+
+          <select
+            value={dateFilterMode}
+            onChange={(e) => setDateFilterMode(e.target.value)}
+            style={filter}
+            title="Choose whether the month filter uses production date or saved date"
+          >
+            <option value="production">Production Date</option>
+            <option value="created">Created Date</option>
+          </select>
         </div>
+      </div>
+
+      <div style={noteStyle}>
+        History is filtered by {dateFilterMode === "created" ? "created date" : "production date"}.
       </div>
 
       <div style={kpiGrid}>
@@ -769,6 +813,12 @@ export default function ProductionHistory() {
             label: "Date",
             render: (r) => formatDate(dateForInput(r.date)),
             renderExport: (r) => dateForInput(r.date),
+          },
+          {
+            key: "createdAt",
+            label: "Saved At",
+            render: (r) => (r.createdAt ? formatDate(dateForInput(r.createdAt)) : "-"),
+            renderExport: (r) => dateForInput(r.createdAt),
           },
           { key: "process", label: "Process" },
           { key: "id", label: "Batch" },
@@ -1093,6 +1143,17 @@ const kpiGrid = {
   gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))",
   gap: 16,
   marginBottom: 18,
+};
+
+const noteStyle = {
+  background: "#f8fafc",
+  border: "1px solid #e2e8f0",
+  color: "#475569",
+  borderRadius: 10,
+  padding: "10px 12px",
+  marginBottom: 16,
+  fontSize: 13,
+  fontWeight: 700,
 };
 
 const kpi = {

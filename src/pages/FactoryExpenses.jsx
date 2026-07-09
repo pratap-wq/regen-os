@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { apiCall } from "../api/api";
+import FactoryDropdown from "../components/FactoryDropdown";
 
 import {
   pageStyle,
@@ -15,20 +16,6 @@ import {
   thStyle,
   tdStyle,
 } from "../ui/styles";
-
-const EXPENSE_CATEGORIES = [
-  "Electricity",
-  "Labour",
-  "Salaries",
-  "Security",
-  "Water",
-  "Rent",
-  "Maintenance",
-  "Diesel",
-  "Admin",
-  "Transport",
-  "Other",
-];
 
 const MONTHS = [
   { value: "01", label: "Jan" },
@@ -97,6 +84,10 @@ function normalizeRow(row) {
     paidBy: row.paidBy || "",
     status: row.status || "ACTIVE",
   };
+}
+
+function uniqueOptions(values, ...currentValues) {
+  return [...new Set([...(values || []), ...currentValues].map((value) => String(value || "").trim()).filter(Boolean))].sort();
 }
 
 function storesIssueValue(row) {
@@ -266,6 +257,10 @@ export default function FactoryExpenses() {
   const labourSalaries = monthlyRows
     .filter((row) => ["Labour", "Salaries", "Salary"].includes(String(row.category || "")))
     .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const categoryOptions = useMemo(
+    () => uniqueOptions(rows.map((row) => row.category), form.category, categoryFilter),
+    [rows, form.category, categoryFilter]
+  );
 
   return (
     <div style={pageStyle}>
@@ -293,7 +288,7 @@ export default function FactoryExpenses() {
 
             <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} style={inputStyle}>
               <option value="">All Categories</option>
-              {EXPENSE_CATEGORIES.map((cat) => (
+              {categoryOptions.map((cat) => (
                 <option key={cat}>{cat}</option>
               ))}
             </select>
@@ -336,12 +331,16 @@ export default function FactoryExpenses() {
           </Field>
 
           <Field label="Category">
-            <select name="category" value={form.category} onChange={onChange} style={inputStyle} required>
-              <option value="">Select Category</option>
-              {EXPENSE_CATEGORIES.map((cat) => (
-                <option key={cat}>{cat}</option>
-              ))}
-            </select>
+            <FactoryDropdown
+              masterType="expenseCategory"
+              name="category"
+              value={form.category}
+              onChange={onChange}
+              placeholder="Select Category"
+              style={inputStyle}
+              allowAddNew
+              required
+            />
           </Field>
 
           <Field label="Description">

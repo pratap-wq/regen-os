@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
 import DataTable from "../components/DataTable";
+import FactoryDropdown from "../components/FactoryDropdown";
 
 export default function FactoryCostMaster() {
   const now = new Date();
@@ -15,23 +16,6 @@ export default function FactoryCostMaster() {
     status: "ACTIVE",
     createdBy: "Pratap",
   };
-
-  const costHeads = [
-    "Electricity",
-    "Diesel",
-    "Salaries",
-    "Labour",
-    "Rent",
-    "Bank Interest",
-    "Maintenance",
-    "Packing",
-    "Water",
-    "Admin",
-    "Insurance",
-    "Food",
-    "Transport",
-    "Other",
-  ];
 
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState(blankForm);
@@ -185,17 +169,15 @@ export default function FactoryCostMaster() {
           </Field>
 
           <Field label="Cost Head">
-            <select
+            <FactoryDropdown
+              masterType="expenseCategory"
               name="costHead"
               value={form.costHead}
               onChange={onChange}
+              placeholder="Select Cost Head"
               style={input}
-            >
-              <option value="">Select Cost Head</option>
-              {costHeads.map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
+              allowAddNew
+            />
           </Field>
 
           <Field label="Amount ₹">
@@ -278,17 +260,15 @@ export default function FactoryCostMaster() {
               </Field>
 
               <Field label="Cost Head">
-                <select
+                <FactoryDropdown
+                  masterType="expenseCategory"
                   name="costHead"
                   value={editing.costHead || ""}
                   onChange={onEditChange}
+                  placeholder="Select Cost Head"
                   style={input}
-                >
-                  <option value="">Select Cost Head</option>
-                  {costHeads.map((x) => (
-                    <option key={x}>{x}</option>
-                  ))}
-                </select>
+                  allowAddNew
+                />
               </Field>
 
               <Field label="Amount ₹">

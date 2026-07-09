@@ -8,6 +8,7 @@ import { KpiCard, PageLayout } from "../components/factoryDesignSystem";
 import { generateExtrusionBatchId } from "../utils/idGenerator";
 import { buildInventoryLots } from "../utils/inventoryLots";
 import { buildAvailabilityMap, materialKey } from "../utils/materialInventory";
+import { dropdownFlagForContext } from "../services/productionMaterialMaster";
 
 export default function Production() {
   const today = new Date().toISOString().split("T")[0];
@@ -18,39 +19,6 @@ export default function Production() {
     qtyKg: "",
     remarks: "",
   };
-
-  const grinderOutputMaterial = "White Regrind (Unwashed)";
-
-  const grinderOutputDefaults = [
-    { material: grinderOutputMaterial, qtyKg: "" },
-    { material: "Dust", qtyKg: "" },
-    { material: "Metal Reject", qtyKg: "" },
-  ];
-
-  const washOutputDefaults = [
-    { material: "White Regrind (Washed)", qtyKg: "" },
-    { material: "Sink Material", qtyKg: "" },
-    { material: "Dust", qtyKg: "" },
-    { material: "Sludge", qtyKg: "" },
-    { material: "Wrappers", qtyKg: "" },
-    { material: "Micro Plastic", qtyKg: "" },
-  ];
-
-  const sorterOutputDefaults = [
-    { material: "White Sorted Regrind", qtyKg: "" },
-    { material: "Colour Reject", qtyKg: "" },
-  ];
-
-  const extrusionOutputDefaults = [
-    { material: "E1", qtyKg: "" },
-    { material: "E2", qtyKg: "" },
-    { material: "E3", qtyKg: "" },
-    { material: "E4", qtyKg: "" },
-    { material: "E5", qtyKg: "" },
-    { material: "Lumps", qtyKg: "" },
-    { material: "Purging Waste", qtyKg: "" },
-    { material: "Extrusion Waste", qtyKg: "" },
-  ];
 
   const blank = {
     date: today,
@@ -107,10 +75,10 @@ export default function Production() {
   const [washFeedRows, setWashFeedRows] = useState([{ ...blankFeedRow }]);
   const [sorterFeedRows, setSorterFeedRows] = useState([{ ...blankFeedRow }]);
   const [feedRows, setFeedRows] = useState([{ ...blankFeedRow }]);
-  const [grinderOutputRows, setGrinderOutputRows] = useState(grinderOutputDefaults);
-  const [washOutputRows, setWashOutputRows] = useState(washOutputDefaults);
-  const [sorterOutputRows, setSorterOutputRows] = useState(sorterOutputDefaults);
-  const [extrusionOutputRows, setExtrusionOutputRows] = useState(extrusionOutputDefaults);
+  const [grinderOutputRows, setGrinderOutputRows] = useState([blankOutputRow()]);
+  const [washOutputRows, setWashOutputRows] = useState([blankOutputRow()]);
+  const [sorterOutputRows, setSorterOutputRows] = useState([blankOutputRow()]);
+  const [extrusionOutputRows, setExtrusionOutputRows] = useState([blankOutputRow()]);
 
   const [rmRows, setRmRows] = useState([]);
   const [grinderRows, setGrinderRows] = useState([]);
@@ -118,6 +86,7 @@ export default function Production() {
   const [sortingRows, setSortingRows] = useState([]);
   const [extrusionRows, setExtrusionRows] = useState([]);
   const [dispatchRows, setDispatchRows] = useState([]);
+  const [materialRows, setMaterialRows] = useState([]);
 
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -145,6 +114,7 @@ export default function Production() {
         sortingData,
         extrusionData,
         dispatchData,
+        materialData,
       ] = await Promise.all([
         safeList("rm.list"),
         safeList("grinder.list"),
@@ -152,6 +122,7 @@ export default function Production() {
         safeList("sorting.list"),
         safeList("extrusion.list"),
         safeList("dispatch.list"),
+        safeList("materialMaster.list"),
       ]);
 
       setRmRows(rmData);
@@ -160,6 +131,11 @@ export default function Production() {
       setSortingRows(sortingData);
       setExtrusionRows(extrusionData);
       setDispatchRows(dispatchData);
+      setMaterialRows(materialData);
+      setGrinderOutputRows(defaultOutputRowsFor(materialData, "GRINDER"));
+      setWashOutputRows(defaultOutputRowsFor(materialData, "WASH"));
+      setSorterOutputRows(defaultOutputRowsFor(materialData, "SORTING"));
+      setExtrusionOutputRows(defaultOutputRowsFor(materialData, "EXTRUSION"));
     } catch (err) {
       setMessage(err.message);
     }
@@ -230,10 +206,10 @@ export default function Production() {
     setWashFeedRows([{ ...blankFeedRow }]);
     setSorterFeedRows([{ ...blankFeedRow }]);
     setFeedRows([{ ...blankFeedRow }]);
-    setGrinderOutputRows(grinderOutputDefaults);
-    setWashOutputRows(washOutputDefaults);
-    setSorterOutputRows(sorterOutputDefaults);
-    setExtrusionOutputRows(extrusionOutputDefaults);
+    setGrinderOutputRows(defaultOutputRowsFor(materialRows, "GRINDER"));
+    setWashOutputRows(defaultOutputRowsFor(materialRows, "WASH"));
+    setSorterOutputRows(defaultOutputRowsFor(materialRows, "SORTING"));
+    setExtrusionOutputRows(defaultOutputRowsFor(materialRows, "EXTRUSION"));
   }
 
   function cleanRows(rows) {
@@ -1092,6 +1068,29 @@ function TextAreaField({ label, name, value, onChange, readOnly }) {
       />
     </div>
   );
+}
+
+function blankOutputRow() {
+  return { material: "", qtyKg: "" };
+}
+
+function defaultOutputRowsFor(materialRows, stage) {
+  const flag = dropdownFlagForContext(stage, "OUTPUT");
+  const rows = (materialRows || [])
+    .filter((row) => String(row.status || "ACTIVE").toUpperCase() === "ACTIVE")
+    .filter((row) => !flag || isYes(row[flag]))
+    .sort((a, b) => Number(a.sortOrder || 9999) - Number(b.sortOrder || 9999))
+    .map((row) => ({
+      material: row.materialName || row.name || row.materialCode || "",
+      qtyKg: "",
+    }))
+    .filter((row) => row.material);
+
+  return rows.length ? rows : [blankOutputRow()];
+}
+
+function isYes(value) {
+  return ["YES", "TRUE", "Y", "1", "ON"].includes(String(value || "").toUpperCase());
 }
 
 function SelectField({ label, name, value, onChange, options }) {

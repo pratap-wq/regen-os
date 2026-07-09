@@ -172,6 +172,18 @@ export default function Suppliers() {
 
     return Object.entries(map);
   }, [rows]);
+  const supplierTypeOptions = useMemo(
+    () => uniqueOptions(rows.map((r) => r.supplierType), form.supplierType),
+    [rows, form.supplierType]
+  );
+  const qualityRatingOptions = useMemo(
+    () => uniqueOptions(rows.map((r) => r.qualityRating), form.qualityRating),
+    [rows, form.qualityRating]
+  );
+  const contaminationRiskOptions = useMemo(
+    () => uniqueOptions(rows.map((r) => r.contaminationRisk), form.contaminationRisk),
+    [rows, form.contaminationRisk]
+  );
 
   return (
     <div style={pageStyle}>
@@ -201,15 +213,19 @@ export default function Suppliers() {
         </Field>
 
         <Field label="Supplier Type">
-          <select name="supplierType" value={form.supplierType} onChange={onChange} style={inputStyle}>
-            <option value="">Select Type</option>
-            <option>Material Supplier</option>
-            <option>Stores Supplier</option>
-            <option>Transporter</option>
-            <option>Service Vendor</option>
-            <option>Maintenance Vendor</option>
-            <option>Other</option>
-          </select>
+          <input
+            list="supplier-type-options"
+            name="supplierType"
+            value={form.supplierType}
+            onChange={onChange}
+            style={inputStyle}
+            placeholder="Select or type supplier type"
+          />
+          <datalist id="supplier-type-options">
+            {supplierTypeOptions.map((option) => (
+              <option key={option} value={option} />
+            ))}
+          </datalist>
         </Field>
 
         <Field label="Material Type">
@@ -277,13 +293,19 @@ export default function Suppliers() {
         <SectionTitle title="Operational Quality" />
 
         <Field label="Quality Rating">
-          <select name="qualityRating" value={form.qualityRating} onChange={onChange} style={inputStyle}>
-            <option value="">Select Rating</option>
-            <option>A</option>
-            <option>B</option>
-            <option>C</option>
-            <option>Watchlist</option>
-          </select>
+          <input
+            list="supplier-quality-rating-options"
+            name="qualityRating"
+            value={form.qualityRating}
+            onChange={onChange}
+            style={inputStyle}
+            placeholder="Select or type rating"
+          />
+          <datalist id="supplier-quality-rating-options">
+            {qualityRatingOptions.map((option) => (
+              <option key={option} value={option} />
+            ))}
+          </datalist>
         </Field>
 
         <Field label="Expected Recovery %">
@@ -291,13 +313,19 @@ export default function Suppliers() {
         </Field>
 
         <Field label="Contamination Risk">
-          <select name="contaminationRisk" value={form.contaminationRisk} onChange={onChange} style={inputStyle}>
-            <option value="">Select Risk</option>
-            <option>LOW</option>
-            <option>MEDIUM</option>
-            <option>HIGH</option>
-            <option>CRITICAL</option>
-          </select>
+          <input
+            list="supplier-risk-options"
+            name="contaminationRisk"
+            value={form.contaminationRisk}
+            onChange={onChange}
+            style={inputStyle}
+            placeholder="Select or type risk"
+          />
+          <datalist id="supplier-risk-options">
+            {contaminationRiskOptions.map((option) => (
+              <option key={option} value={option} />
+            ))}
+          </datalist>
         </Field>
 
         <Field label="Preferred Supplier">
@@ -436,6 +464,10 @@ function KPI({ title, value }) {
       <div style={kpiValue}>{value}</div>
     </div>
   );
+}
+
+function uniqueOptions(values, ...currentValues) {
+  return [...new Set([...(values || []), ...currentValues].map((value) => String(value || "").trim()).filter(Boolean))].sort();
 }
 
 const pageStyle = {

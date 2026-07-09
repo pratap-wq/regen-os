@@ -59,6 +59,7 @@ export default function Dispatch() {
   const [rows, setRows] = useState([]);
   const [extrusionRows, setExtrusionRows] = useState([]);
   const [ledgerBalanceRows, setLedgerBalanceRows] = useState([]);
+  const [customerRows, setCustomerRows] = useState([]);
   const [status, setStatus] = useState("");
   const [editingRow, setEditingRow] = useState(null);
   const [form, setForm] = useState(blankForm);
@@ -70,15 +71,17 @@ export default function Dispatch() {
 
   async function loadData() {
     try {
-      const [dispatch, extrusion, ledgerBalance] = await Promise.all([
+      const [dispatch, extrusion, ledgerBalance, customers] = await Promise.all([
         apiCall({ fn: "dispatch.list" }),
         apiCall({ fn: "extrusion.list" }),
         apiCall({ fn: "inventoryLedger.balance" }),
+        apiCall({ fn: "factoryMaster.list", masterType: "customer" }),
       ]);
 
       setRows(dispatch.rows || []);
       setExtrusionRows(extrusion.rows || []);
       setLedgerBalanceRows(ledgerBalance.rows || []);
+      setCustomerRows(customers.rows || []);
     } catch (err) {
       console.log(err);
       setStatus(err.message);
@@ -300,6 +303,10 @@ export default function Dispatch() {
       [e.target.name]: e.target.value,
     };
 
+    if (e.target.name === "customerName" && e.item?.customerUnit) {
+      updated.customerUnit = e.item.customerUnit;
+    }
+
     if (e.target.name === "material") {
       updated.material = normalizeFgGrade(e.target.value);
       updated.grade = updated.material;
@@ -316,6 +323,15 @@ export default function Dispatch() {
 
     setForm(updated);
   }
+
+  const customerUnitOptions = useMemo(() => {
+    const selectedCustomer = String(form.customerName || "").trim().toUpperCase();
+    const values = customerRows
+      .filter((row) => !selectedCustomer || String(row.customerName || row.name || "").trim().toUpperCase() === selectedCustomer)
+      .map((row) => row.customerUnit || row.unit || "")
+      .filter(Boolean);
+    return [...new Set(values)].sort();
+  }, [customerRows, form.customerName]);
 
   function buildGradeDispatchLines(material, quantityKg) {
     const grade = normalizeFgGrade(material);
@@ -640,20 +656,19 @@ export default function Dispatch() {
           </Field>
 
           <Field label="Customer Unit / Destination">
-            <select
+            <input
+              list="dispatch-customer-units"
               name="customerUnit"
               value={form.customerUnit}
               onChange={onChange}
               style={inputStyle}
-            >
-              <option value="">Select Unit</option>
-              <option>Mold-Tek Unit 1</option>
-              <option>Mold-Tek Unit 2</option>
-              <option>Mold-Tek Unit 3</option>
-              <option>Mold-Tek Unit 4</option>
-              <option>Mold-Tek Unit 5</option>
-              <option>Other</option>
-            </select>
+              placeholder="Select or type destination"
+            />
+            <datalist id="dispatch-customer-units">
+              {customerUnitOptions.map((unit) => (
+                <option key={unit} value={unit} />
+              ))}
+            </datalist>
           </Field>
 
           <Field label="Invoice">

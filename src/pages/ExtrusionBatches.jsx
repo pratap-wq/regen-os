@@ -9,43 +9,21 @@ import {
 
 import DataTable from "../components/DataTable";
 import FormSection from "../components/FormSection";
+import ProductionMaterialSelect from "../components/ProductionMaterialSelect";
+
+function materialKey(value) {
+  return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+}
 
 export default function ExtrusionBatches() {
   const today = new Date().toISOString().split("T")[0];
   const currentMonth = new Date().toISOString().slice(0, 7);
 
-  const feedMaterials = [
-    "SORTED_FLAKES",
-    "WASHED_FLAKES",
-    "WHITE_FLAKES",
-    "MILKY_FLAKES",
-    "COLOUR_FLAKES",
-    "GREY_FLAKES",
-    "ALL_MIX_FLAKES",
-    "RECOVERY_LUMPS",
-    "RECOVERY_GRANULES",
-    "REWORK_LUMPS",
-    "REWORK_GRANULES",
-    "PURGING_REWORK",
-    "COLOUR_REGRIND",
-    "FLOTATION_TANK_REGRIND",
-    "SINK_MATERIAL_REGRIND",
-    "FLOAT_MATERIAL_REGRIND",
-    "SORTER_REJECT_REGRIND",
-
-    "BATTERY_REGRIND",
-    "VIRGIN_PP",
-    "MASTERBATCH",
-    "ANTIOXIDANT",
-    "ADDITIVE_PACKAGE",
-    "OTHER",
-  ];
-
   const blankFeed = [
     {
       sourceType: "SORTING",
       sourceBatchId: "",
-      materialType: "SORTED_FLAKES",
+      materialType: "",
       qtyKg: "",
       remarks: "",
     },
@@ -156,30 +134,20 @@ export default function ExtrusionBatches() {
   }
 
   function getFeedQtyByMaterial(material, feed = feedRows) {
+    const target = materialKey(material);
     return feed
-      .filter((r) => r.materialType === material)
+      .filter((r) => materialKey(r.materialType) === target)
       .reduce((s, r) => s + Number(r.qtyKg || 0), 0);
   }
 
   function isRecoveryMaterial(materialType = "") {
-    return [
-      "RECOVERY_LUMPS",
-      "RECOVERY_GRANULES",
-      "REWORK_LUMPS",
-      "REWORK_GRANULES",
-      "PURGING_REWORK",
-      "COLOUR_REGRIND",
-      "FLOTATION_TANK_REGRIND",
-      "SINK_MATERIAL_REGRIND",
-      "FLOAT_MATERIAL_REGRIND",
-      "SORTER_REJECT_REGRIND",
-    ].includes(materialType);
+    const key = materialKey(materialType);
+    return key.includes("REWORK") || key.includes("LUMP") || key.includes("PURGING");
   }
 
   function isAdditiveMaterial(materialType = "") {
-    return ["MASTERBATCH", "ANTIOXIDANT", "ADDITIVE_PACKAGE"].includes(
-      materialType
-    );
+    const key = materialKey(materialType);
+    return key.includes("MASTERBATCH") || key.includes("ANTIOXIDANT") || key.includes("VIRGIN");
   }
 
   function getRecoveryFeedQty(feed = feedRows) {
@@ -305,7 +273,7 @@ export default function ExtrusionBatches() {
             {
               sourceType: "SORTING",
               sourceBatchId: "",
-              materialType: "SORTED_FLAKES",
+              materialType: "",
               qtyKg: "",
               remarks: "",
             },
@@ -329,7 +297,7 @@ export default function ExtrusionBatches() {
       {
         sourceType: "SORTING",
         sourceBatchId: selected.sortingBatchId,
-        materialType: "SORTED_FLAKES",
+        materialType: "White Sorted Regrind",
         qtyKg: qty,
         remarks: "From sorting batch",
       },
@@ -361,7 +329,7 @@ export default function ExtrusionBatches() {
       {
         sourceType: "WASH",
         sourceBatchId: selected.washBatchId,
-        materialType: "WASHED_FLAKES",
+        materialType: "White Regrind (Washed)",
         qtyKg: qty,
         remarks: "Direct wash batch",
       },
@@ -618,18 +586,14 @@ export default function ExtrusionBatches() {
                     </td>
 
                     <td style={feedTd}>
-                      <select
+                      <ProductionMaterialSelect
                         value={r.materialType || ""}
                         onChange={(e) => updateFeedRow(i, "materialType", e.target.value)}
+                        placeholder="Select Material"
                         style={inputStyle}
-                      >
-                        <option value="">Select Material</option>
-                        {feedMaterials.map((m) => (
-                          <option key={m} value={m}>
-                            {m}
-                          </option>
-                        ))}
-                      </select>
+                        stage="EXTRUSION"
+                        direction="INPUT"
+                      />
                     </td>
 
                     <td style={feedTd}>

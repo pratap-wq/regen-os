@@ -5,11 +5,11 @@ import DataTable from "../components/DataTable";
 export default function ProductionMaterials() {
   const blankForm = {
     materialName: "",
-    category: "Flakes",
-    stage: "Production",
-    polymer: "PP",
+    category: "",
+    stage: "",
+    polymer: "",
     washingStatus: "",
-    source: "Local",
+    source: "",
     imported: "NO",
     battery: "NO",
     colourType: "",
@@ -19,21 +19,6 @@ export default function ProductionMaterials() {
     remarks: "",
     createdBy: "Pratap",
   };
-
-  const defaultMaterials = [
-    ["Flakes - Washed", "Flakes", "Washed", "Local", "NO", "NO"],
-    ["Flakes - Unwashed", "Flakes", "Unwashed", "Local", "NO", "NO"],
-    ["Flakes - Semi-washed", "Flakes", "Semi-washed", "Local", "NO", "NO"],
-    ["Flakes - Washed (Imported)", "Flakes", "Washed", "Imported", "YES", "NO"],
-    ["Flakes - Unwashed (Imported)", "Flakes", "Unwashed", "Imported", "YES", "NO"],
-    ["Flakes - Semi-washed (Imported)", "Flakes", "Semi-washed", "Imported", "YES", "NO"],
-    ["Battery Flakes - Washed", "Battery Flakes", "Washed", "Local", "NO", "YES"],
-    ["Battery Flakes - Unwashed", "Battery Flakes", "Unwashed", "Local", "NO", "YES"],
-    ["Battery Flakes - Semi-washed", "Battery Flakes", "Semi-washed", "Local", "NO", "YES"],
-    ["Flakes - Dominant colour", "Flakes", "Dominant Colour", "Local", "NO", "NO"],
-    ["Lumps - Regrind", "Lumps", "Regrind", "Local", "NO", "NO"],
-    ["Buckets", "Buckets", "Unwashed", "Local", "NO", "NO"],
-  ];
 
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState(blankForm);
@@ -155,45 +140,6 @@ export default function ProductionMaterials() {
     }
   }
 
-  async function seedDefaultMaterials() {
-    const ok = window.confirm("Add default production materials list?");
-    if (!ok) return;
-
-    try {
-      setSaving(true);
-
-      for (let i = 0; i < defaultMaterials.length; i += 1) {
-        const [materialName, category, washingStatus, source, imported, battery] =
-          defaultMaterials[i];
-
-        await apiCall({
-          fn: "productionMaterials.add",
-          materialName,
-          category,
-          stage: "Production",
-          polymer: "PP",
-          washingStatus,
-          source,
-          imported,
-          battery,
-          colourType: materialName.includes("Dominant") ? "Dominant Colour" : "",
-          expectedRecoveryPercent: "",
-          sortOrder: i + 1,
-          isActive: "TRUE",
-          remarks: "Default master item",
-          createdBy: "Pratap",
-        });
-      }
-
-      setStatus("Default production materials added");
-      loadRows();
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
   const activeRows = useMemo(() => {
     return rows.filter((r) => String(r.isActive || "TRUE").toUpperCase() === "TRUE");
   }, [rows]);
@@ -205,13 +151,9 @@ export default function ProductionMaterials() {
           <div style={eyebrow}>Masters</div>
           <h1 style={title}>Production Materials Master</h1>
           <div style={subtitle}>
-            Controls material dropdowns for Production Entry, Wash, Sorting and Extrusion.
+            Legacy compatibility view. Use Material Master Admin for operational dropdown control.
           </div>
         </div>
-
-        <button type="button" onClick={seedDefaultMaterials} disabled={saving} style={seedButton}>
-          + Load Default Materials
-        </button>
       </div>
 
       <div style={kpiGrid}>
@@ -320,59 +262,53 @@ function MaterialFields({ data, onChange }) {
       </Field>
 
       <Field label="Category">
-        <select name="category" value={data.category || ""} onChange={onChange} style={inputStyle}>
-          <option value="">Select</option>
-          <option>Flakes</option>
-          <option>Battery Flakes</option>
-          <option>Lumps</option>
-          <option>Regrind</option>
-          <option>Buckets</option>
-          <option>Virgin</option>
-          <option>Additive</option>
-          <option>Other</option>
-        </select>
+        <input
+          name="category"
+          value={data.category || ""}
+          onChange={onChange}
+          style={inputStyle}
+          placeholder="Use Material Master category"
+        />
       </Field>
 
       <Field label="Stage">
-        <select name="stage" value={data.stage || ""} onChange={onChange} style={inputStyle}>
-          <option>Production</option>
-          <option>Wash</option>
-          <option>Sorting</option>
-          <option>Extrusion</option>
-          <option>All</option>
-        </select>
+        <input
+          name="stage"
+          value={data.stage || ""}
+          onChange={onChange}
+          style={inputStyle}
+          placeholder="Use Material Master dropdown flags"
+        />
       </Field>
 
       <Field label="Polymer">
-        <select name="polymer" value={data.polymer || ""} onChange={onChange} style={inputStyle}>
-          <option>PP</option>
-          <option>PPCP</option>
-          <option>HDPE</option>
-          <option>LDPE</option>
-          <option>OTHER</option>
-        </select>
+        <input
+          name="polymer"
+          value={data.polymer || ""}
+          onChange={onChange}
+          style={inputStyle}
+          placeholder="Polymer"
+        />
       </Field>
 
       <Field label="Washing Status">
-        <select name="washingStatus" value={data.washingStatus || ""} onChange={onChange} style={inputStyle}>
-          <option value="">Select</option>
-          <option>Washed</option>
-          <option>Unwashed</option>
-          <option>Semi-washed</option>
-          <option>Imported Washed</option>
-          <option>Regrind</option>
-          <option>NA</option>
-        </select>
+        <input
+          name="washingStatus"
+          value={data.washingStatus || ""}
+          onChange={onChange}
+          style={inputStyle}
+          placeholder="Washing status"
+        />
       </Field>
 
       <Field label="Source">
-        <select name="source" value={data.source || ""} onChange={onChange} style={inputStyle}>
-          <option>Local</option>
-          <option>Imported</option>
-          <option>Internal Recovery</option>
-          <option>Supplier Direct</option>
-          <option>Other</option>
-        </select>
+        <input
+          name="source"
+          value={data.source || ""}
+          onChange={onChange}
+          style={inputStyle}
+          placeholder="Source"
+        />
       </Field>
 
       <Field label="Imported">
@@ -488,17 +424,6 @@ const title = {
 
 const subtitle = {
   opacity: 0.9,
-};
-
-const seedButton = {
-  background: "white",
-  color: "#0f766e",
-  border: "none",
-  padding: "11px 16px",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 900,
-  height: 42,
 };
 
 const kpiGrid = {

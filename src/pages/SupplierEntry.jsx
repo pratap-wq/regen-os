@@ -33,7 +33,7 @@ export default function SupplierEntry() {
 
     materialType: "",
 
-    qualityRating: "B",
+    qualityRating: "",
 
     paymentTerms: "",
 
@@ -170,7 +170,7 @@ export default function SupplierEntry() {
 
           <Field label="Supplier Type">
 
-            <select
+            <input
               name="supplierType"
               value={
                 form.supplierType
@@ -181,37 +181,8 @@ export default function SupplierEntry() {
               style={
                 inputStyle
               }
-            >
-
-              <option value="">
-                Select Supplier Type
-              </option>
-
-              <option>
-                Trader
-              </option>
-
-              <option>
-                MRF
-              </option>
-
-              <option>
-                Scrap Dealer
-              </option>
-
-              <option>
-                Importer
-              </option>
-
-              <option>
-                Factory Direct
-              </option>
-
-              <option>
-                Recycler
-              </option>
-
-            </select>
+              placeholder="Supplier Type"
+            />
 
           </Field>
 
@@ -325,7 +296,7 @@ export default function SupplierEntry() {
 
           <Field label="Quality Rating">
 
-            <select
+            <input
               name="qualityRating"
               value={
                 form.qualityRating
@@ -336,21 +307,8 @@ export default function SupplierEntry() {
               style={
                 inputStyle
               }
-            >
-
-              <option>
-                A
-              </option>
-
-              <option>
-                B
-              </option>
-
-              <option>
-                C
-              </option>
-
-            </select>
+              placeholder="Quality Rating"
+            />
 
           </Field>
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 import DataTable from "../components/DataTable";
@@ -16,20 +16,6 @@ import {
 
 export default function StoresInward() {
   const today = new Date().toISOString().split("T")[0];
-
-  const categories = [
-    "PROCESS CHEMICALS",
-    "EXTRUSION CONSUMABLES",
-    "QUALITY ADDITIVES",
-    "MAINTENANCE",
-    "PACKING",
-    "SAFETY & PPE",
-    "TOOLS & SPARES",
-    "HOUSEKEEPING",
-    "ADMIN / GENERAL",
-  ];
-
-  const units = ["Kg", "Nos", "Ltr", "Bag", "Box", "Set", "Roll"];
 
   const blankForm = {
     date: today,
@@ -71,6 +57,15 @@ export default function StoresInward() {
   const [savingItem, setSavingItem] = useState(false);
 
   const [editingRow, setEditingRow] = useState(null);
+
+  const categories = useMemo(
+    () => uniqueOptions(items.map((item) => item.category), newItem.category, editingRow?.category),
+    [items, newItem.category, editingRow?.category]
+  );
+  const units = useMemo(
+    () => uniqueOptions(items.map((item) => item.unit), newItem.unit, editingRow?.unit),
+    [items, newItem.unit, editingRow?.unit]
+  );
   const [savingEdit, setSavingEdit] = useState(false);
 
   useEffect(() => {
@@ -1058,3 +1053,7 @@ const saveButton = {
   cursor: "pointer",
   fontWeight: 700,
 };
+
+function uniqueOptions(values, ...currentValues) {
+  return [...new Set([...(values || []), ...currentValues].map((value) => String(value || "").trim()).filter(Boolean))].sort();
+}

@@ -17,20 +17,6 @@ export default function Consumables() {
     createdBy: "Pratap",
   };
 
-  const categories = [
-    "PROCESS CHEMICALS",
-    "EXTRUSION CONSUMABLES",
-    "QUALITY ADDITIVES",
-    "MAINTENANCE",
-    "PACKING",
-    "SAFETY & PPE",
-    "TOOLS & SPARES",
-    "HOUSEKEEPING",
-    "ADMIN / GENERAL",
-  ];
-
-  const units = ["Kg", "Nos", "Ltr", "Bag", "Box", "Set", "Roll"];
-
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState(blankForm);
   const [editing, setEditing] = useState(null);
@@ -237,6 +223,15 @@ export default function Consumables() {
 
   const categoryCount = new Set(activeRows.map((r) => r.category).filter(Boolean))
     .size;
+
+  const categories = useMemo(
+    () => uniqueOptions(rows.map((row) => row.category), form.category, editing?.category),
+    [rows, form.category, editing?.category]
+  );
+  const units = useMemo(
+    () => uniqueOptions(rows.map((row) => row.unit), form.unit, editing?.unit),
+    [rows, form.unit, editing?.unit]
+  );
 
   const minConfigured = activeRows.filter((r) => Number(r.minLevel || 0) > 0)
     .length;
@@ -560,6 +555,10 @@ export default function Consumables() {
       )}
     </div>
   );
+}
+
+function uniqueOptions(values, ...currentValues) {
+  return [...new Set([...(values || []), ...currentValues].map((value) => String(value || "").trim()).filter(Boolean))].sort();
 }
 
 function Field({ label, children }) {

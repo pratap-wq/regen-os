@@ -17,18 +17,6 @@ import {
 export default function StoresIssue() {
   const today = new Date().toISOString().split("T")[0];
 
-  const departments = [
-    "Extrusion",
-    "Washline",
-    "Washingline",
-    "Maintenance",
-    "Utilities",
-    "Admin",
-    "Quality",
-    "Packing",
-    "Stores",
-  ];
-
   const blankForm = {
     date: today,
     itemName: "",
@@ -51,6 +39,10 @@ export default function StoresIssue() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const [lastStockMovement, setLastStockMovement] = useState(null);
+  const departments = useMemo(
+    () => uniqueOptions(rows.map((row) => row.department), form.department, editingRow?.department),
+    [rows, form.department, editingRow?.department]
+  );
 
   useEffect(() => {
     loadData();
@@ -616,17 +608,19 @@ export default function StoresIssue() {
           </Field>
 
           <Field label="Department">
-            <select
+            <input
+              list="stores-issue-departments"
               name="department"
               value={form.department}
               onChange={onChange}
               style={inputStyle}
-            >
-              <option value="">Select</option>
+              placeholder="Select or type department"
+            />
+            <datalist id="stores-issue-departments">
               {departments.map((d) => (
-                <option key={d}>{d}</option>
+                <option key={d} value={d} />
               ))}
-            </select>
+            </datalist>
           </Field>
 
           <Field label="Purpose">
@@ -850,17 +844,19 @@ export default function StoresIssue() {
               </Field>
 
               <Field label="Department">
-                <select
+                <input
+                  list="stores-issue-edit-departments"
                   name="department"
                   value={editingRow.department || ""}
                   onChange={onEditChange}
                   style={inputStyle}
-                >
-                  <option value="">Select</option>
+                  placeholder="Select or type department"
+                />
+                <datalist id="stores-issue-edit-departments">
                   {departments.map((d) => (
-                    <option key={d}>{d}</option>
+                    <option key={d} value={d} />
                   ))}
-                </select>
+                </datalist>
               </Field>
 
               <Field label="Purpose">
@@ -1002,6 +998,10 @@ function formatDateForInput(value) {
   }
 
   return d.toISOString().split("T")[0];
+}
+
+function uniqueOptions(values, ...currentValues) {
+  return [...new Set([...(values || []), ...currentValues].map((value) => String(value || "").trim()).filter(Boolean))].sort();
 }
 
 const kpiGrid = {

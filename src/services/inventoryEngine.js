@@ -164,6 +164,17 @@ export function calculateInventoryEngine({
 
 export function normalizeInventoryMaterial(value) {
   const text = String(value || "").trim();
+  const upper = text.toUpperCase().replace(/_/g, " ");
+  if (
+    upper === "WHITE BUCKET" ||
+    upper === "WHITE BUCKETS" ||
+    upper === "WHITE PPCP BUCKETS" ||
+    upper === "MIXED BUCKET" ||
+    upper === "MIXED BUCKETS" ||
+    upper === "MIXED PPCP BUCKETS"
+  ) {
+    return "White PPCP Buckets";
+  }
   const fgMatch = text.toUpperCase().match(/\bE[1-5]\b/);
   return fgMatch ? fgMatch[0] : text;
 }

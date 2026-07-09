@@ -65,6 +65,10 @@ export async function listFactoryMaster(masterType, search = "") {
     rows = mergeMasterRows(rows, await listMaterialFallbackRows());
   }
 
+  if (type === "material") {
+    rows = collapseBucketMaterialRows(rows);
+  }
+
   return rows;
 }
 
@@ -262,6 +266,47 @@ function mergeMasterRows(primaryRows = [], fallbackRows = []) {
       numeric: true,
     })
   );
+}
+
+function collapseBucketMaterialRows(rows = []) {
+  const map = new Map();
+  rows.forEach((row) => {
+    const name = canonicalBucketMaterialName(row.name || row.materialName || row.code || row.materialCode);
+    if (name !== "White PPCP Buckets") {
+      const key = String(row.name || row.materialName || row.code || "").trim().toUpperCase();
+      if (key && !map.has(key)) map.set(key, row);
+      return;
+    }
+    const current = map.get("WHITE_PPCP_BUCKETS") || {};
+    map.set("WHITE_PPCP_BUCKETS", {
+      ...current,
+      ...row,
+      id: "WHITE_PPCP_BUCKETS",
+      code: "WHITE_PPCP_BUCKETS",
+      name,
+      materialName: name,
+      materialCode: "WHITE_PPCP_BUCKETS",
+      category: "RM",
+      materialType: "RM",
+      status: "ACTIVE",
+    });
+  });
+  return Array.from(map.values());
+}
+
+function canonicalBucketMaterialName(value) {
+  const text = String(value || "").trim().toUpperCase().replace(/_/g, " ");
+  if (
+    text === "WHITE BUCKET" ||
+    text === "WHITE BUCKETS" ||
+    text === "WHITE PPCP BUCKETS" ||
+    text === "MIXED BUCKET" ||
+    text === "MIXED BUCKETS" ||
+    text === "MIXED PPCP BUCKETS"
+  ) {
+    return "White PPCP Buckets";
+  }
+  return String(value || "").trim();
 }
 
 function materialCode(value) {

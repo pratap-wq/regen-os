@@ -10383,6 +10383,12 @@ function materialFlowNormalizeMaterial_(name, category) {
     };
   }
   const map = {
+    "WHITE BUCKET": ["White PPCP Buckets", "RM", "White PPCP Buckets"],
+    "WHITE BUCKETS": ["White PPCP Buckets", "RM", "White PPCP Buckets"],
+    "WHITE PPCP BUCKETS": ["White PPCP Buckets", "RM", "White PPCP Buckets"],
+    "MIXED BUCKET": ["White PPCP Buckets", "RM", "White PPCP Buckets"],
+    "MIXED BUCKETS": ["White PPCP Buckets", "RM", "White PPCP Buckets"],
+    "MIXED PPCP BUCKETS": ["White PPCP Buckets", "RM", "White PPCP Buckets"],
     "WASHED MATERIAL": ["White Regrind (Washed)", "WIP", "White Regrind (Washed)"],
     "WASHED FLAKES": ["White Regrind (Washed)", "WIP", "White Regrind (Washed)"],
     "WASHED WHITE FLAKES": ["White Regrind (Washed)", "WIP", "White Regrind (Washed)"],

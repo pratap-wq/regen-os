@@ -20,7 +20,19 @@ export default function DataTable({
 
   function getCellValue(row, col) {
     if (col.renderExport) return col.renderExport(row);
+    if (col.searchValue) return col.searchValue(row);
     return row[col.key];
+  }
+
+  function getSearchValue(row, field) {
+    const col =
+      typeof field === "object"
+        ? field
+        : columns.find((column) => column.key === field);
+
+    if (col?.searchValue) return col.searchValue(row);
+    if (col?.renderExport) return col.renderExport(row);
+    return row[typeof field === "object" ? field.key : field];
   }
 
   function sortByColumn(key) {
@@ -58,7 +70,7 @@ export default function DataTable({
           : columns.map((c) => c.key);
 
         return fields.some((field) =>
-          String(r[field] || "").toLowerCase().includes(q)
+          String(getSearchValue(r, field) || "").toLowerCase().includes(q)
         );
       });
     }
@@ -81,7 +93,7 @@ export default function DataTable({
       if (!value) return;
 
       filtered = filtered.filter((r) =>
-        String(r[key] || "").toLowerCase().includes(value.toLowerCase())
+        String(getSearchValue(r, key) || "").toLowerCase().includes(value.toLowerCase())
       );
     });
 

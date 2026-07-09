@@ -77,7 +77,7 @@ function doGet(e) {
 
     // Grinder
     if (p.fn === "grinder.add") return addGrinderBatch(p);
-    if (p.fn === "grinder.list") return listMaster("Grinder_Batches");
+    if (p.fn === "grinder.list") return listGrinderBatches(p);
     if (p.fn === "grinder.update") return updateGrinderBatch(p);
 
     // Wash
@@ -6963,12 +6963,8 @@ function grinderOutputQtyFromComposition_(outputComposition) {
     .reduce(function(sum, row) { return sum + num(row.qtyKg); }, 0);
 }
 
-function addGrinderBatch(data = {}) {
-  validateOperationalWrite_(data);
-  data = normalizeProductionBatchPayload_(data, "GRINDER");
-
-  const sh = getSheet("Grinder_Batches");
-  ensureHeaders_("Grinder_Batches", [
+function grinderBatchHeaders_() {
+  return REGEN_DB_SCHEMA.Grinder_Batches || [
     "grinderBatchId",
     "batchId",
     "date",
@@ -6997,7 +6993,24 @@ function addGrinderBatch(data = {}) {
     "createdBy",
     "createdAt",
     "updatedAt",
-  ]);
+  ];
+}
+
+function ensureGrinderBatchesSheet_() {
+  return createSheetIfMissing_("Grinder_Batches", grinderBatchHeaders_());
+}
+
+function listGrinderBatches(data = {}) {
+  ensureGrinderBatchesSheet_();
+  return listMaster("Grinder_Batches");
+}
+
+function addGrinderBatch(data = {}) {
+  validateOperationalWrite_(data);
+  data = normalizeProductionBatchPayload_(data, "GRINDER");
+
+  const sh = ensureGrinderBatchesSheet_();
+  ensureHeaders_("Grinder_Batches", grinderBatchHeaders_());
 
   const grinderBatchId = data.grinderBatchId || data.batchId || generateBatchId("GB");
   const duplicate = assertNoDuplicateCreate_("Grinder_Batches", "grinderBatchId", grinderBatchId);
@@ -7085,6 +7098,7 @@ function addGrinderBatch(data = {}) {
 
 function updateGrinderBatch(data = {}) {
   const idValue = data.grinderBatchId || data.batchId;
+  ensureGrinderBatchesSheet_();
   validateOperationalWrite_(
     data,
     getRowById_("Grinder_Batches", "grinderBatchId", idValue)
@@ -9170,6 +9184,7 @@ function rebuildFromRmInward_(ctx) {
 }
 
 function rebuildFromGrinderBatches_(ctx) {
+  ensureGrinderBatchesSheet_();
   const rows = getRowsAsObjects("Grinder_Batches").filter((row) => !isDeleted_(row));
   rows.forEach((row, index) => {
     const sourceId = String(row.grinderBatchId || row.batchId || "GRIND-" + (index + 1));

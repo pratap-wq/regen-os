@@ -15,10 +15,7 @@ const STATUS_BG = {
 
 export default function SystemHealth() {
   const [health, setHealth] = useState(null);
-  const [deepHealth, setDeepHealth] = useState(null);
   const [status, setStatus] = useState("Loading connectivity health...");
-  const [deepStatus, setDeepStatus] = useState("");
-  const [deepRunning, setDeepRunning] = useState(false);
 
   useEffect(() => {
     loadHealth();
@@ -27,12 +24,12 @@ export default function SystemHealth() {
   async function loadHealth() {
     try {
       setStatus("Loading connectivity health...");
-      const res = await callWithTimeout(apiCall({ fn: "health.check" }), 8000, "Lightweight Health Check timed out. Backend may be slow, but no deep diagnostics were run.");
+      const res = await callWithTimeout(apiCall({ fn: "debug.routes" }), 8000, "Backend route registry timed out. Check Apps Script deployment availability.");
       if (res.ok === false) {
-        setStatus(formatHealthError(res.error || "Health check route returned an error."));
+        setStatus(formatHealthError(res.error || "debug.routes returned an error."));
         return;
       }
-      setHealth(res);
+      setHealth(buildRoutesHealth(res));
       setStatus("");
     } catch (err) {
       console.log(err);
@@ -40,26 +37,7 @@ export default function SystemHealth() {
     }
   }
 
-  async function runDeepCheck() {
-    try {
-      setDeepRunning(true);
-      setDeepStatus("Running deep diagnostics. This may take longer because it scans material, ledger, production, dispatch, stores, and Month Close data...");
-      const res = await callWithTimeout(apiCall({ fn: "systemHealth.deepCheck", maxSamples: 5 }), 60000, "Deep Check timed out. Lightweight Health Check is still valid; run Deep Check again after reducing backend load.");
-      if (res.ok === false) {
-        setDeepStatus(formatHealthError(res.error || "Deep Check route returned an error."));
-        return;
-      }
-      setDeepHealth(res);
-      setDeepStatus("Deep Check completed.");
-    } catch (err) {
-      console.log(err);
-      setDeepStatus(formatHealthError(err.message || err));
-    } finally {
-      setDeepRunning(false);
-    }
-  }
-
-  const checks = [...(health?.checks || []), ...(deepHealth?.checks || [])];
+  const checks = health?.checks || [];
   const sortedChecks = useMemo(() => {
     const order = { red: 0, yellow: 1, green: 2 };
     return checks.slice().sort((a, b) => {
@@ -80,13 +58,13 @@ export default function SystemHealth() {
         <button type="button" onClick={loadHealth} style={refreshButton}>
           Refresh
         </button>
-        <button type="button" onClick={runDeepCheck} disabled={deepRunning} style={deepRunning ? disabledButton : refreshButton}>
-          {deepRunning ? "Running..." : "Run Deep Check"}
+        <button type="button" disabled style={disabledButton}>
+          Deep Check Disabled
         </button>
       </div>
 
       {status && <div style={statusStyle}>{status}</div>}
-      {deepStatus && <div style={deepStatus.startsWith("Deep Check completed") ? okStatusStyle : statusStyle}>{deepStatus}</div>}
+      <div style={statusStyle}>Deep health check unavailable until backend deployment is updated.</div>
 
       {health && (
         <>
@@ -98,7 +76,7 @@ export default function SystemHealth() {
           </div>
 
           <div style={note}>
-            Mode: {health.mode || "READ_ONLY"} | Generated: {health.generatedAt || ""} | Deep Check: {deepHealth ? "Loaded" : "Manual"}
+            Mode: {health.mode || "READ_ONLY"} | Generated: {health.generatedAt || ""} | Routes: {health.routeCount || 0}
           </div>
 
           <div style={checkGrid}>
@@ -110,6 +88,47 @@ export default function SystemHealth() {
       )}
     </div>
   );
+}
+
+function buildRoutesHealth(res) {
+  const timestamp = new Date().toISOString();
+  const routeCount = Array.isArray(res.routes) ? res.routes.length : 0;
+  const checks = [
+    {
+      key: "backend-reachable",
+      title: "Backend reachable",
+      module: "Backend",
+      status: "green",
+      rowCount: 0,
+      sampleRows: [{ route: res.route || "debug.routes" }],
+      recommendedAction: "OK",
+    },
+    {
+      key: "routes-loaded",
+      title: "Routes loaded",
+      module: "Backend",
+      status: routeCount > 0 ? "green" : "yellow",
+      rowCount: routeCount,
+      sampleRows: [{ routeCount, mode: res.mode || "READ_ONLY" }],
+      recommendedAction: routeCount > 0 ? "OK" : "Route registry returned no routes. Check Apps Script deployment.",
+    },
+  ];
+
+  return {
+    ok: true,
+    route: "debug.routes",
+    mode: res.mode || "READ_ONLY",
+    generatedAt: timestamp,
+    timestamp,
+    overallStatus: routeCount > 0 ? "green" : "yellow",
+    summary: {
+      red: 0,
+      yellow: routeCount > 0 ? 0 : 1,
+      green: routeCount > 0 ? 2 : 1,
+    },
+    routeCount,
+    checks,
+  };
 }
 
 function callWithTimeout(promise, timeoutMs, message) {
@@ -130,7 +149,7 @@ function formatHealthError(error) {
   }
 
   if (lower.includes("unknown fn")) {
-    return "Route missing. The deployed Apps Script does not recognize health.check yet. Push/deploy the latest apps-script/Code.js.";
+    return "Route missing. The deployed Apps Script does not recognize the requested health route. Use debug.routes until backend deployment is updated.";
   }
 
   if (lower.includes("non-json") || lower.includes("html/404") || lower.includes("<!doctype") || lower.includes("<html")) {
@@ -249,15 +268,6 @@ const statusStyle = {
   background: "#fff7ed",
   border: "1px solid #fed7aa",
   color: "#9a3412",
-  borderRadius: 8,
-  marginBottom: 16,
-};
-
-const okStatusStyle = {
-  padding: 14,
-  background: "#ecfdf5",
-  border: "1px solid #bbf7d0",
-  color: "#166534",
   borderRadius: 8,
   marginBottom: 16,
 };

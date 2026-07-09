@@ -321,7 +321,7 @@ export default function Dispatch() {
       .join(" + ");
   }
 
-  function autoCalculate(updated, lines = dispatchLines) {
+  function autoCalculate(updated, lines = dispatchLines, options = {}) {
     const totalQty = getLineTotal(lines);
     const quantityKg = totalQty > 0 ? totalQty : Number(updated.quantityKg || 0);
 
@@ -331,14 +331,15 @@ export default function Dispatch() {
       material: normalizeFgGrade(x.material || x.grade || updated.material || updated.grade),
       itemType: "FG",
       availableKg: Number(x.availableKg || 0),
-      dispatchQtyKg: Number(x.dispatchQtyKg || 0) || (lines.length === 1 ? quantityKg : 0),
+      dispatchQtyKg: options.preserveQuantityText
+        ? String(x.dispatchQtyKg ?? updated.quantityKg ?? "")
+        : Number(x.dispatchQtyKg || 0) || (lines.length === 1 ? quantityKg : 0),
     }));
 
-    updated.dispatchId =
-      updated.dispatchId ||
-      makeDispatchId(updated.productionDate, updated.productionShift);
-
-    updated.quantityKg = quantityKg > 0 ? quantityKg.toFixed(2) : "";
+    updated.dispatchId = updated.dispatchId || "";
+    updated.quantityKg = options.preserveQuantityText
+      ? String(updated.quantityKg ?? "")
+      : quantityKg > 0 ? quantityKg.toFixed(2) : "";
     updated.dispatchLines = JSON.stringify(cleanLines);
     updated.material = normalizeFgGrade(updated.material || updated.grade);
     updated.grade = updated.material || getGradeSummary(cleanLines);
@@ -454,7 +455,7 @@ export default function Dispatch() {
         ? buildGradeDispatchLines(nextMaterial, e.target.value)
         : [{ ...blankLine, dispatchQtyKg: e.target.value }];
       setDispatchLines(nextLines);
-      updated = autoCalculate(updated, nextLines);
+      updated = autoCalculate(updated, nextLines, { preserveQuantityText: true });
     } else {
       updated = autoCalculate(updated, dispatchLines);
     }
@@ -490,7 +491,7 @@ export default function Dispatch() {
         itemType: "FG",
         lotNo: grade,
         availableKg: Number(selectedInventory?.availableKg || 0),
-        dispatchQtyKg: Number(quantityKg || 0),
+        dispatchQtyKg: String(quantityKg ?? ""),
         remarks: "Dispatched from FG grade inventory",
       },
     ];
@@ -559,15 +560,13 @@ export default function Dispatch() {
           grade: material,
           sourceExtrusionBatchId: "",
           linkedFgBatchId: "",
-          dispatchId:
-            form.dispatchId ||
-            makeDispatchId(form.date, form.productionShift),
+          dispatchId: editingRow?.dispatchId || "",
         },
         cleanLines
       );
 
       const debugSummary = {
-        dispatchId: editingRow?.dispatchId || finalForm.dispatchId,
+        dispatchId: editingRow?.dispatchId || finalForm.dispatchId || "Auto-generated on save",
         grade: material,
         quantityKg: Number(finalForm.quantityKg || 0),
         ratePerKg: rate,
@@ -881,7 +880,7 @@ export default function Dispatch() {
           <Field label="Dispatch Code">
             <input
               readOnly
-              value={form.dispatchId || makeDispatchId(form.date, "")}
+              value={editingRow?.dispatchId || form.dispatchId || "Auto-generated on save"}
               style={readonlyStyle}
             />
           </Field>

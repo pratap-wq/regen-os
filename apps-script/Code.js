@@ -8708,6 +8708,39 @@ function postDispatchLedgerRows_(dispatchId, date, lineRows, data) {
   return posted;
 }
 
+function repairMissingDispatchLedger_(dispatchId, existingDispatch) {
+  const date = normalizeDateOnly_(existingDispatch.date || todayYmd());
+  const dispatchLines = normalizeDispatchLines_(existingDispatch);
+  const lineRows = parseDispatchLines_(dispatchLines);
+  if (!lineRows.length) {
+    throw new Error("Cannot repair dispatch ledger because dispatch lines are missing.");
+  }
+
+  validateDispatchAvailability_({
+    ...existingDispatch,
+    dispatchId: "",
+    dispatchLines,
+  });
+  validateDispatchFgRates_(existingDispatch, lineRows, date);
+
+  const ledgerRows = postDispatchLedgerRows_(dispatchId, date, lineRows, existingDispatch);
+  if (ledgerRows <= 0) {
+    throw new Error("No dispatch ledger rows were posted during repair.");
+  }
+
+  updateById("Dispatches", "dispatchId", dispatchId, {
+    dispatchLines,
+    status: "ACTIVE",
+    dispatchStatus: existingDispatch.dispatchStatus || "DISPATCHED",
+    remarks: String(existingDispatch.remarks || "") +
+      (existingDispatch.remarks ? " | " : "") +
+      "Missing dispatch ledger posting repaired",
+    updatedAt: new Date(),
+  });
+
+  return ledgerRows;
+}
+
 function dispatchLedgerPostedCount_(dispatchId) {
   if (!dispatchId) return 0;
   return getRowsAsObjects("Inventory_Ledger")
@@ -8727,20 +8760,54 @@ function addDispatch(data = {}) {
   const existingDispatch = getRowById_("Dispatches", "dispatchId", dispatchId);
   if (existingDispatch) {
     const existingLedgerCount = dispatchLedgerPostedCount_(dispatchId);
+    if (existingLedgerCount <= 0) {
+      try {
+        const repairedLedgerRows = repairMissingDispatchLedger_(dispatchId, existingDispatch);
+        return output({
+          ok: true,
+          duplicate: true,
+          repaired: true,
+          alreadyExists: true,
+          dispatchId,
+          dispatchValue: num(existingDispatch.dispatchValue),
+          ledgerPosted: true,
+          ledgerRows: repairedLedgerRows,
+          message: "Dispatch existed; missing ledger posting was repaired.",
+        });
+      } catch (err) {
+        updateById("Dispatches", "dispatchId", dispatchId, {
+          status: "POSTING_FAILED",
+          dispatchStatus: "POSTING_FAILED",
+          remarks: String(existingDispatch.remarks || "") +
+            (existingDispatch.remarks ? " | " : "") +
+            "Ledger repair failed: " + (err.message || err),
+          updatedAt: new Date(),
+        });
+        return output({
+          ok: false,
+          duplicate: true,
+          alreadyExists: true,
+          dispatchId,
+          dispatchValue: num(existingDispatch.dispatchValue),
+          ledgerPosted: false,
+          ledgerRows: 0,
+          ledgerError: err.message || String(err),
+          error: "Dispatch existed but ledger repair failed: " + (err.message || err),
+          message: "Dispatch ledger repair failed. Form was not cleared.",
+        });
+      }
+    }
+
     return output({
-      ok: existingLedgerCount > 0,
+      ok: true,
       duplicate: true,
       alreadyExists: true,
       dispatchId,
       dispatchValue: num(existingDispatch.dispatchValue),
-      ledgerPosted: existingLedgerCount > 0,
+      ledgerPosted: true,
       ledgerRows: existingLedgerCount,
-      message: existingLedgerCount > 0
-        ? "Dispatch already exists. No duplicate row was created."
-        : "Dispatch already exists but ledger posting was not found. Do not clear the form; review dispatch ledger.",
-      error: existingLedgerCount > 0
-        ? ""
-        : "Dispatch already exists but ledger posting was not found.",
+      message: "Dispatch already exists. No duplicate row was created.",
+      error: "",
     });
   }
 

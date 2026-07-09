@@ -478,6 +478,7 @@ function updateFactoryCostMaster(data = {}) {
     if (p.fn === "inventoryLedger.rebuild") return rebuildInventoryLedger(p);
     if (p.fn === "materialNormalization.preview") return output(previewSpreadsheetMaterialNormalization(p));
     if (p.fn === "health.check") return output(buildHealthCheck_(p));
+    if (p.fn === "systemHealth.deepCheck") return output(systemHealthConnectivity(p));
     if (p.fn === "systemHealth.connectivity") return output(systemHealthConnectivity(p));
     if (p.fn === "materialFlow.auditJune2026") return auditJuneMaterialFlowV1(p);
     if (p.fn === "materialFlow.migrationPlanJune2026") return output(materialFlowMigrationPlanJune2026(p));
@@ -636,6 +637,7 @@ function debugRoutes() {
       "inventoryLedger.audit",
       "inventoryLedger.rebuild",
       "materialNormalization.preview",
+      "systemHealth.deepCheck",
       "systemHealth.connectivity",
       "materialFlow.auditJune2026",
       "materialFlow.migrationPlanJune2026",
@@ -698,27 +700,15 @@ function buildHealthCheck_(data) {
         : "Apps Script can reach the RegenOS spreadsheet and required sheets."
     ));
 
-    if (!missingSheets.length) {
-      try {
-        const detailed = systemHealthConnectivity(data || {});
-        base.route = "health.check";
-        base.detailedRoute = detailed.route || "systemHealth.connectivity";
-        base.checks = base.checks.concat(detailed.checks || []);
-        base.summary = summarizeHealthChecks_(base.checks);
-        base.overallStatus = overallHealthStatus_(base.summary);
-        return base;
-      } catch (err) {
-        base.checks.push(healthCard_(
-          "detailed-health-error",
-          "Detailed Health Check",
-          "System Health",
-          "red",
-          1,
-          [{ error: String(err), stack: err && err.stack ? String(err.stack).slice(0, 500) : "" }],
-          "Apps Script route is reachable, but detailed health checks failed. Review Apps Script permissions, sheet headers, or recent route changes."
-        ));
-      }
-    }
+    base.checks.push(healthCard_(
+      "route-registry",
+      "Route Registry Available",
+      "Backend",
+      "green",
+      0,
+      [{ routes: debugRoutes().routes.length, deepCheckRoute: "systemHealth.deepCheck" }],
+      "Backend route registry is available. Use Deep Check manually for material, inventory, dispatch, and Month Close diagnostics."
+    ));
   } catch (err) {
     base.checks.push(healthCard_(
       "backend-permission-or-sheet-error",

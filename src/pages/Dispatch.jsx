@@ -15,6 +15,7 @@ import { materialKey } from "../utils/materialInventory";
 
 export default function Dispatch() {
   const today = new Date().toISOString().split("T")[0];
+  const fgGrades = ["E1", "E2", "E3", "E4", "E5"];
 
   const blankLine = {
     sourceExtrusionBatchId: "",
@@ -251,6 +252,20 @@ export default function Dispatch() {
     (x) => normalizeFgGrade(x.material) === normalizeFgGrade(form.material || form.grade || "")
   );
 
+  const fgStockRows = useMemo(() => {
+    return fgGrades.map((grade) => {
+      const row = materialInventory.find((x) => normalizeFgGrade(x.material) === grade);
+      return {
+        grade,
+        availableKg: Number(row?.availableKg || 0),
+        source: row?.source || "Inventory Ledger",
+        selected: normalizeFgGrade(form.material || form.grade || "") === grade,
+      };
+    });
+  }, [materialInventory, form.material, form.grade]);
+
+  const totalFgAvailableKg = fgStockRows.reduce((sum, row) => sum + Number(row.availableKg || 0), 0);
+
   function getLineTotal(lines = dispatchLines) {
     return lines.reduce((s, r) => s + Number(r.dispatchQtyKg || 0), 0);
   }
@@ -333,6 +348,15 @@ export default function Dispatch() {
     return matches[0]?.row || null;
   }
 
+  function rateForGrade(material) {
+    const grade = normalizeFgGrade(material);
+    if (grade === normalizeFgGrade(form.material) && Number(form.ratePerKg || 0) > 0) {
+      return Number(form.ratePerKg || 0);
+    }
+    const rateRow = lookupFgRate(grade, form.customerName, form.date);
+    return Number(rateRow?.ratePerKg || 0);
+  }
+
   function applyAutoRate(updated) {
     if (!updated.material || Number(updated.ratePerKg || 0) > 0) return updated;
     const rateRow = lookupFgRate(updated.material, updated.customerName, updated.date);
@@ -411,6 +435,32 @@ export default function Dispatch() {
       },
     ];
   }
+
+  function requestedQtyByGrade(lines) {
+    const map = {};
+    (lines || []).forEach((line) => {
+      const grade = normalizeFgGrade(line.grade || line.material || form.material || "");
+      if (!grade) return;
+      map[grade] = (map[grade] || 0) + Number(line.dispatchQtyKg || 0);
+    });
+    return map;
+  }
+
+  function availableKgForGrade(grade) {
+    const row = fgStockRows.find((item) => item.grade === normalizeFgGrade(grade));
+    return Number(row?.availableKg || 0);
+  }
+
+  function validateLinesAgainstStock(lines) {
+    const byGrade = requestedQtyByGrade(lines);
+    for (const [grade, qty] of Object.entries(byGrade)) {
+      const available = availableKgForGrade(grade);
+      if (qty > available) {
+        return `Dispatch quantity exceeds available ${grade} stock. Available: ${available.toFixed(2)} Kg`;
+      }
+    }
+    return "";
+  }
   async function submit(e) {
     e.preventDefault();
 
@@ -425,19 +475,13 @@ export default function Dispatch() {
         return;
       }
 
-      const available = Number(selectedInventory?.availableKg || 0);
-
-      if (Number(form.quantityKg || 0) > available) {
-        setStatus(
-          `Dispatch quantity exceeds available ${form.material} stock. Available: ${available.toFixed(
-            2
-          )} Kg`
-        );
-        return;
-      }
-
       const material = normalizeFgGrade(form.material);
       const cleanLines = buildGradeDispatchLines(material, form.quantityKg);
+      const stockError = validateLinesAgainstStock(cleanLines);
+      if (stockError) {
+        setStatus(stockError);
+        return;
+      }
 
       const finalForm = autoCalculate(
         {
@@ -578,7 +622,7 @@ export default function Dispatch() {
 
   const currentDispatchQty = getLineTotal(dispatchLines);
   const operatorDispatchQty = Number(form.quantityKg || 0) || currentDispatchQty;
-  const currentSalesValue = operatorDispatchQty * Number(form.ratePerKg || 0);
+  const currentSalesValue = operatorDispatchQty * rateForGrade(form.material);
   const availableStockKg = Number(selectedInventory?.availableKg || 0);
   const remainingAfterDispatchKg = Math.max(
     availableStockKg - operatorDispatchQty,
@@ -624,7 +668,7 @@ export default function Dispatch() {
         <KpiCard title="Dispatch Qty" value={`${totalDispatch.toFixed(0)} Kg`} />
         <KPI title="Sales" value={`₹ ${totalSales.toFixed(0)}`} />
         <KPI title="Avg Realization" value={`₹ ${avgRealization}`} />
-        <KpiCard title="Materials Available" value={materialInventory.length} tone="neutral" />
+        <KpiCard title="FG Available" value={`${totalFgAvailableKg.toFixed(0)} Kg`} tone="neutral" />
         <KpiCard
           title="Selected Available"
           value={`${Number(selectedInventory?.availableKg || 0).toFixed(0)} Kg`}
@@ -635,6 +679,27 @@ export default function Dispatch() {
       <div style={stockNote}>
         Available stock as of today
         {selectedInventory?.source ? ` | Source: ${selectedInventory.source}` : ""}
+      </div>
+
+      <div style={sectionCard}>
+        <div style={sectionTitle}>FG Inventory by Grade</div>
+        <div style={fgStockGrid}>
+          {fgStockRows.map((row) => (
+            <button
+              key={row.grade}
+              type="button"
+              onClick={() => onChange({ target: { name: "material", value: row.grade } })}
+              style={{
+                ...fgStockCard,
+                borderColor: row.selected ? "#0f766e" : "#e5e7eb",
+                background: row.selected ? "#ecfdf5" : "white",
+              }}
+            >
+              <div style={fgGradeTitle}>{row.grade} Available</div>
+              <div style={fgGradeQty}>{row.availableKg.toFixed(2)} kg</div>
+            </button>
+          ))}
+        </div>
       </div>
 
       {status && <div style={statusStyle}>{status}</div>}
@@ -803,6 +868,22 @@ export default function Dispatch() {
 
           <Field label="Dispatch Quantity">
             <input readOnly value={operatorDispatchQty.toFixed(2)} style={readonlyStyle} />
+          </Field>
+
+          <Field label="Total Value">
+            <input
+              readOnly
+              value={`â‚¹ ${currentSalesValue.toFixed(0)}`}
+              style={readonlyStyle}
+            />
+          </Field>
+
+          <Field label="Customer">
+            <input readOnly value={form.customerName || ""} style={readonlyStyle} />
+          </Field>
+
+          <Field label="Unit">
+            <input readOnly value={form.customerUnit || ""} style={readonlyStyle} />
           </Field>
 
           <Field label="Remaining After Dispatch">
@@ -1065,6 +1146,33 @@ const customerCard = {
   borderRadius: 10,
   padding: 12,
   background: "#f8fafc",
+};
+
+const fgStockGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))",
+  gap: 12,
+};
+
+const fgStockCard = {
+  textAlign: "left",
+  border: "2px solid #e5e7eb",
+  borderRadius: 12,
+  padding: 14,
+  cursor: "pointer",
+};
+
+const fgGradeTitle = {
+  color: "#64748b",
+  fontSize: 12,
+  fontWeight: 700,
+};
+
+const fgGradeQty = {
+  marginTop: 8,
+  color: "#005d34",
+  fontSize: 20,
+  fontWeight: 850,
 };
 
 const inputStyle = {

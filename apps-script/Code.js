@@ -8384,20 +8384,38 @@ function lookupFgRateForDispatch_(grade, customerName, dateValue) {
 }
 
 function dispatchFinancials_(data, lineRows, date) {
-  const firstGrade = lineRows.map(function(line) { return dispatchLineGrade_(line, data.grade || data.material); }).filter(Boolean)[0] ||
-    normalizeDispatchFgGrade_(data.grade || data.material);
-  const rateLookup = lookupFgRateForDispatch_(firstGrade, data.customerName, date);
-  const ratePerKg = num(data.ratePerKg) || rateLookup.ratePerKg;
-  const freightPerKg = num(data.freightPerKg) || rateLookup.freightPerKg;
-  const quantityKg = num(data.quantityKg) || lineRows.reduce(function(sum, line) {
-    return sum + dispatchLineQty_(line, data.quantityKg);
-  }, 0);
+  const lines = (lineRows || []).length ? lineRows : parseDispatchLines_(normalizeDispatchLines_(data));
+  let quantityKg = 0;
+  let dispatchValue = 0;
+  let freightAmount = 0;
+  let manualRateUsed = false;
+  const rateSources = {};
+
+  lines.forEach(function(line) {
+    const grade = dispatchLineGrade_(line, data.grade || data.material);
+    const qty = dispatchLineQty_(line, data.quantityKg);
+    if (!grade || qty <= 0) return;
+    const rateLookup = lookupFgRateForDispatch_(grade, data.customerName, date);
+    const manualRate = num(line.ratePerKg) || ((lines.length === 1) ? num(data.ratePerKg) : 0);
+    const manualFreight = num(line.freightPerKg) || ((lines.length === 1) ? num(data.freightPerKg) : 0);
+    const ratePerKg = manualRate || rateLookup.ratePerKg;
+    const freightPerKg = manualFreight || rateLookup.freightPerKg;
+    quantityKg += qty;
+    dispatchValue += qty * ratePerKg;
+    freightAmount += qty * freightPerKg;
+    if (manualRate) manualRateUsed = true;
+    rateSources[manualRate ? "Manual" : rateLookup.source] = true;
+  });
+
+  if (quantityKg <= 0) quantityKg = num(data.quantityKg);
+  const ratePerKg = quantityKg > 0 ? dispatchValue / quantityKg : num(data.ratePerKg);
+  const freightPerKg = quantityKg > 0 ? freightAmount / quantityKg : num(data.freightPerKg);
   return {
-    ratePerKg,
-    freightPerKg,
-    dispatchValue: round2(quantityKg * ratePerKg),
-    freightAmount: round2(quantityKg * freightPerKg),
-    rateSource: num(data.ratePerKg) ? "Manual" : rateLookup.source,
+    ratePerKg: round2(ratePerKg),
+    freightPerKg: round2(freightPerKg),
+    dispatchValue: round2(dispatchValue || quantityKg * num(data.ratePerKg)),
+    freightAmount: round2(freightAmount || quantityKg * num(data.freightPerKg)),
+    rateSource: Object.keys(rateSources).join(" + ") || (manualRateUsed ? "Manual" : "Manual / Missing FG_Rates"),
   };
 }
 
@@ -8418,6 +8436,8 @@ function normalizeDispatchLines_(data = {}) {
             productionShift: x.productionShift || data.productionShift || "",
             availableKg: num(x.availableKg),
             dispatchQtyKg: num(x.dispatchQtyKg || x.quantityKg),
+            ratePerKg: num(x.ratePerKg),
+            freightPerKg: num(x.freightPerKg),
             remarks: x.remarks || "",
           };
         }).filter(function(x) {

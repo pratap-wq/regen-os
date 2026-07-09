@@ -4,6 +4,7 @@ import { calculateMonthClose } from "../services/monthCloseEngine";
 import { getPhysicalCount, savePhysicalCount } from "../services/physicalCountService";
 
 const MANUFACTURING_GROUPS = ["RM", "VIRGIN", "BATTERY", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"];
+const FIRST_SYSTEM_CLOSE_MONTH = "2026-06";
 
 export default function MonthlyAudit() {
   const now = new Date();
@@ -166,7 +167,6 @@ export default function MonthlyAudit() {
   const virginStockLine = materialLines.find((line) => line.key === "FLOW|VIRGIN_POLYMER");
   const batteryStockLine = materialLines.find((line) => line.key === "FLOW|BATTERY_MATERIAL");
   const openingDebug = getOpeningDebug(rows.closeRows, month);
-  const openingCorrectionRequired = openingDebug.requiresSplitCorrection;
   const rmReceivedProofKg =
     num(close.rm.totalReceivedKg) -
     num(close.production.virginReceivedKg) -
@@ -475,8 +475,8 @@ export default function MonthlyAudit() {
         <b>{monthLabel(month)} Status:</b>{" "}
         {formatTon(close.production.fgProducedKg)} Produced | {formatTon(close.production.dispatchKg)} Dispatched | {materialLines.filter((x) => x.statusType === "danger" || x.statusType === "warning").length} Differences Pending | {readyToClose ? "Can Close" : "Action Required"}
       </div>
-      {openingCorrectionRequired && (
-        <div style={warningBox}>Opening RM may include virgin/battery from earlier close. Split opening stock before closing this month.</div>
+      {openingDebug.isFirstSystemMonth && (
+        <div style={muted}>First system month: opening stock is treated as zero. Closing stock will become next month's opening.</div>
       )}
 
       <Section title="Can We Close This Month?">
@@ -616,14 +616,12 @@ export default function MonthlyAudit() {
                 ["Minus Excluded Additives", -num(close.production.additivesReceivedKg)],
                 ["RM Stock Received", close.rm.purchasedKg],
                 ["Formula Check Difference", rmReceivedProofDifferenceKg],
-                ["Previous Close Month", openingDebug.periodMonth || "-", "text"],
-                ["Previous Close Has Split Rows", openingDebug.hasSplitRows ? "Yes" : "No", "text"],
-                ["Previous Combined RM Opening", openingDebug.previousCombinedRmOpeningKg || 0],
+                ["Opening Rule", openingDebug.rule, "text"],
+                ["Previous System Close Month", openingDebug.periodMonth || "-", "text"],
                 ["RM Opening Source", rmStockLine?.openingSource || "-", "text"],
                 ["RM Opening", rmStockLine?.opening || 0],
                 ["Virgin Opening", virginStockLine?.opening || 0],
                 ["Battery Opening", batteryStockLine?.opening || 0],
-                ["Opening Validation", openingDebug.hasSplitRows ? "Split previous close available" : "Previous close may be old combined RM physical stock", "text"],
                 ["RM Out", rmStockLine?.flowOut || 0],
                 ["RM System Stock", rmStockLine?.systemClosing || 0],
               ]}
@@ -846,12 +844,14 @@ function buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }
 
 function createFlowStockLine({ key, materialName, group, flowIn, flowOut, adjustmentItemName, adjustmentItemType, openingContext, physicalMaterialLines, month, adjustments }) {
   const previousClose = openingContext?.previousClose || null;
-  const openingEditable = openingContext?.mode === "FIRST_CLOSE_SETUP" || openingContext?.mode === "PREVIOUS_CLOSE_CORRECTION";
+  const openingEditable = false;
   const openingBlocked = openingContext?.mode === "PREVIOUS_CLOSE_REQUIRED";
   const openingValue = physicalMaterialLines[openingKey(key)];
   const hasOpening = !openingEditable || (openingValue !== "" && openingValue !== undefined && openingValue !== null);
   const opening = openingEditable
     ? num(openingValue)
+    : openingContext?.mode === "FIRST_SYSTEM_MONTH"
+    ? 0
     : previousClose
     ? getPreviousClosingForFlow(previousClose, key, group)
     : 0;
@@ -906,13 +906,13 @@ function createFlowStockLine({ key, materialName, group, flowIn, flowOut, adjust
     openingBlocked,
     hasOpening,
     openingSource:
-      openingContext?.mode === "FIRST_CLOSE_SETUP"
-        ? "First close setup"
-        : openingContext?.mode === "PREVIOUS_CLOSE_CORRECTION"
-        ? "Opening correction required"
+      openingContext?.mode === "FIRST_SYSTEM_MONTH"
+        ? "First system month"
+        : openingContext?.mode === "PREVIOUS_CLOSE_REQUIRED"
+        ? "Previous close required"
         : previousClose
         ? `Previous approved close: ${previousClose.periodMonth}`
-        : "Previous close required",
+        : "First system month",
     flowIn: num(flowIn),
     flowOut: num(flowOut),
     inward: group === "RM" || group === "STORE" ? num(flowIn) : 0,
@@ -942,38 +942,31 @@ function getWasteReworkGenerated(close) {
 }
 
 function getOpeningContext(closeRows = [], month) {
+  const selectedMonth = String(month || "").slice(0, 7);
   const closedRows = closeRows
     .filter((row) => String(row.status || "").toUpperCase() === "CLOSED")
-    .filter((row) => String(row.periodMonth || "").slice(0, 7) < String(month));
+    .filter((row) => String(row.periodMonth || "").slice(0, 7) >= FIRST_SYSTEM_CLOSE_MONTH)
+    .filter((row) => String(row.periodMonth || "").slice(0, 7) < selectedMonth);
   const previousMonth = getPreviousMonth(month);
   const previousClose = closedRows.find((row) => String(row.periodMonth || "").slice(0, 7) === previousMonth) || null;
-  if (previousClose) {
-    return hasSplitOpeningRows(previousClose)
-      ? { mode: "PREVIOUS_CLOSE", previousClose }
-      : { mode: "PREVIOUS_CLOSE_CORRECTION", previousClose };
-  }
-  if (closedRows.length === 0) return { mode: "FIRST_CLOSE_SETUP", previousClose: null };
+  if (previousClose) return { mode: "PREVIOUS_CLOSE", previousClose };
+  if (closedRows.length === 0) return { mode: "FIRST_SYSTEM_MONTH", previousClose: null };
   return { mode: "PREVIOUS_CLOSE_REQUIRED", previousClose: null };
 }
 
 function getOpeningDebug(closeRows = [], month) {
   const context = getOpeningContext(closeRows, month);
   const previousClose = context.previousClose || null;
-  const hasSplitRows = hasSplitOpeningRows(previousClose);
   return {
     periodMonth: previousClose?.periodMonth || "",
-    hasSplitRows,
-    previousCombinedRmOpeningKg: previousClose?.rmPhysicalKg || 0,
-    requiresSplitCorrection: Boolean(previousClose) && !hasSplitRows,
+    isFirstSystemMonth: context.mode === "FIRST_SYSTEM_MONTH",
+    rule:
+      context.mode === "FIRST_SYSTEM_MONTH"
+        ? "Opening is zero for first system month"
+        : context.mode === "PREVIOUS_CLOSE"
+        ? "Opening comes from previous approved system close"
+        : "Immediate previous system close required",
   };
-}
-
-function hasSplitOpeningRows(previousClose) {
-  const lines = parsePreviousCloseStockJson(previousClose);
-  const hasRmLine = lines.some((row) => row.key === "FLOW|RM");
-  const hasVirginLine = lines.some((row) => row.key === "FLOW|VIRGIN_POLYMER");
-  const hasBatteryLine = lines.some((row) => row.key === "FLOW|BATTERY_MATERIAL");
-  return hasRmLine && hasVirginLine && hasBatteryLine;
 }
 
 function getPreviousMonth(month) {

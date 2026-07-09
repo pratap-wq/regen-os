@@ -168,6 +168,7 @@ export function calculateMonthClose({
     periodMonth,
 
     rm: {
+      totalReceivedKg: rmFeed.totalReceivedKg,
       purchasedKg: rmPurchasedKg,
       value: rmValue,
       avgRate: avgRmPrice,
@@ -188,6 +189,9 @@ export function calculateMonthClose({
       extrusionRecovery: pct(fgProducedKg, extrusionInputKg),
       overallRecovery: pct(fgProducedKg, totalExtruderFeedKg),
       totalExtruderFeedKg,
+      virginReceivedKg: rmFeed.virginReceivedKg,
+      batteryReceivedKg: rmFeed.batteryReceivedKg,
+      additivesReceivedKg: rmFeed.additivesReceivedKg,
       virginAddedKg: extrusionFeed.virginAddedKg,
       batteryMaterialKg: extrusionFeed.batteryMaterialKg,
       additivesKg: extrusionFeed.additivesKg,
@@ -259,13 +263,25 @@ function classifyRmReceivedFeed(rows) {
       addRmFeedQty(acc, materialLabel(row.material || row.materialName || row.materialType || row.itemName), qty, value);
       return acc;
     },
-    { recycledRmKg: 0, recycledRmValue: 0 }
+    { totalReceivedKg: 0, recycledRmKg: 0, recycledRmValue: 0, virginReceivedKg: 0, batteryReceivedKg: 0, additivesReceivedKg: 0 }
   );
 }
 
 function addRmFeedQty(acc, label, qty, value) {
   if (!qty) return;
-  if (isExcludedFromRecycledRm(label)) return;
+  acc.totalReceivedKg += qty;
+  if (isVirginMaterial(label)) {
+    acc.virginReceivedKg += qty;
+    return;
+  }
+  if (isBatteryMaterial(label)) {
+    acc.batteryReceivedKg += qty;
+    return;
+  }
+  if (isAdditiveMaterial(label)) {
+    acc.additivesReceivedKg += qty;
+    return;
+  }
   acc.recycledRmKg += qty;
   acc.recycledRmValue += value;
 }
@@ -293,9 +309,20 @@ function classifyExtrusionFeed(rows) {
   );
 }
 
+function isVirginMaterial(label) {
+  return /VIRGIN\s*PP|VIRGIN\s*PPCP|VIRGIN/.test(String(label || "").toUpperCase());
+}
+
+function isBatteryMaterial(label) {
+  return /BATTERY\s*PPCP|BATTERY\s*REGRIND|BATTERY\s*SCRAP|BATTERY\s*FLAKES|BATTERY/.test(String(label || "").toUpperCase());
+}
+
+function isAdditiveMaterial(label) {
+  return /MASTER\s*BATCH|MASTERBATCH|ANTIOXIDANT|ANTI\s*OXIDANT|MFI\s*MODIFIER|TIO2|TI\s*O2|ADDITIVE/.test(String(label || "").toUpperCase());
+}
+
 function isExcludedFromRecycledRm(label) {
-  const text = String(label || "").toUpperCase();
-  return /VIRGIN\s*PP|VIRGIN\s*PPCP|BATTERY\s*PPCP|BATTERY\s*REGRIND|BATTERY\s*SCRAP|BATTERY\s*FLAKES|MASTER\s*BATCH|MASTERBATCH|ANTIOXIDANT|ANTI\s*OXIDANT|MFI\s*MODIFIER|TIO2|TI\s*O2|ADDITIVE/.test(text);
+  return isVirginMaterial(label) || isBatteryMaterial(label) || isAdditiveMaterial(label);
 }
 
 function materialLabel(value) {

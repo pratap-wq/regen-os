@@ -3,7 +3,7 @@ import { apiCall } from "../api/api";
 import { calculateMonthClose } from "../services/monthCloseEngine";
 import { getPhysicalCount, savePhysicalCount } from "../services/physicalCountService";
 
-const MANUFACTURING_GROUPS = ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"];
+const MANUFACTURING_GROUPS = ["RM", "VIRGIN", "BATTERY", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"];
 
 export default function MonthlyAudit() {
   const now = new Date();
@@ -162,6 +162,13 @@ export default function MonthlyAudit() {
     () => buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }),
     [close, rows, physicalMaterialLines, month]
   );
+  const rmStockLine = materialLines.find((line) => line.key === "FLOW|RM");
+  const rmReceivedProofKg =
+    num(close.rm.totalReceivedKg) -
+    num(close.production.virginReceivedKg) -
+    num(close.production.batteryReceivedKg) -
+    num(close.production.additivesReceivedKg);
+  const rmReceivedProofDifferenceKg = rmReceivedProofKg - num(close.rm.purchasedKg);
 
   const monthClosed = useMemo(
     () =>
@@ -338,11 +345,11 @@ export default function MonthlyAudit() {
         closeMonth: month,
         date: `${month}-01`,
         module: "MONTH_CLOSE",
-        itemType: line.group,
+        itemType: line.adjustmentItemType || line.group,
         materialId: line.materialId,
         materialCode: line.materialCode,
-        itemCode: line.materialName,
-        material: line.materialName,
+        itemCode: line.adjustmentItemName || line.materialName,
+        material: line.adjustmentItemName || line.materialName,
         stage: line.group,
         systemQty: line.systemClosing,
         physicalQty: line.physicalKg,
@@ -577,18 +584,39 @@ export default function MonthlyAudit() {
           {showDebug ? "Hide Debug" : "Show Debug"}
         </button>
       </div>
-      {showDebug && materialGroupView && (
-        <Section title="Mapping Check">
-          <div style={muted}>Debug-only view for migration and Month Close stabilization.</div>
-          <ReconTable
-            rows={[
-              ["Unmapped ledger rows", materialGroupView.unmappedLedgerRows?.length || 0, "text"],
-              ["Invalid ledger rows", materialGroupView.invalidLedgerRows?.length || 0, "text"],
-              ["Mapping warnings", materialGroupView.movementSourceSummary?.mappingWarnings?.length || 0, "text"],
-              ["System source", materialGroupView.source || "-", "text"],
-            ]}
-          />
-        </Section>
+      {showDebug && (
+        <>
+          {materialGroupView && (
+            <Section title="Mapping Check">
+              <div style={muted}>Debug-only view for migration and Month Close stabilization.</div>
+              <ReconTable
+                rows={[
+                  ["Unmapped ledger rows", materialGroupView.unmappedLedgerRows?.length || 0, "text"],
+                  ["Invalid ledger rows", materialGroupView.invalidLedgerRows?.length || 0, "text"],
+                  ["Mapping warnings", materialGroupView.movementSourceSummary?.mappingWarnings?.length || 0, "text"],
+                  ["System source", materialGroupView.source || "-", "text"],
+                ]}
+              />
+            </Section>
+          )}
+          <Section title="RM Stock Calculation Check">
+            <div style={muted}>Debug-only proof that RM Stock excludes virgin, battery, and additive materials.</div>
+            <ReconTable
+              rows={[
+                ["Total RM Received before exclusions", close.rm.totalReceivedKg],
+                ["Minus Virgin Polymer", -num(close.production.virginReceivedKg)],
+                ["Minus Battery Material", -num(close.production.batteryReceivedKg)],
+                ["Minus Excluded Additives", -num(close.production.additivesReceivedKg)],
+                ["RM Stock Received", close.rm.purchasedKg],
+                ["Formula Check Difference", rmReceivedProofDifferenceKg],
+                ["RM Opening Source", rmStockLine?.openingSource || "-", "text"],
+                ["RM Opening", rmStockLine?.opening || 0],
+                ["RM Out", rmStockLine?.flowOut || 0],
+                ["RM System Stock", rmStockLine?.systemClosing || 0],
+              ]}
+            />
+          </Section>
+        </>
       )}
       <div style={twoColumn}>
         <Section title="Production Summary">
@@ -731,6 +759,32 @@ function buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }
       adjustments: rows.adjustments,
     }),
     createFlowStockLine({
+      key: "FLOW|VIRGIN_POLYMER",
+      materialName: "Virgin Polymer Stock",
+      group: "VIRGIN",
+      flowIn: close.production.virginReceivedKg,
+      flowOut: close.production.virginAddedKg,
+      adjustmentItemName: "Virgin PPCP",
+      adjustmentItemType: "ADDITIVE",
+      openingContext,
+      physicalMaterialLines,
+      month,
+      adjustments: rows.adjustments,
+    }),
+    createFlowStockLine({
+      key: "FLOW|BATTERY_MATERIAL",
+      materialName: "Battery Material Stock",
+      group: "BATTERY",
+      flowIn: close.production.batteryReceivedKg,
+      flowOut: close.production.batteryMaterialKg,
+      adjustmentItemName: "Battery PPCP",
+      adjustmentItemType: "RM",
+      openingContext,
+      physicalMaterialLines,
+      month,
+      adjustments: rows.adjustments,
+    }),
+    createFlowStockLine({
       key: "FLOW|WIP",
       materialName: "WIP Stock",
       group: "WIP",
@@ -777,7 +831,7 @@ function buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }
   ];
 }
 
-function createFlowStockLine({ key, materialName, group, flowIn, flowOut, openingContext, physicalMaterialLines, month, adjustments }) {
+function createFlowStockLine({ key, materialName, group, flowIn, flowOut, adjustmentItemName, adjustmentItemType, openingContext, physicalMaterialLines, month, adjustments }) {
   const previousClose = openingContext?.previousClose || null;
   const openingEditable = openingContext?.mode === "FIRST_CLOSE_SETUP";
   const openingBlocked = openingContext?.mode === "PREVIOUS_CLOSE_REQUIRED";
@@ -792,7 +846,7 @@ function createFlowStockLine({ key, materialName, group, flowIn, flowOut, openin
     const sameMonth = String(a.periodMonth || a.closeMonth || "").slice(0, 7) === String(month);
     const sameSource = String(a.sourceRef || "") === `MONTH_CLOSE:${month}:${key}`;
     const sameItem =
-      String(a.itemCode || a.material || a.materialName || "").toUpperCase() === String(materialName).toUpperCase() ||
+      String(a.itemCode || a.material || a.materialName || "").toUpperCase() === String(adjustmentItemName || materialName).toUpperCase() ||
       String(a.itemType || "").toUpperCase() === String(group).toUpperCase();
     return sameMonth && (sameSource || sameItem);
   });
@@ -831,6 +885,8 @@ function createFlowStockLine({ key, materialName, group, flowIn, flowOut, openin
     materialId: key,
     materialCode: group,
     materialName,
+    adjustmentItemName: adjustmentItemName || materialName,
+    adjustmentItemType: adjustmentItemType || group,
     group,
     opening,
     openingEditable,

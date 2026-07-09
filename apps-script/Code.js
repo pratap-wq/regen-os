@@ -2512,18 +2512,18 @@ function materialMasterRowsForProductionDropdown_() {
       return status !== "INACTIVE" && status !== "DELETED" && status !== "DISABLED" &&
         (
           defaultProductionMaterial ||
-          yesNo_(row.appearsInRmInward) === "YES" ||
-          yesNo_(row.appearsInProduction) === "YES" ||
-          yesNo_(row.appearsInDispatch) === "YES"
+          materialMasterFlag_(row, ["appearsInRmInward", "appearsInRMInward"]) === "YES" ||
+          materialMasterFlag_(row, ["appearsInProduction"]) === "YES" ||
+          materialMasterFlag_(row, ["appearsInDispatch"]) === "YES"
         );
     })
     .map(function(row, index) {
       const category = normalizeMaterialCategoryForDropdown_(row.category);
       const code = materialCode_(row.materialCode || row.materialName);
       const defaultProductionMaterial = code === "WHITE_BUCKETS";
-      const rm = defaultProductionMaterial || yesNo_(row.appearsInRmInward) === "YES";
-      const production = defaultProductionMaterial || yesNo_(row.appearsInProduction) === "YES";
-      const dispatch = yesNo_(row.appearsInDispatch) === "YES";
+      const rm = defaultProductionMaterial || materialMasterFlag_(row, ["appearsInRmInward", "appearsInRMInward"]) === "YES";
+      const production = defaultProductionMaterial || materialMasterFlag_(row, ["appearsInProduction"]) === "YES";
+      const dispatch = materialMasterFlag_(row, ["appearsInDispatch"]) === "YES";
       const rules = materialMasterDropdownRules_(category, rm, production, dispatch);
       return {
         materialId: row.materialId || row.materialCode || ("MAT-DROPDOWN-" + index),
@@ -2551,6 +2551,14 @@ function normalizeMaterialCategoryForDropdown_(category) {
   if (value === "STORE" || value === "STORES") return "STORE";
   if (value === "RM_CONSUMABLE") return "RM";
   return value;
+}
+
+function materialMasterFlag_(row, keys) {
+  for (let i = 0; i < keys.length; i += 1) {
+    const value = row[keys[i]];
+    if (value !== undefined && value !== "") return yesNo_(value);
+  }
+  return "NO";
 }
 
 function materialMasterDropdownRules_(category, rm, production, dispatch) {
@@ -2619,40 +2627,52 @@ function mergeCsvValues_(primary, fallback) {
 }
 
 function productionMaterialAllowedFor_(row, stage, direction) {
-  const active = String(row.active || row.isActive || row.status || "TRUE").toUpperCase();
-  if (active === "FALSE" || active === "INACTIVE" || active === "DELETED" || active === "DISABLED") return false;
-
   const stageName = String(stage || "").toUpperCase();
   const directionName = String(direction || "").toUpperCase();
-  const stages = String(row.stageAllowed || "").toUpperCase().split(",").map(function(x) { return x.trim(); });
-  const directions = String(row.directionAllowed || "").toUpperCase().split(",").map(function(x) { return x.trim(); });
 
-  if (stages.indexOf(stageName) !== -1 && directions.indexOf(directionName) !== -1) {
-    return true;
-  }
+  if (!materialRowIsActive_(row)) return false;
+  if (directionName !== "INPUT" && directionName !== "OUTPUT") return false;
 
-  return materialEligibleForContext_(row, stageName, directionName);
+  if (stageName === "DISPATCH") return materialVisibleForDispatch_(row);
+  if (stageName === "RM_INWARD") return directionName === "INPUT" && materialVisibleForRmInward_(row);
+  if (materialIsProductionStage_(stageName)) return materialVisibleForProduction_(row);
+  return false;
 }
 
-function materialEligibleForContext_(row, stageName, directionName) {
+function materialRowIsActive_(row) {
+  const active = String(row.active || row.isActive || row.status || "TRUE").toUpperCase();
+  return active !== "FALSE" && active !== "NO" && active !== "INACTIVE" && active !== "DELETED" && active !== "DISABLED";
+}
+
+function materialIsProductionStage_(stageName) {
+  return ["GRINDER", "WASH", "SORTING", "SORTER", "COLOR_SORTER", "COLOUR_SORTER", "EXTRUSION"].indexOf(stageName) !== -1;
+}
+
+function materialRowStages_(row) {
+  return String(row.stageAllowed || "").toUpperCase().split(",").map(function(x) { return x.trim(); }).filter(Boolean);
+}
+
+function materialRowHasAnyStage_(row, stages) {
+  const rowStages = materialRowStages_(row);
+  return stages.some(function(stage) { return rowStages.indexOf(stage) !== -1; });
+}
+
+function materialVisibleForRmInward_(row) {
+  return materialMasterFlag_(row, ["appearsInRmInward", "appearsInRMInward"]) === "YES" ||
+    materialRowStages_(row).indexOf("RM_INWARD") !== -1;
+}
+
+function materialVisibleForProduction_(row) {
+  return materialMasterFlag_(row, ["appearsInProduction"]) === "YES" ||
+    materialRowHasAnyStage_(row, ["GRINDER", "WASH", "SORTING", "SORTER", "COLOR_SORTER", "COLOUR_SORTER", "EXTRUSION"]);
+}
+
+function materialVisibleForDispatch_(row) {
   const category = normalizeMaterialCategoryForDropdown_(row.materialType || row.category);
-  const productionInputStages = ["GRINDER", "WASH", "SORTING", "EXTRUSION"];
-
-  if (directionName !== "INPUT") return false;
-
-  if (stageName === "DISPATCH") {
-    return category === "FG";
-  }
-
-  if (stageName === "RM_INWARD") {
-    return category === "RM" || category === "WIP";
-  }
-
-  if (productionInputStages.indexOf(stageName) !== -1) {
-    return ["RM", "WIP", "REWORK", "ADDITIVE"].indexOf(category) !== -1;
-  }
-
-  return false;
+  if (category !== "FG") return false;
+  return materialMasterFlag_(row, ["appearsInDispatch"]) === "YES" ||
+    materialRowStages_(row).indexOf("DISPATCH") !== -1 ||
+    /^E[1-5]$/.test(String(row.canonicalName || row.materialName || row.materialCode || "").trim().toUpperCase());
 }
 
 function normalizeProductionMaterialName_(value) {
@@ -4319,6 +4339,9 @@ function getMaterialMasterRows_() {
         status: "ACTIVE",
         defaultQualityRequired: "NO",
         defaultStorageLocation: "",
+        appearsInRmInward: row[2] === "FG" || row[2] === "WASTE" || row[2] === "REWORK" ? "NO" : "YES",
+        appearsInProduction: row[2] === "STORE" ? "NO" : "YES",
+        appearsInDispatch: row[2] === "FG" ? "YES" : "NO",
       });
       existing[code] = true;
     });
@@ -4333,6 +4356,9 @@ function getMaterialMasterRows_() {
         category: row[2],
         unit: "Kg",
         status: "ACTIVE",
+        appearsInRmInward: row[2] === "FG" || row[2] === "WASTE" || row[2] === "REWORK" ? "NO" : "YES",
+        appearsInProduction: row[2] === "STORE" ? "NO" : "YES",
+        appearsInDispatch: row[2] === "FG" ? "YES" : "NO",
       };
     });
   }

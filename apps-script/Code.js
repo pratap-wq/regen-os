@@ -236,6 +236,8 @@ function addMonthClose(data = {}) {
 
   const closeId = data.closeId || generateBatchId("MCLOSE");
   const periodMonth = data.periodMonth || getPeriodMonth(todayYmd());
+  const duplicate = assertNoDuplicateCreate_("Month_Close", "closeId", closeId);
+  if (duplicate) return duplicate;
 
   const validation = validateMonthClosePayload_(data);
   if (!validation.ok) {
@@ -4451,6 +4453,25 @@ function getRowById_(sheetName, idColumn, idValue) {
   return rows.find((r) => String(r[idColumn] || "") === String(idValue)) || null;
 }
 
+function duplicateCreateResponse_(idColumn, idValue, row) {
+  const result = {
+    ok: true,
+    duplicate: true,
+    alreadyExists: true,
+    id: idValue,
+    row: row || {},
+    message: "Record already exists. No duplicate row was created.",
+  };
+  result[idColumn] = idValue;
+  return output(result);
+}
+
+function assertNoDuplicateCreate_(sheetName, idColumn, idValue) {
+  if (!idValue) return null;
+  const existing = getRowById_(sheetName, idColumn, idValue);
+  return existing ? duplicateCreateResponse_(idColumn, idValue, existing) : null;
+}
+
 function validateOperationalWrite_(data = {}, existing = null) {
   if (existing) {
     validateMonthLock(writePeriodMonth_(existing));
@@ -5798,6 +5819,13 @@ function postApprovedRmInventory_(inwardId, data = {}, dateValue) {
   const warnings = [];
 
   lines.forEach(function(line) {
+    validateInventoryLedgerMaterial_({
+      itemType: "RM",
+      itemName: line.material
+    });
+  });
+
+  lines.forEach(function(line) {
     try {
       addInventoryLedger({
         date: dateValue || normalizeDateOnly_(data.date || todayYmd()),
@@ -5872,6 +5900,8 @@ function addRM(data = {}) {
 
   const date = normalizeDateOnly_(data.date || todayYmd());
   const inwardId = data.inwardId || data.batchId || generateRmReceivingRef_(date, data.supplier);
+  const duplicate = assertNoDuplicateCreate_("RM_Inward", "inwardId", inwardId);
+  if (duplicate) return duplicate;
   const lines = parseRmMaterialLines_(data.materialLines, data.material, data.netWeight || data.quantityKg, { strict: true });
   const totalQty = lines.reduce(function(sum, line) { return sum + num(line.quantityKg); }, 0);
   const taxableValue = num(data.taxableValue) || lines.reduce(function(sum, line) { return sum + num(line.amount); }, 0);
@@ -5883,6 +5913,15 @@ function addRM(data = {}) {
     taxableValue + gstAmount + num(data.freight) + otherCharges + num(data.roundOff);
   const outstandingAmount = Math.max(grandTotal - num(data.advancePaid), 0);
   validateOperationalWrite_({ ...data, date });
+
+  if (String(data.qcStatus || "").toUpperCase() === "APPROVED") {
+    lines.forEach(function(line) {
+      validateInventoryLedgerMaterial_({
+        itemType: "RM",
+        itemName: line.material
+      });
+    });
+  }
 
   appendObjectRow(sh, {
     inwardId,
@@ -5933,7 +5972,7 @@ function addRM(data = {}) {
 
   let ledger = { posted: false, reason: "QC_PENDING" };
   if (String(data.qcStatus || "").toUpperCase() === "APPROVED") {
-    ledger = postApprovedRmInventory_(inwardId, data, date);
+    ledger = assertLedgerPosted_(postApprovedRmInventory_(inwardId, data, date), "RM inward inventory");
   }
   return output({ ok: true, inwardId, ledger });
 }
@@ -6441,6 +6480,44 @@ function parseManufacturingCompositionRows_(value, materialKeys, qtyKeys) {
     });
 }
 
+function validateManufacturingCompositionLedger_(options) {
+  const inputs = parseManufacturingCompositionRows_(
+    options.inputs,
+    ["material", "materialType", "sourceType", "inputBucket"],
+    ["qtyKg", "quantityKg", "consumeQty", "quantity"]
+  );
+
+  const outputs = parseManufacturingCompositionRows_(
+    options.outputs,
+    ["material", "materialType", "outputBucket", "outputMaterial"],
+    ["qtyKg", "quantityKg", "outputQty", "quantity"]
+  );
+
+  inputs.forEach(function(row) {
+    validateInventoryLedgerMaterial_({
+      itemName: row.material
+    });
+  });
+
+  outputs.forEach(function(row) {
+    validateInventoryLedgerMaterial_({
+      itemName: row.material
+    });
+  });
+
+  return {
+    inputs: inputs.length,
+    outputs: outputs.length
+  };
+}
+
+function assertLedgerPosted_(ledger, label) {
+  if (ledger && ledger.warnings && ledger.warnings.length) {
+    throw new Error((label || "Inventory Ledger") + " posting failed: " + ledger.warnings.join("; "));
+  }
+  return ledger;
+}
+
 function normalizeProductionMaterialAlias_(value) {
   const text = String(value || "").trim();
   if (!text) return "";
@@ -6674,6 +6751,8 @@ function addGrinderBatch(data = {}) {
   ]);
 
   const grinderBatchId = data.grinderBatchId || data.batchId || generateBatchId("GB");
+  const duplicate = assertNoDuplicateCreate_("Grinder_Batches", "grinderBatchId", grinderBatchId);
+  if (duplicate) return duplicate;
   const date = normalizeDateOnly_(data.date || todayYmd());
   const outputComposition = normalizeGrinderOutputComposition_(data);
   const inputWeightKg = num(data.inputWeightKg);
@@ -6699,6 +6778,11 @@ function addGrinderBatch(data = {}) {
   if (regrindOutputKg <= 0) {
     throw new Error("Grinder output must include " + GRINDER_OUTPUT_MATERIAL + ".");
   }
+
+  validateManufacturingCompositionLedger_({
+    inputs: data.feedComposition,
+    outputs: outputComposition
+  });
 
   appendObjectRow(sh, {
     grinderBatchId,
@@ -6731,7 +6815,7 @@ function addGrinderBatch(data = {}) {
     updatedAt: "",
   });
 
-  const ledger = postManufacturingCompositionLedger_({
+  const ledger = assertLedgerPosted_(postManufacturingCompositionLedger_({
     date,
     module: "GRINDER",
     sourceRef: grinderBatchId,
@@ -6739,7 +6823,7 @@ function addGrinderBatch(data = {}) {
     inputs: data.feedComposition,
     outputs: outputComposition,
     createdBy: data.createdBy || "System",
-  });
+  }), "Grinder inventory");
 
   return output({
     ok: true,
@@ -6833,11 +6917,17 @@ function addWashBatch(data = {}) {
     data.washBatchId ||
     data.batchId ||
     generateBatchId("WB");
+  const duplicate = assertNoDuplicateCreate_("Wash_Batches", "washBatchId", washBatchId);
+  if (duplicate) return duplicate;
 
   const inputWeightKg = num(data.inputWeightKg);
   const washedOutputKg = num(data.washedOutputKg);
   const inputMaterial = normalizeProductionMaterialAliasesInText_(data.inputMaterial || "");
   const feedComposition = normalizeProductionCompositionAliases_(data.feedComposition || "");
+  validateManufacturingCompositionLedger_({
+    inputs: feedComposition,
+    outputs: data.outputComposition
+  });
 
   const estimatedRecovery =
     inputWeightKg > 0
@@ -6910,7 +7000,7 @@ function addWashBatch(data = {}) {
     createdAt:new Date()
   });
 
-  const ledger = postManufacturingCompositionLedger_({
+  const ledger = assertLedgerPosted_(postManufacturingCompositionLedger_({
     date: normalizeDateOnly_(data.date||todayYmd()),
     module: "WASH",
     sourceRef: washBatchId,
@@ -6918,7 +7008,7 @@ function addWashBatch(data = {}) {
     inputs: feedComposition,
     outputs: data.outputComposition,
     createdBy: data.createdBy||"System"
-  });
+  }), "Wash inventory");
 
   return output({
     ok:true,
@@ -7058,6 +7148,13 @@ function addSortingBatch(data={}){
     const sortingBatchId=
         data.sortingBatchId||
         generateBatchId("SB");
+    const duplicate = assertNoDuplicateCreate_("Sorting_Batches", "sortingBatchId", sortingBatchId);
+    if (duplicate) return duplicate;
+
+    validateManufacturingCompositionLedger_({
+        inputs: data.feedComposition,
+        outputs: data.outputComposition
+    });
 
     appendObjectRow(sh,{
 
@@ -7104,7 +7201,7 @@ function addSortingBatch(data={}){
 
     });
 
-    const ledger = postManufacturingCompositionLedger_({
+    const ledger = assertLedgerPosted_(postManufacturingCompositionLedger_({
         date: normalizeDateOnly_(data.date||todayYmd()),
         module: "SORTING",
         sourceRef: sortingBatchId,
@@ -7112,7 +7209,7 @@ function addSortingBatch(data={}){
         inputs: data.feedComposition,
         outputs: data.outputComposition,
         createdBy: data.createdBy||"System"
-    });
+    }), "Sorting inventory");
 
     return output({
         ok:true,
@@ -7252,6 +7349,8 @@ function addExtrusionBatch(data = {}) {
 
   const extrusionBatchId =
     data.extrusionBatchId || data.batchId || generateBatchId("EX");
+  const duplicate = assertNoDuplicateCreate_("Extrusion_Batches", "extrusionBatchId", extrusionBatchId);
+  if (duplicate) return duplicate;
 
   const date = normalizeDateOnly_(data.date || todayYmd());
 
@@ -7307,6 +7406,11 @@ function addExtrusionBatch(data = {}) {
       : totalInputKg > 0
       ? round2((fgOutputKg / totalInputKg) * 100)
       : 0;
+
+  validateManufacturingCompositionLedger_({
+    inputs: data.feedComposition,
+    outputs: data.outputComposition
+  });
 
   appendObjectRow(sh, {
     extrusionBatchId,
@@ -7370,7 +7474,7 @@ function addExtrusionBatch(data = {}) {
     createdAt: new Date(),
   });
 
-  const ledger = postManufacturingCompositionLedger_({
+  const ledger = assertLedgerPosted_(postManufacturingCompositionLedger_({
     date,
     module: "EXTRUSION",
     sourceRef: sourceBatchId || extrusionBatchId,
@@ -7378,7 +7482,7 @@ function addExtrusionBatch(data = {}) {
     inputs: data.feedComposition,
     outputs: data.outputComposition,
     createdBy: data.createdBy || "System"
-  });
+  }), "Extrusion inventory");
 
   return output({
     ok: true,
@@ -7675,6 +7779,9 @@ function addDispatch(data = {}) {
   ensureDispatchHeaders_();
 
   const dispatchId = data.dispatchId || generateBatchId("DIS");
+  const duplicate = assertNoDuplicateCreate_("Dispatches", "dispatchId", dispatchId);
+  if (duplicate) return duplicate;
+
   const date = normalizeDateOnly_(data.date || todayYmd());
   const sourceId = "";
   const dispatchLines = normalizeDispatchLines_(data);
@@ -7682,6 +7789,16 @@ function addDispatch(data = {}) {
   const headerGrade = lineRows.map(function(line) { return dispatchLineGrade_(line, data.grade || data.material); }).filter(Boolean).join(" | ");
   validateOperationalWrite_({ ...data, date });
   validateDispatchAvailability_({ ...data, dispatchId });
+
+  lineRows.forEach(function(line) {
+    const grade = dispatchLineGrade_(line, data.grade || data.material);
+    const qty = dispatchLineQty_(line, data.quantityKg);
+    if (!grade || qty <= 0) return;
+    validateInventoryLedgerMaterial_({
+      itemType: "FG",
+      itemName: grade
+    });
+  });
 
   appendObjectRow(sh, {
     dispatchId,
@@ -7930,9 +8047,16 @@ function addStoresInward(data={}){
       data.inwardId ||
       data.storesInwardId ||
       generateBatchId("SIN");
+  const duplicate = assertNoDuplicateCreate_("Stores_Inward", "inwardId", inwardId);
+  if (duplicate) return duplicate;
 
   const qty=num(data.qty);
   const rate=num(data.rate);
+
+  validateInventoryLedgerMaterial_({
+      itemType:"STORE",
+      itemName:data.itemName||""
+  });
 
   appendObjectRow(sh,{
 
@@ -8056,6 +8180,9 @@ function addStoresIssue(data={}){
   ]);
 
   const issueId=data.issueId||generateBatchId("ISS");
+  const duplicate = assertNoDuplicateCreate_("Stores_Issue", "issueId", issueId);
+  if (duplicate) return duplicate;
+
   const qty=num(data.qty);
   const issueRate=num(data.issueRate || data.rate);
   const issueValue =
@@ -8063,6 +8190,11 @@ function addStoresIssue(data={}){
       data.issueValue!==""
           ? num(data.issueValue)
           : qty*issueRate;
+
+  validateInventoryLedgerMaterial_({
+      itemType:"STORE",
+      itemName:data.itemName||""
+  });
 
   appendObjectRow(sh,{
 
@@ -13736,6 +13868,8 @@ function addInventoryAdjustment(data = {}) {
   const sh = getSheet("Inventory_Adjustments");
   const adjustmentId =
     data.adjustmentId || generateBatchId("IA");
+  const duplicate = assertNoDuplicateCreate_("Inventory_Adjustments", "adjustmentId", adjustmentId);
+  if (duplicate) return duplicate;
 
   appendObjectRow(sh, {
     adjustmentId,
@@ -13896,6 +14030,10 @@ function approveInventoryAdjustment(data = {}) {
     }
 
     validateMonthLock(existing.periodMonth);
+    validateInventoryLedgerMaterial_({
+      itemType: existing.itemType || "",
+      itemName: existing.itemCode || existing.material || existing.itemName || ""
+    });
 
     updateById("Inventory_Adjustments", "adjustmentId", data.adjustmentId, {
       status: "APPROVED",

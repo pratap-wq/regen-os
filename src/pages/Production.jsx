@@ -11,7 +11,6 @@ import { buildAvailabilityMap, materialKey } from "../utils/materialInventory";
 
 export default function Production() {
   const today = new Date().toISOString().split("T")[0];
-  const currentMonth = new Date().toISOString().slice(0, 7);
 
   const blankFeedRow = {
     sourceType: "",
@@ -453,8 +452,26 @@ export default function Production() {
 
   
  
+  function productionPeriodMonth() {
+    return String(form.date || today).slice(0, 7);
+  }
+
+  function assertStageSaved(res, label) {
+    if (!res || res.ok === false) {
+      throw new Error(res?.error || `${label} save failed.`);
+    }
+
+    if (res.ledger?.warnings?.length) {
+      throw new Error(`${label} inventory posting failed: ${res.ledger.warnings.join("; ")}`);
+    }
+
+    return res;
+  }
+
   async function submit(e) {
     e.preventDefault();
+    if (saving) return;
+
     setSaving(true);
     setMessage("");
 
@@ -502,10 +519,11 @@ export default function Production() {
           return;
         }
 
-        const grinder = await apiCall({
+        const grinder = assertStageSaved(await apiCall({
           fn: "grinder.add",
           date: form.date,
           shift: form.shift,
+          periodMonth: productionPeriodMonth(),
           machine: form.machineGrinder,
           inputMaterial: grinderFeedSummary(),
           inputWeightKg: grinderTotalKg,
@@ -525,7 +543,7 @@ export default function Production() {
           downtimeReason: form.downtimeReason,
           remarks: form.remarks,
           createdBy: "Production Screen",
-        });
+        }), "Grinder");
 
         grinderBatchId = grinder.grinderBatchId || "";
       }
@@ -544,11 +562,12 @@ export default function Production() {
           return;
         }
 
-        const wash = await apiCall({
+        const wash = assertStageSaved(await apiCall({
           fn: "wash.add",
           sourceGrinderBatchId: grinderBatchId,
           date: form.date,
           shift: form.shift,
+          periodMonth: productionPeriodMonth(),
           machine: form.machineWash,
           inputMaterial: washFeedSummary(),
           inputWeightKg: washTotalKg,
@@ -575,7 +594,7 @@ export default function Production() {
           remarks: form.remarks,
           createdBy: "Production Screen",
           
-        });
+        }), "Wash");
 
         washBatchId = wash.washBatchId || "";
       }
@@ -594,11 +613,12 @@ export default function Production() {
           return;
         }
 
-        const sorting = await apiCall({
+        const sorting = assertStageSaved(await apiCall({
           fn: "sorting.add",
           sourceWashBatchId: washBatchId,
           date: form.date,
           shift: form.shift,
+          periodMonth: productionPeriodMonth(),
           machine: form.machineSorter,
           inputMaterial: sorterFeedSummary(),
           inputWeightKg: sorterTotalKg,
@@ -619,7 +639,7 @@ export default function Production() {
           remarks: form.remarks,
           createdBy: "Production Screen",
           
-        });
+        }), "Colour Sorter");
 
         sortingBatchId = sorting.sortingBatchId || "";
       }
@@ -662,12 +682,12 @@ export default function Production() {
           return;
         }
 
-        await apiCall({
+        assertStageSaved(await apiCall({
           fn: "extrusion.add",
           extrusionBatchId: finalExtrusionBatchId,
           date: form.date,
           shift: form.shift,
-          periodMonth: currentMonth,
+          periodMonth: productionPeriodMonth(),
           machine: form.machineExtruder,
           sourceType: "PRODUCTION_SHIFT",
           sourceSortingBatchId: sortingBatchId,
@@ -702,7 +722,7 @@ export default function Production() {
           status: "READY_FOR_DISPATCH",
           createdBy: "Production Screen",
           
-        });
+        }), "Extrusion");
       }
 
       if (

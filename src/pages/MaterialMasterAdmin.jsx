@@ -6,15 +6,40 @@ const CATEGORIES = ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE", "STORE"];
 const STATUSES = ["ACTIVE", "INACTIVE"];
 
 const blankForm = {
+  materialId: "",
   materialCode: "",
   materialName: "",
   category: "RM",
+  appearsInRMInward: "NO",
   appearsInRmInward: "NO",
   appearsInProduction: "NO",
+  appearsInGrinderInput: "NO",
+  appearsInGrinderOutput: "NO",
+  appearsInWashInput: "NO",
+  appearsInWashOutput: "NO",
+  appearsInSorterInput: "NO",
+  appearsInSorterOutput: "NO",
+  appearsInExtrusionInput: "NO",
+  appearsInExtrusionOutput: "NO",
   appearsInDispatch: "NO",
+  appearsInMonthClose: "YES",
   status: "ACTIVE",
   remarks: "",
 };
+
+const DROPDOWN_FLAGS = [
+  ["appearsInRMInward", "RM Inward"],
+  ["appearsInGrinderInput", "Grinder Input"],
+  ["appearsInGrinderOutput", "Grinder Output"],
+  ["appearsInWashInput", "Wash Input"],
+  ["appearsInWashOutput", "Wash Output"],
+  ["appearsInSorterInput", "Sorter Input"],
+  ["appearsInSorterOutput", "Sorter Output"],
+  ["appearsInExtrusionInput", "Extrusion Input"],
+  ["appearsInExtrusionOutput", "Extrusion Output"],
+  ["appearsInDispatch", "Dispatch"],
+  ["appearsInMonthClose", "Month Close"],
+];
 
 export default function MaterialMasterAdmin() {
   const [rows, setRows] = useState([]);
@@ -45,6 +70,9 @@ export default function MaterialMasterAdmin() {
       if (name === "materialCode") {
         next.materialCode = normalizeMaterialCode(value);
       }
+      if (name === "appearsInRMInward") {
+        next.appearsInRmInward = value;
+      }
       return next;
     });
   }
@@ -57,10 +85,12 @@ export default function MaterialMasterAdmin() {
     try {
       setSaving(true);
       const res = await apiCall({
-        fn: "materialMaster.add",
+        fn: form.materialId ? "materialMaster.update" : "materialMaster.add",
         ...form,
         materialCode: normalizeMaterialCode(form.materialCode),
+        appearsInRmInward: form.appearsInRMInward,
         createdBy: "Admin",
+        updatedBy: "Admin",
       });
 
       if (res.ok === false) {
@@ -76,6 +106,16 @@ export default function MaterialMasterAdmin() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function editMaterial(row) {
+    setForm({
+      ...blankForm,
+      ...row,
+      appearsInRMInward: row.appearsInRMInward || row.appearsInRmInward || "NO",
+      appearsInRmInward: row.appearsInRMInward || row.appearsInRmInward || "NO",
+    });
+    setStatus(`Editing ${row.materialName || row.materialCode}`);
   }
 
   async function updateStatus(row, nextStatus) {
@@ -145,15 +185,11 @@ export default function MaterialMasterAdmin() {
             {CATEGORIES.map((category) => <option key={category}>{category}</option>)}
           </select>
         </Field>
-        <Field label="RM Inward Dropdown">
-          <YesNo name="appearsInRmInward" value={form.appearsInRmInward} onChange={onChange} />
-        </Field>
-        <Field label="Production Dropdowns">
-          <YesNo name="appearsInProduction" value={form.appearsInProduction} onChange={onChange} />
-        </Field>
-        <Field label="Dispatch Dropdown">
-          <YesNo name="appearsInDispatch" value={form.appearsInDispatch} onChange={onChange} />
-        </Field>
+        {DROPDOWN_FLAGS.map(([key, label]) => (
+          <Field key={key} label={label}>
+            <YesNo name={key} value={form[key]} onChange={onChange} />
+          </Field>
+        ))}
         <Field label="Status">
           <select name="status" value={form.status} onChange={onChange} style={input}>
             {STATUSES.map((status) => <option key={status}>{status}</option>)}
@@ -164,8 +200,13 @@ export default function MaterialMasterAdmin() {
         </Field>
         <div style={buttonCell}>
           <button type="submit" disabled={saving} style={saving ? disabledButton : primaryButton}>
-            {saving ? "Saving..." : "Add Material"}
+            {saving ? "Saving..." : form.materialId ? "Update Material" : "Add Material"}
           </button>
+          {form.materialId && (
+            <button type="button" disabled={saving} style={smallButton} onClick={() => setForm(blankForm)}>
+              Cancel Edit
+            </button>
+          )}
         </div>
       </form>
 
@@ -177,8 +218,11 @@ export default function MaterialMasterAdmin() {
           { key: "materialCode", label: "Code" },
           { key: "materialName", label: "Name" },
           { key: "category", label: "Category" },
-          { key: "appearsInRmInward", label: "RM Inward", render: yesNoLabel("appearsInRmInward"), renderExport: yesNoLabel("appearsInRmInward"), searchValue: yesNoLabel("appearsInRmInward") },
-          { key: "appearsInProduction", label: "Production", render: yesNoLabel("appearsInProduction"), renderExport: yesNoLabel("appearsInProduction"), searchValue: yesNoLabel("appearsInProduction") },
+          { key: "appearsInRMInward", label: "RM Inward", render: yesNoLabel("appearsInRMInward", "appearsInRmInward"), renderExport: yesNoLabel("appearsInRMInward", "appearsInRmInward"), searchValue: yesNoLabel("appearsInRMInward", "appearsInRmInward") },
+          { key: "appearsInGrinderInput", label: "Grinder In", render: yesNoLabel("appearsInGrinderInput"), renderExport: yesNoLabel("appearsInGrinderInput"), searchValue: yesNoLabel("appearsInGrinderInput") },
+          { key: "appearsInWashInput", label: "Wash In", render: yesNoLabel("appearsInWashInput"), renderExport: yesNoLabel("appearsInWashInput"), searchValue: yesNoLabel("appearsInWashInput") },
+          { key: "appearsInExtrusionInput", label: "Extrusion In", render: yesNoLabel("appearsInExtrusionInput"), renderExport: yesNoLabel("appearsInExtrusionInput"), searchValue: yesNoLabel("appearsInExtrusionInput") },
+          { key: "appearsInExtrusionOutput", label: "Extrusion Out", render: yesNoLabel("appearsInExtrusionOutput"), renderExport: yesNoLabel("appearsInExtrusionOutput"), searchValue: yesNoLabel("appearsInExtrusionOutput") },
           { key: "appearsInDispatch", label: "Dispatch", render: yesNoLabel("appearsInDispatch"), renderExport: yesNoLabel("appearsInDispatch"), searchValue: yesNoLabel("appearsInDispatch") },
           { key: "status", label: "Status", render: (row) => row.status || "ACTIVE" },
           {
@@ -187,14 +231,24 @@ export default function MaterialMasterAdmin() {
             render: (row) => {
               const active = String(row.status || "ACTIVE").toUpperCase() === "ACTIVE";
               return (
-                <button
-                  type="button"
-                  onClick={() => updateStatus(row, active ? "INACTIVE" : "ACTIVE")}
-                  disabled={saving}
-                  style={smallButton}
-                >
-                  {active ? "Mark Inactive" : "Activate"}
-                </button>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={() => editMaterial(row)}
+                    disabled={saving}
+                    style={smallButton}
+                  >
+                    Edit Flags
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateStatus(row, active ? "INACTIVE" : "ACTIVE")}
+                    disabled={saving}
+                    style={smallButton}
+                  >
+                    {active ? "Mark Inactive" : "Activate"}
+                  </button>
+                </div>
               );
             },
             renderExport: () => "",
@@ -241,8 +295,8 @@ function normalizeMaterialCode(value) {
     .replace(/^_+|_+$/g, "");
 }
 
-function yesNoLabel(key) {
-  return (row) => String(row[key] || "NO").toUpperCase() === "YES" ? "YES" : "NO";
+function yesNoLabel(key, fallbackKey = "") {
+  return (row) => String(row[key] || (fallbackKey ? row[fallbackKey] : "") || "NO").toUpperCase() === "YES" ? "YES" : "NO";
 }
 
 const page = { paddingBottom: 30 };

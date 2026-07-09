@@ -38,6 +38,7 @@ export const PRODUCTION_MATERIAL_ALIASES = {
   "SORTED MATERIAL": "White Sorted Regrind",
   "WRAPPERS": "Wrappers",
   "MICRO PLASTIC": "Micro Plastic",
+  "PURGING": "Purging Waste",
 };
 
 export const FALLBACK_PRODUCTION_MATERIALS = [
@@ -48,6 +49,7 @@ export const FALLBACK_PRODUCTION_MATERIALS = [
   ["Virgin PPCP", "Virgin PPCP", "ADDITIVE", "RM_INWARD,EXTRUSION", "INPUT", "Virgin PP|Virgin Material|Virgin"],
   ["Battery PPCP", "Battery PPCP", "RM_CONSUMABLE", "RM_INWARD,EXTRUSION", "INPUT", "Battery Scrap|Battery Flakes|Battery Regrind"],
   ["Masterbatch", "Masterbatch", "ADDITIVE", "RM_INWARD,EXTRUSION", "INPUT", "Master Batch|Colour Masterbatch|Color Masterbatch"],
+  ["Antioxidant", "Antioxidant", "ADDITIVE", "EXTRUSION", "INPUT", "Antioxidant|Anti Oxidant"],
   ["E1", "E1", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E1"],
   ["E2", "E2", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E2"],
   ["E3", "E3", "FG", "EXTRUSION,DISPATCH", "OUTPUT,INPUT", "E3"],
@@ -59,7 +61,11 @@ export const FALLBACK_PRODUCTION_MATERIALS = [
   ["Sink Material", "Sink Material", "WASTE", "WASH", "OUTPUT", "Sink Material"],
   ["Wrappers", "Wrappers", "WASTE", "WASH", "OUTPUT", "Wrappers"],
   ["Micro Plastic", "Micro Plastic", "WASTE", "WASH", "OUTPUT", "Micro Plastic"],
+  ["Sludge", "Sludge", "WASTE", "WASH", "OUTPUT", "Sludge"],
   ["Colour Reject", "Colour Reject", "WASTE", "SORTING", "OUTPUT", "Colour Reject|Color Reject"],
+  ["Lumps", "Lumps", "WASTE", "EXTRUSION", "OUTPUT", "Lumps"],
+  ["Purging Waste", "Purging Waste", "WASTE", "EXTRUSION", "OUTPUT", "Purging"],
+  ["Extrusion Waste", "Extrusion Waste", "WASTE", "EXTRUSION", "OUTPUT", "Extrusion Waste"],
 ].map(([materialName, canonicalName, category, stageAllowed, directionAllowed, aliases], index) => ({
   materialId: `PMM-${index + 1}`,
   materialName,
@@ -85,11 +91,56 @@ export function productionMaterialAllowed(row, stage, direction) {
 
   const expectedStage = String(stage || "").toUpperCase();
   const expectedDirection = String(direction || "").toUpperCase();
+  const contextFlag = dropdownFlagForContext(expectedStage, expectedDirection);
+
+  if (expectedStage === "DISPATCH") {
+    return isYes(row.appearsInDispatch) && String(row.category || row.materialType || "").toUpperCase() === "FG";
+  }
+
+  if (contextFlag) {
+    if (isYes(row[contextFlag])) return true;
+    if (hasSpecificDropdownFlags(row)) return false;
+  }
+
   const stages = String(row.stageAllowed || "").toUpperCase().split(",").map((x) => x.trim());
   const directions = String(row.directionAllowed || "").toUpperCase().split(",").map((x) => x.trim());
 
   if (stages.includes(expectedStage) && directions.includes(expectedDirection)) return true;
+  if (stages.some(Boolean) || directions.some(Boolean)) return false;
   return materialEligibleForContext(row, expectedStage, expectedDirection);
+}
+
+export function dropdownFlagForContext(stage, direction) {
+  const s = String(stage || "").toUpperCase();
+  const d = String(direction || "").toUpperCase();
+  if (s === "RM_INWARD") return "appearsInRMInward";
+  if (s === "GRINDER") return d === "OUTPUT" ? "appearsInGrinderOutput" : "appearsInGrinderInput";
+  if (s === "WASH") return d === "OUTPUT" ? "appearsInWashOutput" : "appearsInWashInput";
+  if (["SORTING", "SORTER", "COLOR_SORTER", "COLOUR_SORTER"].includes(s)) return d === "OUTPUT" ? "appearsInSorterOutput" : "appearsInSorterInput";
+  if (s === "EXTRUSION") return d === "OUTPUT" ? "appearsInExtrusionOutput" : "appearsInExtrusionInput";
+  if (s === "DISPATCH") return "appearsInDispatch";
+  return "";
+}
+
+function isYes(value) {
+  return ["YES", "TRUE", "Y", "1", "ON"].includes(String(value || "").toUpperCase());
+}
+
+function hasSpecificDropdownFlags(row) {
+  return [
+    "appearsInRMInward",
+    "appearsInRmInward",
+    "appearsInGrinderInput",
+    "appearsInGrinderOutput",
+    "appearsInWashInput",
+    "appearsInWashOutput",
+    "appearsInSorterInput",
+    "appearsInSorterOutput",
+    "appearsInExtrusionInput",
+    "appearsInExtrusionOutput",
+    "appearsInDispatch",
+    "appearsInMonthClose",
+  ].some((key) => row[key] !== undefined && row[key] !== "");
 }
 
 function materialEligibleForContext(row, stage, direction) {
@@ -172,13 +223,62 @@ function mergeCsv(primary, fallback) {
 }
 
 function normalizeProductionMaterialRow(row) {
+  const canonicalName = row.canonicalName || row.materialName || "";
   return {
+    ...defaultDropdownFlags(canonicalName || row.materialCode, row.category || row.materialType),
     ...row,
     id: row.materialId || row.materialCode || row.canonicalName || row.materialName || "",
     name: row.canonicalName || row.materialName || "",
     materialName: row.materialName || row.canonicalName || "",
-    canonicalName: row.canonicalName || row.materialName || "",
+    canonicalName,
     category: row.category || row.materialType || "",
     active: row.active || row.isActive || row.status || "TRUE",
   };
+}
+
+function defaultDropdownFlags(value, category = "") {
+  const code = materialCode(normalizeProductionMaterialName(value));
+  const flags = {
+    appearsInRMInward: "NO",
+    appearsInRmInward: "NO",
+    appearsInProduction: "NO",
+    appearsInGrinderInput: "NO",
+    appearsInGrinderOutput: "NO",
+    appearsInWashInput: "NO",
+    appearsInWashOutput: "NO",
+    appearsInSorterInput: "NO",
+    appearsInSorterOutput: "NO",
+    appearsInExtrusionInput: "NO",
+    appearsInExtrusionOutput: "NO",
+    appearsInDispatch: "NO",
+    appearsInMonthClose: String(category).toUpperCase() === "STORE" ? "NO" : "YES",
+  };
+
+  const mark = (key) => { flags[key] = "YES"; };
+  if (["WHITE_FLAKES", "WHITE_BUCKETS", "BATTERY_SCRAP", "BATTERY_REGRIND", "JARS", "LIDS", "PP_MIXED", "WHITE_REGRIND_UNWASHED", "VIRGIN_PP", "VIRGIN_PPCP", "BATTERY_PPCP", "MASTERBATCH"].includes(code)) {
+    mark("appearsInRMInward");
+    mark("appearsInRmInward");
+  }
+  if (["WHITE_BUCKETS"].includes(code)) mark("appearsInGrinderInput");
+  if (["WHITE_REGRIND_UNWASHED", "DUST", "METAL_REJECT"].includes(code)) mark("appearsInGrinderOutput");
+  if (["WHITE_REGRIND_UNWASHED", "WHITE_BUCKETS"].includes(code)) mark("appearsInWashInput");
+  if (["WHITE_REGRIND_WASHED", "WASHED_WHITE_FLAKES", "WASHED_MIXED", "SINK_MATERIAL", "DUST", "SLUDGE", "WRAPPERS", "MICRO_PLASTIC", "WRAPPER_REJECT"].includes(code)) mark("appearsInWashOutput");
+  if (["WHITE_REGRIND_WASHED", "WASHED_WHITE_FLAKES", "WASHED_MIXED"].includes(code)) mark("appearsInSorterInput");
+  if (["WHITE_SORTED", "WHITE_SORTED_REGRIND", "COMMODITY", "MIXED_SORTED", "COLOUR_REJECT", "COLOR_REJECT", "DUST"].includes(code)) mark("appearsInSorterOutput");
+  if (["WHITE_REGRIND_WASHED", "WHITE_SORTED", "WHITE_SORTED_REGRIND", "REWORK_MATERIAL", "VIRGIN_PP", "VIRGIN_PPCP", "BATTERY_PPCP", "MASTERBATCH", "ANTIOXIDANT"].includes(code)) mark("appearsInExtrusionInput");
+  if (["E1", "E2", "E3", "E4", "E5", "LUMPS", "PURGING_WASTE", "EXTRUSION_WASTE"].includes(code)) mark("appearsInExtrusionOutput");
+  if (["E1", "E2", "E3", "E4", "E5"].includes(code)) mark("appearsInDispatch");
+
+  flags.appearsInProduction = [
+    flags.appearsInGrinderInput,
+    flags.appearsInGrinderOutput,
+    flags.appearsInWashInput,
+    flags.appearsInWashOutput,
+    flags.appearsInSorterInput,
+    flags.appearsInSorterOutput,
+    flags.appearsInExtrusionInput,
+    flags.appearsInExtrusionOutput,
+  ].includes("YES") ? "YES" : "NO";
+
+  return flags;
 }

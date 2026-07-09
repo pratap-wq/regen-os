@@ -755,7 +755,7 @@ function overallHealthStatus_(summary) {
 // Never deletes data, never renames operational sheets.
 // ============================================================
 
-const REGEN_DB_SCHEMA_VERSION = "2026.07.08-v4-material-alias-health";
+const REGEN_DB_SCHEMA_VERSION = "2026.07.09-v5-material-dropdown-flags";
 
 const REGEN_DB_SCHEMA = {
   Month_Close: [
@@ -914,8 +914,18 @@ const REGEN_DB_SCHEMA = {
     "defaultQualityRequired",
     "defaultStorageLocation",
     "appearsInRmInward",
+    "appearsInRMInward",
     "appearsInProduction",
+    "appearsInGrinderInput",
+    "appearsInGrinderOutput",
+    "appearsInWashInput",
+    "appearsInWashOutput",
+    "appearsInSorterInput",
+    "appearsInSorterOutput",
+    "appearsInExtrusionInput",
+    "appearsInExtrusionOutput",
     "appearsInDispatch",
+    "appearsInMonthClose",
     "remarks",
     "createdBy",
     "createdAt",
@@ -2136,6 +2146,7 @@ const PRODUCTION_MATERIAL_MASTER_DEFAULTS = [
   ["Wrappers", "Wrappers", "WASTE", "WASH", "OUTPUT", "Wrappers"],
   ["Sink Material", "Sink Material", "WASTE", "WASH", "OUTPUT", "Sink Material"],
   ["Micro Plastic", "Micro Plastic", "WASTE", "WASH", "OUTPUT", "Micro Plastic"],
+  ["Sludge", "Sludge", "WASTE", "WASH", "OUTPUT", "Sludge"],
   ["Micro Plastic Reject", "Micro Plastic Reject", "WASTE", "EXTRUSION", "OUTPUT", "Micro Plastic"],
   ["Lumps", "Lumps", "WASTE", "EXTRUSION", "OUTPUT", "Lumps"],
   ["Rework Material", "Rework Material", "REWORK", "EXTRUSION", "OUTPUT,INPUT", "Rework Material"],
@@ -2451,7 +2462,6 @@ function getProductionMaterialMasterRows_() {
   } catch (err) {
     rows = [];
   }
-  if (!rows.length) return productionMaterialRowsFromDefaults_();
 
   const defaultsByCanonical = {};
   productionMaterialRowsFromDefaults_().forEach(function(row) {
@@ -2499,6 +2509,8 @@ function getProductionMaterialMasterRows_() {
 function materialMasterRowsForProductionDropdown_() {
   let rows = [];
   try {
+    createSheetIfMissing_("Material_Master", materialMasterHeaders_());
+    ensureHeaders_("Material_Master", materialMasterHeaders_());
     rows = getMaterialMasterRows_();
   } catch (err) {
     rows = [];
@@ -2514,7 +2526,8 @@ function materialMasterRowsForProductionDropdown_() {
           defaultProductionMaterial ||
           materialMasterFlag_(row, ["appearsInRmInward", "appearsInRMInward"]) === "YES" ||
           materialMasterFlag_(row, ["appearsInProduction"]) === "YES" ||
-          materialMasterFlag_(row, ["appearsInDispatch"]) === "YES"
+          materialMasterFlag_(row, ["appearsInDispatch"]) === "YES" ||
+          materialHasAnyProductionDropdownFlag_(row)
         );
     })
     .map(function(row, index) {
@@ -2522,7 +2535,7 @@ function materialMasterRowsForProductionDropdown_() {
       const code = materialCode_(row.materialCode || row.materialName);
       const defaultProductionMaterial = code === "WHITE_BUCKETS";
       const rm = defaultProductionMaterial || materialMasterFlag_(row, ["appearsInRmInward", "appearsInRMInward"]) === "YES";
-      const production = defaultProductionMaterial || materialMasterFlag_(row, ["appearsInProduction"]) === "YES";
+      const production = defaultProductionMaterial || materialMasterFlag_(row, ["appearsInProduction"]) === "YES" || materialHasAnyProductionDropdownFlag_(row);
       const dispatch = materialMasterFlag_(row, ["appearsInDispatch"]) === "YES";
       const rules = materialMasterDropdownRules_(category, rm, production, dispatch);
       return {
@@ -2559,6 +2572,54 @@ function materialMasterFlag_(row, keys) {
     if (value !== undefined && value !== "") return yesNo_(value);
   }
   return "NO";
+}
+
+function productionDropdownFlagFor_(stage, direction) {
+  const stageName = String(stage || "").trim().toUpperCase();
+  const directionName = String(direction || "").trim().toUpperCase();
+  if (stageName === "RM_INWARD") return ["appearsInRMInward", "appearsInRmInward"];
+  if (stageName === "DISPATCH") return ["appearsInDispatch"];
+  if (stageName === "GRINDER") return directionName === "OUTPUT" ? ["appearsInGrinderOutput"] : ["appearsInGrinderInput"];
+  if (stageName === "WASH") return directionName === "OUTPUT" ? ["appearsInWashOutput"] : ["appearsInWashInput"];
+  if (stageName === "SORTING" || stageName === "SORTER" || stageName === "COLOR_SORTER" || stageName === "COLOUR_SORTER") {
+    return directionName === "OUTPUT" ? ["appearsInSorterOutput"] : ["appearsInSorterInput"];
+  }
+  if (stageName === "EXTRUSION") return directionName === "OUTPUT" ? ["appearsInExtrusionOutput"] : ["appearsInExtrusionInput"];
+  return [];
+}
+
+function materialHasExplicitDropdownFlags_(row) {
+  return [
+    "appearsInRMInward",
+    "appearsInRmInward",
+    "appearsInGrinderInput",
+    "appearsInGrinderOutput",
+    "appearsInWashInput",
+    "appearsInWashOutput",
+    "appearsInSorterInput",
+    "appearsInSorterOutput",
+    "appearsInExtrusionInput",
+    "appearsInExtrusionOutput",
+    "appearsInDispatch",
+    "appearsInMonthClose",
+  ].some(function(key) {
+    return row[key] !== undefined && row[key] !== "";
+  });
+}
+
+function materialHasAnyProductionDropdownFlag_(row) {
+  return [
+    "appearsInGrinderInput",
+    "appearsInGrinderOutput",
+    "appearsInWashInput",
+    "appearsInWashOutput",
+    "appearsInSorterInput",
+    "appearsInSorterOutput",
+    "appearsInExtrusionInput",
+    "appearsInExtrusionOutput",
+  ].some(function(key) {
+    return materialMasterFlag_(row, [key]) === "YES";
+  });
 }
 
 function materialMasterDropdownRules_(category, rm, production, dispatch) {
@@ -2635,7 +2696,7 @@ function productionMaterialAllowedFor_(row, stage, direction) {
 
   if (stageName === "DISPATCH") return materialVisibleForDispatch_(row);
   if (stageName === "RM_INWARD") return directionName === "INPUT" && materialVisibleForRmInward_(row);
-  if (materialIsProductionStage_(stageName)) return materialVisibleForProduction_(row);
+  if (materialIsProductionStage_(stageName)) return materialVisibleForProduction_(row, stageName, directionName);
   return false;
 }
 
@@ -2657,20 +2718,35 @@ function materialRowHasAnyStage_(row, stages) {
   return stages.some(function(stage) { return rowStages.indexOf(stage) !== -1; });
 }
 
+function materialRowDirections_(row) {
+  return String(row.directionAllowed || "").toUpperCase().split(",").map(function(x) { return x.trim(); }).filter(Boolean);
+}
+
+function materialRowAllowsExactContext_(row, stageName, directionName) {
+  const rowStages = materialRowStages_(row);
+  const rowDirections = materialRowDirections_(row);
+  return rowStages.indexOf(stageName) !== -1 && rowDirections.indexOf(directionName) !== -1;
+}
+
 function materialVisibleForRmInward_(row) {
-  return materialMasterFlag_(row, ["appearsInRmInward", "appearsInRMInward"]) === "YES" ||
+  return materialMasterFlag_(row, productionDropdownFlagFor_("RM_INWARD", "INPUT")) === "YES" ||
     materialRowStages_(row).indexOf("RM_INWARD") !== -1;
 }
 
-function materialVisibleForProduction_(row) {
-  return materialMasterFlag_(row, ["appearsInProduction"]) === "YES" ||
-    materialRowHasAnyStage_(row, ["GRINDER", "WASH", "SORTING", "SORTER", "COLOR_SORTER", "COLOUR_SORTER", "EXTRUSION"]);
+function materialVisibleForProduction_(row, stageName, directionName) {
+  const flagKeys = productionDropdownFlagFor_(stageName, directionName);
+  if (flagKeys.length && materialMasterFlag_(row, flagKeys) === "YES") return true;
+  if (materialHasExplicitDropdownFlags_(row)) return false;
+  if (materialRowStages_(row).length || materialRowDirections_(row).length) {
+    return materialRowAllowsExactContext_(row, stageName, directionName);
+  }
+  return materialMasterFlag_(row, ["appearsInProduction"]) === "YES";
 }
 
 function materialVisibleForDispatch_(row) {
   const category = normalizeMaterialCategoryForDropdown_(row.materialType || row.category);
   if (category !== "FG") return false;
-  return materialMasterFlag_(row, ["appearsInDispatch"]) === "YES" ||
+  return materialMasterFlag_(row, productionDropdownFlagFor_("DISPATCH", "INPUT")) === "YES" ||
     materialRowStages_(row).indexOf("DISPATCH") !== -1 ||
     /^E[1-5]$/.test(String(row.canonicalName || row.materialName || row.materialCode || "").trim().toUpperCase());
 }
@@ -2988,8 +3064,18 @@ function addMaterialMaster(data = {}) {
     defaultQualityRequired: data.defaultQualityRequired || "NO",
     defaultStorageLocation: data.defaultStorageLocation || "",
     appearsInRmInward: yesNo_(data.appearsInRmInward),
+    appearsInRMInward: yesNo_(data.appearsInRMInward || data.appearsInRmInward),
     appearsInProduction: yesNo_(data.appearsInProduction),
+    appearsInGrinderInput: yesNo_(data.appearsInGrinderInput),
+    appearsInGrinderOutput: yesNo_(data.appearsInGrinderOutput),
+    appearsInWashInput: yesNo_(data.appearsInWashInput),
+    appearsInWashOutput: yesNo_(data.appearsInWashOutput),
+    appearsInSorterInput: yesNo_(data.appearsInSorterInput),
+    appearsInSorterOutput: yesNo_(data.appearsInSorterOutput),
+    appearsInExtrusionInput: yesNo_(data.appearsInExtrusionInput),
+    appearsInExtrusionOutput: yesNo_(data.appearsInExtrusionOutput),
     appearsInDispatch: yesNo_(data.appearsInDispatch),
+    appearsInMonthClose: yesNo_(data.appearsInMonthClose),
     remarks: data.remarks || "",
     createdBy: data.createdBy || "System",
     createdAt: new Date(),
@@ -3019,8 +3105,18 @@ function updateMaterialMaster(data = {}) {
     defaultQualityRequired: data.defaultQualityRequired || "NO",
     defaultStorageLocation: data.defaultStorageLocation || "",
     appearsInRmInward: yesNo_(data.appearsInRmInward),
+    appearsInRMInward: yesNo_(data.appearsInRMInward || data.appearsInRmInward),
     appearsInProduction: yesNo_(data.appearsInProduction),
+    appearsInGrinderInput: yesNo_(data.appearsInGrinderInput),
+    appearsInGrinderOutput: yesNo_(data.appearsInGrinderOutput),
+    appearsInWashInput: yesNo_(data.appearsInWashInput),
+    appearsInWashOutput: yesNo_(data.appearsInWashOutput),
+    appearsInSorterInput: yesNo_(data.appearsInSorterInput),
+    appearsInSorterOutput: yesNo_(data.appearsInSorterOutput),
+    appearsInExtrusionInput: yesNo_(data.appearsInExtrusionInput),
+    appearsInExtrusionOutput: yesNo_(data.appearsInExtrusionOutput),
     appearsInDispatch: yesNo_(data.appearsInDispatch),
+    appearsInMonthClose: yesNo_(data.appearsInMonthClose),
     remarks: data.remarks || "",
     updatedAt: new Date(),
   });
@@ -3498,9 +3594,7 @@ function seedMaterialMasterDefaults() {
       status: "ACTIVE",
       defaultQualityRequired: "NO",
       defaultStorageLocation: "",
-      appearsInRmInward: row[2] === "FG" || row[2] === "WASTE" || row[2] === "REWORK" ? "NO" : "YES",
-      appearsInProduction: row[2] === "STORE" ? "NO" : "YES",
-      appearsInDispatch: row[2] === "FG" ? "YES" : "NO",
+      ...materialMasterDefaultDropdownFlags_(code, row[2]),
       createdBy: "seedMaterialMasterDefaults",
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -4330,7 +4424,7 @@ function getMaterialMasterRows_() {
     materialMasterDefaultRows_().forEach(function(row) {
       const code = row[0];
       if (existing[code]) return;
-      rows.push({
+      rows.push(applyMaterialMasterDefaultDropdownFlags_({
         materialId: "DEFAULT-" + code,
         materialCode: code,
         materialName: row[1],
@@ -4339,27 +4433,21 @@ function getMaterialMasterRows_() {
         status: "ACTIVE",
         defaultQualityRequired: "NO",
         defaultStorageLocation: "",
-        appearsInRmInward: row[2] === "FG" || row[2] === "WASTE" || row[2] === "REWORK" ? "NO" : "YES",
-        appearsInProduction: row[2] === "STORE" ? "NO" : "YES",
-        appearsInDispatch: row[2] === "FG" ? "YES" : "NO",
-      });
+      }));
       existing[code] = true;
     });
 
-    return rows;
+    return rows.map(applyMaterialMasterDefaultDropdownFlags_);
   } catch (err) {
     return materialMasterDefaultRows_().map(function(row) {
-      return {
+      return applyMaterialMasterDefaultDropdownFlags_({
         materialId: "DEFAULT-" + row[0],
         materialCode: row[0],
         materialName: row[1],
         category: row[2],
         unit: "Kg",
         status: "ACTIVE",
-        appearsInRmInward: row[2] === "FG" || row[2] === "WASTE" || row[2] === "REWORK" ? "NO" : "YES",
-        appearsInProduction: row[2] === "STORE" ? "NO" : "YES",
-        appearsInDispatch: row[2] === "FG" ? "YES" : "NO",
-      };
+      });
     });
   }
 }
@@ -5919,6 +6007,7 @@ function materialMasterDefaultRows_() {
     ["WRAPPERS", "Wrappers", "WASTE"],
     ["MICRO_PLASTIC", "Micro Plastic", "WASTE"],
     ["MICRO_PLASTIC_REJECT", "Micro Plastic Reject", "WASTE"],
+    ["SLUDGE", "Sludge", "WASTE"],
     ["WRAPPER_REJECT", "Wrapper Reject", "WASTE"],
     ["RAFFIA_REJECT", "Raffia Reject", "WASTE"],
     ["COLOR_REJECT", "Color Reject", "WASTE"],
@@ -5930,6 +6019,87 @@ function materialMasterDefaultRows_() {
     ["LUMPS", "Lumps", "WASTE"],
     ["PURGING_WASTE", "Purging Waste", "WASTE"],
   ];
+}
+
+function materialMasterDefaultDropdownFlags_(codeOrName, category) {
+  const code = materialCode_(codeOrName);
+  const flags = {
+    appearsInRMInward: "NO",
+    appearsInRmInward: "NO",
+    appearsInProduction: "NO",
+    appearsInGrinderInput: "NO",
+    appearsInGrinderOutput: "NO",
+    appearsInWashInput: "NO",
+    appearsInWashOutput: "NO",
+    appearsInSorterInput: "NO",
+    appearsInSorterOutput: "NO",
+    appearsInExtrusionInput: "NO",
+    appearsInExtrusionOutput: "NO",
+    appearsInDispatch: "NO",
+    appearsInMonthClose: "YES",
+  };
+
+  const rmInward = [
+    "WHITE_FLAKES",
+    "WHITE_BUCKETS",
+    "BATTERY_SCRAP",
+    "BATTERY_REGRIND",
+    "JARS",
+    "LIDS",
+    "PP_MIXED",
+    "WHITE_REGRIND_UNWASHED",
+    "VIRGIN_PP",
+    "VIRGIN_PPCP",
+    "BATTERY_PPCP",
+    "MASTERBATCH",
+  ];
+  const grinderInput = ["WHITE_BUCKETS"];
+  const grinderOutput = ["WHITE_REGRIND_UNWASHED", "DUST", "METAL_REJECT"];
+  const washInput = ["WHITE_REGRIND_UNWASHED", "WHITE_BUCKETS"];
+  const washOutput = ["WHITE_REGRIND_WASHED", "WASHED_WHITE_FLAKES", "WASHED_MIXED", "SINK_MATERIAL", "DUST", "SLUDGE", "WRAPPERS", "MICRO_PLASTIC", "WRAPPER_REJECT"];
+  const sorterInput = ["WHITE_REGRIND_WASHED", "WASHED_WHITE_FLAKES", "WASHED_MIXED"];
+  const sorterOutput = ["WHITE_SORTED", "WHITE_SORTED_REGRIND", "COMMODITY", "MIXED_SORTED", "COLOUR_REJECT", "COLOR_REJECT", "DUST"];
+  const extrusionInput = ["WHITE_REGRIND_WASHED", "WHITE_SORTED", "WHITE_SORTED_REGRIND", "REWORK_MATERIAL", "VIRGIN_PP", "VIRGIN_PPCP", "BATTERY_PPCP", "MASTERBATCH", "ANTIOXIDANT"];
+  const extrusionOutput = ["E1", "E2", "E3", "E4", "E5", "LUMPS", "PURGING_WASTE", "EXTRUSION_WASTE"];
+  const dispatch = ["E1", "E2", "E3", "E4", "E5"];
+
+  if (rmInward.indexOf(code) !== -1) flags.appearsInRMInward = flags.appearsInRmInward = "YES";
+  if (grinderInput.indexOf(code) !== -1) flags.appearsInGrinderInput = "YES";
+  if (grinderOutput.indexOf(code) !== -1) flags.appearsInGrinderOutput = "YES";
+  if (washInput.indexOf(code) !== -1) flags.appearsInWashInput = "YES";
+  if (washOutput.indexOf(code) !== -1) flags.appearsInWashOutput = "YES";
+  if (sorterInput.indexOf(code) !== -1) flags.appearsInSorterInput = "YES";
+  if (sorterOutput.indexOf(code) !== -1) flags.appearsInSorterOutput = "YES";
+  if (extrusionInput.indexOf(code) !== -1) flags.appearsInExtrusionInput = "YES";
+  if (extrusionOutput.indexOf(code) !== -1) flags.appearsInExtrusionOutput = "YES";
+  if (dispatch.indexOf(code) !== -1) flags.appearsInDispatch = "YES";
+
+  flags.appearsInProduction = [
+    flags.appearsInGrinderInput,
+    flags.appearsInGrinderOutput,
+    flags.appearsInWashInput,
+    flags.appearsInWashOutput,
+    flags.appearsInSorterInput,
+    flags.appearsInSorterOutput,
+    flags.appearsInExtrusionInput,
+    flags.appearsInExtrusionOutput,
+  ].indexOf("YES") !== -1 ? "YES" : "NO";
+
+  if (String(category || "").toUpperCase() === "STORE") {
+    flags.appearsInMonthClose = "NO";
+  }
+
+  return flags;
+}
+
+function applyMaterialMasterDefaultDropdownFlags_(row) {
+  const code = materialCode_(row.materialCode || row.materialName);
+  const defaults = materialMasterDefaultDropdownFlags_(code, row.category || row.materialType);
+  const next = { ...row };
+  Object.keys(defaults).forEach(function(key) {
+    if (next[key] === undefined || next[key] === "") next[key] = defaults[key];
+  });
+  return next;
 }
 
 function parseRmMaterialLines_(value, fallbackMaterial, fallbackQty, options) {

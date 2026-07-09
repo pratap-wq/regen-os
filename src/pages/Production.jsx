@@ -29,10 +29,9 @@ export default function Production() {
 
   const washOutputDefaults = [
     { material: "White Regrind (Washed)", qtyKg: "" },
-    { material: "Dust", qtyKg: "" },
-    { material: "Rubber Reject", qtyKg: "" },
-    { material: "Metal Reject", qtyKg: "" },
     { material: "Sink Material", qtyKg: "" },
+    { material: "Dust", qtyKg: "" },
+    { material: "Sludge", qtyKg: "" },
     { material: "Wrappers", qtyKg: "" },
     { material: "Micro Plastic", qtyKg: "" },
   ];
@@ -48,6 +47,9 @@ export default function Production() {
     { material: "E3", qtyKg: "" },
     { material: "E4", qtyKg: "" },
     { material: "E5", qtyKg: "" },
+    { material: "Lumps", qtyKg: "" },
+    { material: "Purging Waste", qtyKg: "" },
+    { material: "Extrusion Waste", qtyKg: "" },
   ];
 
   const blank = {

@@ -3,13 +3,13 @@ import {
   addInventoryAdjustment,
   approveInventoryAdjustment,
   getInventoryAdjustmentSummary,
-  listAdjustmentMasters,
   listInventoryAdjustments,
   rejectInventoryAdjustment,
 } from "../services/inventoryAdjustmentService";
+import { listProductionMaterialMaster } from "../services/productionMaterialMaster";
 
 const MODULES = ["RM", "Wash", "Color Sorter", "Extrusion", "FG", "Dispatch", "Stores", "Waste"];
-const ITEM_TYPES = ["RM", "WASHED", "SORTED", "FG", "STORE", "WASTE", "REWORK"];
+const ITEM_TYPES = ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE", "STORE"];
 
 const ADJUSTMENT_TYPES = [
   "Shortage",
@@ -37,16 +37,6 @@ const REASONS = [
   "Other",
 ];
 
-const FALLBACK_ITEMS = {
-  RM: ["RM"],
-  WASHED: ["Washed Flakes"],
-  SORTED: ["Sorted White", "Sorted Commodity", "All Mix Sorted"],
-  FG: ["E1", "E2", "E3", "E4", "E5"],
-  STORE: ["Consumables", "Spares", "Packing Material"],
-  WASTE: ["Raffia", "Wrappers", "Sink Material", "Iron Scrap", "Sludge", "Lumps", "Purging", "Mesh Reject"],
-  REWORK: ["Lumps", "Purging", "Rework Granules"],
-};
-
 function getCurrentMonth() {
   return new Date().toISOString().slice(0, 7);
 }
@@ -70,7 +60,7 @@ export default function InventoryAdjustments() {
   const [statusFilter, setStatusFilter] = useState("");
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState(null);
-  const [masters, setMasters] = useState({ grades: [], materials: [] });
+  const [masters, setMasters] = useState({ materials: [] });
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -79,7 +69,7 @@ export default function InventoryAdjustments() {
     date: getToday(),
     module: "FG",
     itemType: "FG",
-    itemCode: "E1",
+    itemCode: "",
     adjustmentType: "Physical Count",
     quantityKg: "",
     value: "",
@@ -90,28 +80,13 @@ export default function InventoryAdjustments() {
   });
 
   const itemOptions = useMemo(() => {
-    if (form.itemType === "FG") {
-      const grades = masters.grades
-        .map((x) => x.grade || x.name || x.gradeName || x.materialName)
-        .filter(Boolean);
-
-      return grades.length ? grades : FALLBACK_ITEMS.FG;
-    }
-
-    const materialOptions = masters.materials
+    return masters.materials
       .filter((x) => {
-        const type = String(x.materialType || "").toUpperCase();
-        if (form.itemType === "RM") return type === "RM";
-        if (form.itemType === "WASHED") return type === "WASHED";
-        if (form.itemType === "SORTED") return type === "SORTED";
-        if (form.itemType === "REWORK") return type === "REWORK";
-        if (form.itemType === "WASTE") return type === "WASTE";
-        return true;
+        const type = String(x.category || x.materialType || "").toUpperCase();
+        return !form.itemType || type === String(form.itemType || "").toUpperCase();
       })
-      .map((x) => x.materialName || x.itemName || x.name)
+      .map((x) => x.canonicalName || x.materialName || x.itemName || x.name)
       .filter(Boolean);
-
-    return materialOptions.length ? materialOptions : FALLBACK_ITEMS[form.itemType] || [];
   }, [form.itemType, masters]);
 
   const totals = useMemo(() => {
@@ -130,8 +105,17 @@ export default function InventoryAdjustments() {
   }, [rows]);
 
   async function loadMasters() {
-    const res = await listAdjustmentMasters();
-    setMasters(res);
+    try {
+      const rows = await listProductionMaterialMaster({
+        stage: "INVENTORY_ADJUSTMENTS",
+        direction: "INPUT",
+      });
+      setMasters({ materials: rows || [] });
+    } catch (err) {
+      console.log("inventory adjustment materials", err);
+      setMasters({ materials: [] });
+      setMessage(err.message || "Failed to load Material Master");
+    }
   }
 
   async function loadData() {
@@ -179,7 +163,7 @@ export default function InventoryAdjustments() {
       date: getToday(),
       module: "FG",
       itemType: "FG",
-      itemCode: "E1",
+      itemCode: "",
       adjustmentType: "Physical Count",
       quantityKg: "",
       value: "",

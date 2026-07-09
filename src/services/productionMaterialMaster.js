@@ -119,6 +119,8 @@ export function dropdownFlagForContext(stage, direction) {
   if (["SORTING", "SORTER", "COLOR_SORTER", "COLOUR_SORTER"].includes(s)) return d === "OUTPUT" ? "appearsInSorterOutput" : "appearsInSorterInput";
   if (s === "EXTRUSION") return d === "OUTPUT" ? "appearsInExtrusionOutput" : "appearsInExtrusionInput";
   if (s === "DISPATCH") return "appearsInDispatch";
+  if (s === "MONTH_CLOSE") return "appearsInMonthClose";
+  if (s === "INVENTORY_ADJUSTMENTS" || s === "INVENTORY_ADJUSTMENT") return "appearsInInventoryAdjustments";
   return "";
 }
 
@@ -140,6 +142,7 @@ function hasSpecificDropdownFlags(row) {
     "appearsInExtrusionOutput",
     "appearsInDispatch",
     "appearsInMonthClose",
+    "appearsInInventoryAdjustments",
   ].some((key) => row[key] !== undefined && row[key] !== "");
 }
 
@@ -149,6 +152,8 @@ function materialEligibleForContext(row, stage, direction) {
 
   if (direction !== "INPUT") return false;
   if (stage === "DISPATCH") return category === "FG";
+  if (stage === "MONTH_CLOSE") return category !== "STORE";
+  if (stage === "INVENTORY_ADJUSTMENTS" || stage === "INVENTORY_ADJUSTMENT") return true;
   if (stage === "RM_INWARD") return category === "RM" || category === "WIP";
   if (productionInputStages.includes(stage)) {
     return ["RM", "WIP", "REWORK", "ADDITIVE"].includes(category);
@@ -252,6 +257,7 @@ function defaultDropdownFlags(value, category = "") {
     appearsInExtrusionOutput: "NO",
     appearsInDispatch: "NO",
     appearsInMonthClose: String(category).toUpperCase() === "STORE" ? "NO" : "YES",
+    appearsInInventoryAdjustments: "YES",
   };
 
   const mark = (key) => { flags[key] = "YES"; };

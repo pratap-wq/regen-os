@@ -23,6 +23,7 @@ const blankForm = {
   appearsInExtrusionOutput: "NO",
   appearsInDispatch: "NO",
   appearsInMonthClose: "YES",
+  appearsInInventoryAdjustments: "YES",
   status: "ACTIVE",
   remarks: "",
 };
@@ -39,6 +40,7 @@ const DROPDOWN_FLAGS = [
   ["appearsInExtrusionOutput", "Extrusion Output"],
   ["appearsInDispatch", "Dispatch"],
   ["appearsInMonthClose", "Month Close"],
+  ["appearsInInventoryAdjustments", "Inventory Adjustments"],
 ];
 
 export default function MaterialMasterAdmin() {
@@ -269,7 +271,7 @@ export default function MaterialMasterAdmin() {
           <div style={eyebrow}>Masters</div>
           <h1 style={title}>Material Master Admin</h1>
           <div style={subtitle}>
-            Add or activate controlled dropdown materials for RM Inward, Production, and Dispatch.
+            Add or activate controlled dropdown materials across RM Inward, Production, Dispatch, Month Close, and Inventory Adjustments.
           </div>
         </div>
       </div>
@@ -411,6 +413,7 @@ export default function MaterialMasterAdmin() {
           { key: "appearsInExtrusionInput", label: "Extrusion In", render: yesNoLabel("appearsInExtrusionInput"), renderExport: yesNoLabel("appearsInExtrusionInput"), searchValue: yesNoLabel("appearsInExtrusionInput") },
           { key: "appearsInExtrusionOutput", label: "Extrusion Out", render: yesNoLabel("appearsInExtrusionOutput"), renderExport: yesNoLabel("appearsInExtrusionOutput"), searchValue: yesNoLabel("appearsInExtrusionOutput") },
           { key: "appearsInDispatch", label: "Dispatch", render: yesNoLabel("appearsInDispatch"), renderExport: yesNoLabel("appearsInDispatch"), searchValue: yesNoLabel("appearsInDispatch") },
+          { key: "appearsInInventoryAdjustments", label: "Inv Adj", render: yesNoLabel("appearsInInventoryAdjustments"), renderExport: yesNoLabel("appearsInInventoryAdjustments"), searchValue: yesNoLabel("appearsInInventoryAdjustments") },
           { key: "status", label: "Status", render: (row) => row.status || "ACTIVE" },
           {
             key: "actions",

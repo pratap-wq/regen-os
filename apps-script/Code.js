@@ -926,6 +926,7 @@ const REGEN_DB_SCHEMA = {
     "appearsInExtrusionOutput",
     "appearsInDispatch",
     "appearsInMonthClose",
+    "appearsInInventoryAdjustments",
     "remarks",
     "createdBy",
     "createdAt",
@@ -2497,8 +2498,13 @@ function getProductionMaterialMasterRows_() {
 
   materialMasterRowsForProductionDropdown_().forEach(function(row) {
     const key = materialCode_(row.canonicalName || row.materialName);
-    if (!key || byCanonical[key]) return;
-    byCanonical[key] = row;
+    if (!key) return;
+    byCanonical[key] = {
+      ...(byCanonical[key] || {}),
+      ...row,
+      stageAllowed: row.stageAllowed || "",
+      directionAllowed: row.directionAllowed || "",
+    };
   });
 
   return Object.keys(byCanonical).map(function(key) {
@@ -2519,25 +2525,22 @@ function materialMasterRowsForProductionDropdown_() {
   return rows
     .filter(function(row) {
       const status = String(row.status || "ACTIVE").toUpperCase();
-      const code = materialCode_(row.materialCode || row.materialName);
-      const defaultProductionMaterial = code === "WHITE_BUCKETS";
       return status !== "INACTIVE" && status !== "DELETED" && status !== "DISABLED" &&
         (
-          defaultProductionMaterial ||
-          materialMasterFlag_(row, ["appearsInRmInward", "appearsInRMInward"]) === "YES" ||
+          materialHasExplicitDropdownFlags_(row) ||
           materialMasterFlag_(row, ["appearsInProduction"]) === "YES" ||
-          materialMasterFlag_(row, ["appearsInDispatch"]) === "YES" ||
           materialHasAnyProductionDropdownFlag_(row)
         );
     })
     .map(function(row, index) {
       const category = normalizeMaterialCategoryForDropdown_(row.category);
       const code = materialCode_(row.materialCode || row.materialName);
-      const defaultProductionMaterial = code === "WHITE_BUCKETS";
-      const rm = defaultProductionMaterial || materialMasterFlag_(row, ["appearsInRmInward", "appearsInRMInward"]) === "YES";
-      const production = defaultProductionMaterial || materialMasterFlag_(row, ["appearsInProduction"]) === "YES" || materialHasAnyProductionDropdownFlag_(row);
+      const rm = materialMasterFlag_(row, ["appearsInRmInward", "appearsInRMInward"]) === "YES";
+      const production = materialMasterFlag_(row, ["appearsInProduction"]) === "YES" || materialHasAnyProductionDropdownFlag_(row);
       const dispatch = materialMasterFlag_(row, ["appearsInDispatch"]) === "YES";
-      const rules = materialMasterDropdownRules_(category, rm, production, dispatch);
+      const monthClose = materialMasterFlag_(row, ["appearsInMonthClose"]) === "YES";
+      const inventoryAdjustments = materialMasterFlag_(row, ["appearsInInventoryAdjustments"]) === "YES";
+      const rules = materialMasterDropdownRules_(category, rm, production, dispatch, monthClose, inventoryAdjustments);
       return {
         materialId: row.materialId || row.materialCode || ("MAT-DROPDOWN-" + index),
         materialCode: materialCode_(row.materialCode || row.materialName),
@@ -2555,7 +2558,7 @@ function materialMasterRowsForProductionDropdown_() {
       };
     })
     .filter(function(row) {
-      return row.materialName && row.stageAllowed && row.directionAllowed;
+      return row.materialName;
     });
 }
 
@@ -2579,6 +2582,8 @@ function productionDropdownFlagFor_(stage, direction) {
   const directionName = String(direction || "").trim().toUpperCase();
   if (stageName === "RM_INWARD") return ["appearsInRMInward", "appearsInRmInward"];
   if (stageName === "DISPATCH") return ["appearsInDispatch"];
+  if (stageName === "MONTH_CLOSE") return ["appearsInMonthClose"];
+  if (stageName === "INVENTORY_ADJUSTMENTS" || stageName === "INVENTORY_ADJUSTMENT") return ["appearsInInventoryAdjustments"];
   if (stageName === "GRINDER") return directionName === "OUTPUT" ? ["appearsInGrinderOutput"] : ["appearsInGrinderInput"];
   if (stageName === "WASH") return directionName === "OUTPUT" ? ["appearsInWashOutput"] : ["appearsInWashInput"];
   if (stageName === "SORTING" || stageName === "SORTER" || stageName === "COLOR_SORTER" || stageName === "COLOUR_SORTER") {
@@ -2602,6 +2607,7 @@ function materialHasExplicitDropdownFlags_(row) {
     "appearsInExtrusionOutput",
     "appearsInDispatch",
     "appearsInMonthClose",
+    "appearsInInventoryAdjustments",
   ].some(function(key) {
     return row[key] !== undefined && row[key] !== "";
   });
@@ -2622,7 +2628,7 @@ function materialHasAnyProductionDropdownFlag_(row) {
   });
 }
 
-function materialMasterDropdownRules_(category, rm, production, dispatch) {
+function materialMasterDropdownRules_(category, rm, production, dispatch, monthClose, inventoryAdjustments) {
   const stages = [];
   const directions = [];
 
@@ -2647,6 +2653,16 @@ function materialMasterDropdownRules_(category, rm, production, dispatch) {
 
   if (dispatch && category === "FG") {
     stages.push("DISPATCH");
+    directions.push("INPUT");
+  }
+
+  if (monthClose) {
+    stages.push("MONTH_CLOSE");
+    directions.push("INPUT");
+  }
+
+  if (inventoryAdjustments) {
+    stages.push("INVENTORY_ADJUSTMENTS");
     directions.push("INPUT");
   }
 
@@ -2695,6 +2711,10 @@ function productionMaterialAllowedFor_(row, stage, direction) {
   if (directionName !== "INPUT" && directionName !== "OUTPUT") return false;
 
   if (stageName === "DISPATCH") return materialVisibleForDispatch_(row);
+  if (stageName === "MONTH_CLOSE") return directionName === "INPUT" && materialMasterFlag_(row, ["appearsInMonthClose"]) === "YES";
+  if (stageName === "INVENTORY_ADJUSTMENTS" || stageName === "INVENTORY_ADJUSTMENT") {
+    return directionName === "INPUT" && materialVisibleForInventoryAdjustments_(row);
+  }
   if (stageName === "RM_INWARD") return directionName === "INPUT" && materialVisibleForRmInward_(row);
   if (materialIsProductionStage_(stageName)) return materialVisibleForProduction_(row, stageName, directionName);
   return false;
@@ -2749,6 +2769,13 @@ function materialVisibleForDispatch_(row) {
   return materialMasterFlag_(row, productionDropdownFlagFor_("DISPATCH", "INPUT")) === "YES" ||
     materialRowStages_(row).indexOf("DISPATCH") !== -1 ||
     /^E[1-5]$/.test(String(row.canonicalName || row.materialName || row.materialCode || "").trim().toUpperCase());
+}
+
+function materialVisibleForInventoryAdjustments_(row) {
+  const explicit = materialHasExplicitDropdownFlags_(row);
+  if (materialMasterFlag_(row, ["appearsInInventoryAdjustments"]) === "YES") return true;
+  if (explicit) return false;
+  return true;
 }
 
 function normalizeProductionMaterialName_(value) {
@@ -3076,6 +3103,7 @@ function addMaterialMaster(data = {}) {
     appearsInExtrusionOutput: yesNo_(data.appearsInExtrusionOutput),
     appearsInDispatch: yesNo_(data.appearsInDispatch),
     appearsInMonthClose: yesNo_(data.appearsInMonthClose),
+    appearsInInventoryAdjustments: yesNo_(data.appearsInInventoryAdjustments),
     remarks: data.remarks || "",
     createdBy: data.createdBy || "System",
     createdAt: new Date(),
@@ -3117,6 +3145,7 @@ function updateMaterialMaster(data = {}) {
     appearsInExtrusionOutput: yesNo_(data.appearsInExtrusionOutput),
     appearsInDispatch: yesNo_(data.appearsInDispatch),
     appearsInMonthClose: yesNo_(data.appearsInMonthClose),
+    appearsInInventoryAdjustments: yesNo_(data.appearsInInventoryAdjustments),
     remarks: data.remarks || "",
     updatedAt: new Date(),
   });
@@ -6037,6 +6066,7 @@ function materialMasterDefaultDropdownFlags_(codeOrName, category) {
     appearsInExtrusionOutput: "NO",
     appearsInDispatch: "NO",
     appearsInMonthClose: "YES",
+    appearsInInventoryAdjustments: "YES",
   };
 
   const rmInward = [

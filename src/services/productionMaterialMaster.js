@@ -1,6 +1,11 @@
 import { apiCall } from "../api/api";
 
 export const PRODUCTION_MATERIAL_ALIASES = {
+  "WHITE BUCKET": "White PPCP Buckets",
+  "WHITE BUCKETS": "White PPCP Buckets",
+  "MIXED BUCKET": "White PPCP Buckets",
+  "MIXED BUCKETS": "White PPCP Buckets",
+  "MIXED PPCP BUCKETS": "White PPCP Buckets",
   "UNWASHED WHITE FLAKES": "White Regrind (Unwashed)",
   "WHITE FLAKES (UNWASHED)": "White Regrind (Unwashed)",
   "GRINDER FLAKES": "White Regrind (Unwashed)",
@@ -19,8 +24,7 @@ export const PRODUCTION_MATERIAL_ALIASES = {
 };
 
 export const FALLBACK_PRODUCTION_MATERIALS = [
-  ["White Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "White Buckets"],
-  ["Mixed Buckets", "Mixed Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "Mixed Buckets"],
+  ["White PPCP Buckets", "White PPCP Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "White Bucket|White Buckets|Mixed Bucket|Mixed Buckets|Mixed PPCP Buckets"],
   ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "OUTPUT,INPUT", "Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Unwashed Regrind|White Regrind|White Regrind Unwashed|Regrinds"],
   ["White Regrind (Washed)", "White Regrind (Washed)", "WIP", "RM_INWARD,WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "Washed White Flakes|White Washed Flakes|Washed Regrind|White Regrind Washed"],
   ["White Sorted Regrind", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "White Sorted Flakes|White Sorted|Sorted White|Sorted Material"],

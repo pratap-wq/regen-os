@@ -490,6 +490,8 @@ function updateFactoryCostMaster(data = {}) {
     if (p.fn === "materialFlow.verifyJune2026") return output(verifyJuneMaterialFlowV1(p));
     if (p.fn === "materialFlow.rebuildJuneLedgerV1") return rebuildJuneLedgerV1(p);
     if (p.fn === "materialFlow.verifyJuneLedgerV1") return verifyJuneLedgerV1(p);
+    if (p.fn === "materialMerge.whiteBuckets.preview") return output(previewWhitePpcpBucketMerge(p));
+    if (p.fn === "materialMerge.whiteBuckets.run") return output(runWhitePpcpBucketMerge(p));
     if (p.fn === "trace.batch") return traceBatch(p);
     if (p.fn === "inventory.summary") {
       return output({
@@ -1991,7 +1993,7 @@ function seedProductionMaterials() {
   }
 
   const defaults = [
-    ["White Buckets", "RM", "Kg"],
+    ["White PPCP Buckets", "RM", "Kg"],
     ["Battery Scrap", "RM", "Kg"],
     ["Imported Flakes", "RM", "Kg"],
     ["Washed Flakes", "WASHED", "Kg"],
@@ -2029,8 +2031,7 @@ function seedProductionMaterials() {
 }
 
 const PRODUCTION_MATERIAL_MASTER_DEFAULTS = [
-  ["White Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "White Buckets|White PPCP Buckets"],
-  ["Mixed Buckets", "Mixed Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "Mixed Buckets"],
+  ["White PPCP Buckets", "White PPCP Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "White Bucket|White Buckets|Mixed Bucket|Mixed Buckets|Mixed PPCP Buckets"],
   ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "OUTPUT,INPUT", "Flakes|Flakes Unwashed|Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Unwashed Regrind|Unwashed Regrinds|White Regrind|White Regrind Unwashed|Regrinds"],
   ["White Regrind (Washed)", "White Regrind (Washed)", "WIP", "RM_INWARD,WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "Washed Flakes|Washed White Flakes|White Washed Flakes|Washed Regrind|White Regrind Washed|Washed Mixed"],
   ["White Sorted Regrind", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "White Sorted Flakes|White Sorted|Sorted White|Sorted Material"],
@@ -2065,7 +2066,12 @@ const PRODUCTION_MATERIAL_ALIAS_MAP = {
   "UNWASHED REGRIND": "White Regrind (Unwashed)",
   "UNWASHED REGRINDS": "White Regrind (Unwashed)",
   "FLAKES UNWASHED": "White Regrind (Unwashed)",
-  "WHITE PPCP BUCKETS": "White Buckets",
+  "WHITE PPCP BUCKETS": "White PPCP Buckets",
+  "WHITE BUCKET": "White PPCP Buckets",
+  "WHITE BUCKETS": "White PPCP Buckets",
+  "MIXED BUCKET": "White PPCP Buckets",
+  "MIXED BUCKETS": "White PPCP Buckets",
+  "MIXED PPCP BUCKETS": "White PPCP Buckets",
   "WHITE REGRIND": "White Regrind (Unwashed)",
   "WHITE REGRIND UNWASHED": "White Regrind (Unwashed)",
   "REGRINDS": "White Regrind (Unwashed)",
@@ -2101,13 +2107,17 @@ const PRODUCTION_MATERIAL_ALIAS_MAP = {
   "REWORK MATERIAL": "Rework Material",
   "EXTRUSION WASTE": "Extrusion Waste",
   "PURGING": "Purging Waste",
-  "MIXED PPCP BUCKETS": "Mixed Buckets",
 };
 
 const MATERIAL_ALIAS_MAP_DEFAULTS = [
   ["Flakes", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 95, "seed"],
   ["Flakes Unwashed", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 95, "seed"],
-  ["White PPCP Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "TRUE", 100, "seed"],
+  ["White Bucket", "White PPCP Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "TRUE", 100, "seed"],
+  ["White Buckets", "White PPCP Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "TRUE", 100, "seed"],
+  ["White PPCP Buckets", "White PPCP Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "TRUE", 100, "seed"],
+  ["Mixed Bucket", "White PPCP Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "TRUE", 100, "seed"],
+  ["Mixed Buckets", "White PPCP Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "TRUE", 100, "seed"],
+  ["Mixed PPCP Buckets", "White PPCP Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "TRUE", 100, "seed"],
   ["Unwashed White Flakes", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 100, "seed"],
   ["White Flakes (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 100, "seed"],
   ["Unwashed Regrind", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 100, "seed"],
@@ -2143,7 +2153,6 @@ const MATERIAL_ALIAS_MAP_DEFAULTS = [
   ["Rework Material", "Rework Material", "REWORK", "EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
   ["Extrusion Waste", "Extrusion Waste", "WASTE", "EXTRUSION", "OUTPUT", "TRUE", 100, "seed"],
   ["Purging", "Purging Waste", "WASTE", "EXTRUSION", "OUTPUT", "TRUE", 100, "seed"],
-  ["Mixed PPCP Buckets", "Mixed Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "TRUE", 100, "seed"],
 ];
 
 function productionMaterialMasterHeaders_() {
@@ -3451,6 +3460,427 @@ function mergeFactoryMaster(data = {}) {
   });
 }
 
+const WHITE_PPCP_BUCKET_MERGE = {
+  targetCode: "WHITE_PPCP_BUCKETS",
+  targetName: "White PPCP Buckets",
+  sourceNames: [
+    "Mixed PPCP Buckets",
+    "Mixed Bucket",
+    "Mixed Buckets",
+    "MIXED_PPCP_BUCKETS",
+    "MIXED_BUCKETS",
+    "White Bucket",
+    "White Buckets",
+    "WHITE_BUCKETS",
+  ],
+};
+
+function previewWhitePpcpBucketMerge(data = {}) {
+  return whitePpcpBucketMerge_(data, true);
+}
+
+function runWhitePpcpBucketMerge(data = {}) {
+  if (String(data.confirm || "").toUpperCase() !== "MERGE_WHITE_PPCP_BUCKETS") {
+    return {
+      ok: false,
+      error: "Run merge requires confirm: MERGE_WHITE_PPCP_BUCKETS",
+      preview: whitePpcpBucketMerge_(data, true),
+    };
+  }
+  return whitePpcpBucketMerge_(data, false);
+}
+
+function whitePpcpBucketMerge_(data, previewOnly) {
+  const runId = data.runId || generateBatchId(previewOnly ? "MBMP" : "MBMR");
+  const note = "Merged Mixed/White bucket variants into White PPCP Buckets (" + runId + ")";
+  const operations = [
+    { sheetName: "RM_Inward", textFields: ["material"], jsonFields: ["materialLines"], summaryFields: ["materialSummary"], idField: "inwardId" },
+    { sheetName: "Wash_Batches", textFields: ["inputMaterial"], jsonFields: ["feedComposition"], idField: "washBatchId" },
+    { sheetName: "Inventory_Ledger", textFields: ["itemName", "legacyMaterialName"], codeFields: ["materialId"], idField: "ledgerId" },
+    { sheetName: "Physical_Counts", jsonFields: ["materialPhysicalLinesJson"], idField: "countId" },
+    { sheetName: "Inventory_Adjustments", textFields: ["itemCode", "material"], idField: "adjustmentId" },
+    { sheetName: "Month_Close", jsonFields: ["exceptions"], idField: "closeId" },
+    { sheetName: "Month_Close_Reconciliation", textFields: ["material", "materialName", "stockType", "itemCode"], jsonFields: ["exceptions"], idField: "reconciliationId", optional: true },
+  ];
+
+  if (!previewOnly) ensureWhitePpcpBucketMasterHeaders_();
+
+  const summaries = operations.map(function(op) {
+    return mergeMaterialSheet_(op, previewOnly, note);
+  });
+  const masterSummary = mergeWhitePpcpBucketMasters_(previewOnly, note);
+  summaries.push(masterSummary);
+
+  return {
+    ok: true,
+    mode: previewOnly ? "PREVIEW" : "RUN",
+    runId,
+    source: WHITE_PPCP_BUCKET_MERGE.sourceNames,
+    target: {
+      materialCode: WHITE_PPCP_BUCKET_MERGE.targetCode,
+      materialName: WHITE_PPCP_BUCKET_MERGE.targetName,
+    },
+    summaries,
+    totalRowsMatched: summaries.reduce(function(sum, row) { return sum + num(row.rowsMatched); }, 0),
+    totalCellsChanged: summaries.reduce(function(sum, row) { return sum + num(row.cellsChanged); }, 0),
+    message: previewOnly
+      ? "Preview only. No spreadsheet data changed."
+      : "Merge completed. Rows were updated in place; no rows were deleted.",
+  };
+}
+
+function ensureWhitePpcpBucketMasterHeaders_() {
+  createSheetIfMissing_("Material_Master", materialMasterHeaders_());
+  createSheetIfMissing_("Production_Material_Master", productionMaterialMasterHeaders_());
+  createSheetIfMissing_("Material_Alias_Map", materialAliasMapHeaders_());
+  ensureHeaders_("Material_Master", materialMasterHeaders_().concat(["mergedInto", "mergeNote"]));
+  ensureHeaders_("Production_Material_Master", productionMaterialMasterHeaders_().concat(["status", "mergedInto", "mergedIntoId", "mergeNote", "mergedBy", "mergedAt"]));
+  ensureHeaders_("Material_Alias_Map", materialAliasMapHeaders_());
+}
+
+function mergeMaterialSheet_(op, previewOnly, note) {
+  try {
+    const sh = getSheet(op.sheetName);
+    const headers = getHeaders(sh);
+    const values = sh.getDataRange().getValues();
+    const changes = [];
+
+    for (let r = 1; r < values.length; r++) {
+      let rowChanged = false;
+      const sample = {};
+      (op.textFields || []).forEach(function(field) {
+        const col = headers.indexOf(field);
+        if (col === -1) return;
+        const current = values[r][col];
+        const next = mergeBucketMaterialValue_(current);
+        if (next !== current) {
+          rowChanged = true;
+          sample[field] = current;
+          if (!previewOnly) sh.getRange(r + 1, col + 1).setValue(next);
+          changes.push({ rowNumber: r + 1, field: field, from: current, to: next });
+        }
+      });
+      (op.codeFields || []).forEach(function(field) {
+        const col = headers.indexOf(field);
+        if (col === -1) return;
+        const current = values[r][col];
+        const next = mergeBucketMaterialCodeValue_(current);
+        if (next !== current) {
+          rowChanged = true;
+          sample[field] = current;
+          if (!previewOnly) sh.getRange(r + 1, col + 1).setValue(next);
+          changes.push({ rowNumber: r + 1, field: field, from: current, to: next });
+        }
+      });
+      (op.jsonFields || []).forEach(function(field) {
+        const col = headers.indexOf(field);
+        if (col === -1) return;
+        const current = values[r][col];
+        const result = mergeBucketMaterialJson_(current);
+        if (result.changed) {
+          rowChanged = true;
+          sample[field] = String(current || "").slice(0, 160);
+          if (!previewOnly) sh.getRange(r + 1, col + 1).setValue(result.value);
+          changes.push({ rowNumber: r + 1, field: field, from: sample[field], to: String(result.value || "").slice(0, 160) });
+        }
+      });
+      if (rowChanged && !previewOnly) {
+        appendMergeNoteToRow_(sh, headers, r + 1, note);
+        (op.summaryFields || []).forEach(function(field) {
+          const col = headers.indexOf(field);
+          const materialLinesCol = headers.indexOf("materialLines");
+          if (col === -1 || materialLinesCol === -1) return;
+          const lines = parseRmMaterialLinesNoNormalize_(sh.getRange(r + 1, materialLinesCol + 1).getValue());
+          if (lines.length) sh.getRange(r + 1, col + 1).setValue(materialLinesSummary_(lines));
+        });
+      }
+    }
+
+    return {
+      sheetName: op.sheetName,
+      rowsMatched: uniqueRowCount_(changes),
+      cellsChanged: changes.length,
+      sampleRows: changes.slice(0, 10),
+    };
+  } catch (err) {
+    if (op.optional) return { sheetName: op.sheetName, skipped: true, error: err.message || String(err), rowsMatched: 0, cellsChanged: 0, sampleRows: [] };
+    throw err;
+  }
+}
+
+function mergeWhitePpcpBucketMasters_(previewOnly, note) {
+  const materialSummary = mergeMaterialMasterSheet_(previewOnly, note);
+  const productionSummary = mergeProductionMaterialMasterSheet_(previewOnly, note);
+  const aliasSummary = ensureWhitePpcpBucketAliases_(previewOnly);
+  return {
+    sheetName: "Material_Master / Production_Material_Master / Material_Alias_Map",
+    rowsMatched: materialSummary.rowsMatched + productionSummary.rowsMatched + aliasSummary.rowsMatched,
+    cellsChanged: materialSummary.cellsChanged + productionSummary.cellsChanged + aliasSummary.cellsChanged,
+    sampleRows: materialSummary.sampleRows.concat(productionSummary.sampleRows).concat(aliasSummary.sampleRows).slice(0, 12),
+  };
+}
+
+function mergeMaterialMasterSheet_(previewOnly, note) {
+  const sh = getSheet("Material_Master");
+  const headers = getHeaders(sh);
+  const values = sh.getDataRange().getValues();
+  let targetRow = -1;
+  const changes = [];
+  for (let r = 1; r < values.length; r++) {
+    const code = values[r][headers.indexOf("materialCode")];
+    const name = values[r][headers.indexOf("materialName")];
+    if (bucketMaterialKey_(code) === WHITE_PPCP_BUCKET_MERGE.targetCode || bucketMaterialKey_(name) === WHITE_PPCP_BUCKET_MERGE.targetCode) targetRow = r + 1;
+  }
+  if (targetRow === -1 && !previewOnly) {
+    appendObjectRow(sh, {
+      materialId: generateBatchId("MAT"),
+      materialCode: WHITE_PPCP_BUCKET_MERGE.targetCode,
+      materialName: WHITE_PPCP_BUCKET_MERGE.targetName,
+      category: "RM",
+      unit: "Kg",
+      status: "ACTIVE",
+      createdBy: "System",
+      createdAt: new Date(),
+      mergeNote: note,
+    });
+  }
+  for (let r = 1; r < values.length; r++) {
+    const code = values[r][headers.indexOf("materialCode")];
+    const name = values[r][headers.indexOf("materialName")];
+    const isTarget = bucketMaterialKey_(code) === WHITE_PPCP_BUCKET_MERGE.targetCode || bucketMaterialKey_(name) === WHITE_PPCP_BUCKET_MERGE.targetCode;
+    const isMerge = bucketMaterialShouldMerge_(code) || bucketMaterialShouldMerge_(name);
+    if (!isTarget && !isMerge) continue;
+    if (isTarget) {
+      changes.push({ rowNumber: r + 1, field: "target", from: name, to: WHITE_PPCP_BUCKET_MERGE.targetName });
+      if (!previewOnly) {
+        setCellByHeader_(sh, headers, r + 1, "materialCode", WHITE_PPCP_BUCKET_MERGE.targetCode);
+        setCellByHeader_(sh, headers, r + 1, "materialName", WHITE_PPCP_BUCKET_MERGE.targetName);
+        setCellByHeader_(sh, headers, r + 1, "status", "ACTIVE");
+        appendMergeNoteToRow_(sh, headers, r + 1, note);
+      }
+    } else {
+      changes.push({ rowNumber: r + 1, field: "merged", from: name || code, to: WHITE_PPCP_BUCKET_MERGE.targetName });
+      if (!previewOnly) {
+        setCellByHeader_(sh, headers, r + 1, "status", "MERGED");
+        setCellByHeader_(sh, headers, r + 1, "mergedIntoId", WHITE_PPCP_BUCKET_MERGE.targetCode);
+        setCellByHeader_(sh, headers, r + 1, "mergedInto", WHITE_PPCP_BUCKET_MERGE.targetCode);
+        setCellByHeader_(sh, headers, r + 1, "mergedBy", "System");
+        setCellByHeader_(sh, headers, r + 1, "mergedAt", new Date());
+        appendMergeNoteToRow_(sh, headers, r + 1, note);
+      }
+    }
+  }
+  if (targetRow === -1) changes.push({ rowNumber: "new", field: "target", from: "", to: WHITE_PPCP_BUCKET_MERGE.targetName });
+  return { rowsMatched: uniqueRowCount_(changes), cellsChanged: changes.length, sampleRows: changes.slice(0, 10) };
+}
+
+function mergeProductionMaterialMasterSheet_(previewOnly, note) {
+  const sh = getSheet("Production_Material_Master");
+  const headers = getHeaders(sh);
+  const values = sh.getDataRange().getValues();
+  let hasTarget = false;
+  const changes = [];
+  for (let r = 1; r < values.length; r++) {
+    const name = values[r][headers.indexOf("materialName")];
+    const canonical = values[r][headers.indexOf("canonicalName")];
+    const isTarget = bucketMaterialKey_(name) === WHITE_PPCP_BUCKET_MERGE.targetCode || bucketMaterialKey_(canonical) === WHITE_PPCP_BUCKET_MERGE.targetCode;
+    const isMerge = bucketMaterialShouldMerge_(name) || bucketMaterialShouldMerge_(canonical);
+    if (isTarget) {
+      hasTarget = true;
+      changes.push({ rowNumber: r + 1, field: "target", from: canonical || name, to: WHITE_PPCP_BUCKET_MERGE.targetName });
+      if (!previewOnly) {
+        setCellByHeader_(sh, headers, r + 1, "materialName", WHITE_PPCP_BUCKET_MERGE.targetName);
+        setCellByHeader_(sh, headers, r + 1, "canonicalName", WHITE_PPCP_BUCKET_MERGE.targetName);
+        setCellByHeader_(sh, headers, r + 1, "active", "TRUE");
+        setCellByHeader_(sh, headers, r + 1, "status", "ACTIVE");
+        setCellByHeader_(sh, headers, r + 1, "aliases", "White Bucket|White Buckets|Mixed Bucket|Mixed Buckets|Mixed PPCP Buckets");
+        appendMergeNoteToRow_(sh, headers, r + 1, note);
+      }
+    } else if (isMerge) {
+      changes.push({ rowNumber: r + 1, field: "merged", from: canonical || name, to: WHITE_PPCP_BUCKET_MERGE.targetName });
+      if (!previewOnly) {
+        setCellByHeader_(sh, headers, r + 1, "active", "FALSE");
+        setCellByHeader_(sh, headers, r + 1, "status", "MERGED");
+        setCellByHeader_(sh, headers, r + 1, "mergedInto", WHITE_PPCP_BUCKET_MERGE.targetName);
+        setCellByHeader_(sh, headers, r + 1, "mergedIntoId", WHITE_PPCP_BUCKET_MERGE.targetCode);
+        setCellByHeader_(sh, headers, r + 1, "mergedBy", "System");
+        setCellByHeader_(sh, headers, r + 1, "mergedAt", new Date());
+        appendMergeNoteToRow_(sh, headers, r + 1, note);
+      }
+    }
+  }
+  if (!hasTarget) {
+    changes.push({ rowNumber: "new", field: "target", from: "", to: WHITE_PPCP_BUCKET_MERGE.targetName });
+    if (!previewOnly) {
+      appendObjectRow(sh, {
+        materialId: "PMM-WHITE-PPCP-BUCKETS",
+        materialName: WHITE_PPCP_BUCKET_MERGE.targetName,
+        canonicalName: WHITE_PPCP_BUCKET_MERGE.targetName,
+        category: "RM",
+        stageAllowed: "RM_INWARD,GRINDER",
+        directionAllowed: "INPUT",
+        active: "TRUE",
+        aliases: "White Bucket|White Buckets|Mixed Bucket|Mixed Buckets|Mixed PPCP Buckets",
+        sortOrder: 1,
+        remarks: note,
+        createdBy: "System",
+        createdAt: new Date(),
+      });
+    }
+  }
+  return { rowsMatched: uniqueRowCount_(changes), cellsChanged: changes.length, sampleRows: changes.slice(0, 10) };
+}
+
+function ensureWhitePpcpBucketAliases_(previewOnly) {
+  let sh;
+  try {
+    sh = getSheet("Material_Alias_Map");
+  } catch (err) {
+    if (previewOnly) return { rowsMatched: 0, cellsChanged: 0, sampleRows: [{ rowNumber: "-", field: "Material_Alias_Map", from: "missing", to: "will be created on run" }] };
+    throw err;
+  }
+  const headers = getHeaders(sh);
+  const existing = getRowsAsObjects("Material_Alias_Map").map(function(row) {
+    return materialAliasKey_(row.aliasName || "");
+  });
+  const aliases = ["White Bucket", "White Buckets", "Mixed Bucket", "Mixed Buckets", "Mixed PPCP Buckets", "MIXED_BUCKETS", "MIXED_PPCP_BUCKETS"];
+  const changes = [];
+  aliases.forEach(function(alias) {
+    if (existing.indexOf(materialAliasKey_(alias)) !== -1) return;
+    changes.push({ rowNumber: "new", field: "aliasName", from: "", to: alias });
+    if (!previewOnly) {
+      appendObjectRow(sh, {
+        aliasId: generateBatchId("MAL"),
+        aliasName: alias,
+        canonicalName: WHITE_PPCP_BUCKET_MERGE.targetName,
+        category: "RM",
+        stageAllowed: "RM_INWARD,GRINDER",
+        directionAllowed: "INPUT",
+        active: "TRUE",
+        confidence: 100,
+        source: "white-bucket-merge",
+        createdAt: new Date(),
+      });
+    }
+  });
+  return { rowsMatched: changes.length, cellsChanged: changes.length, sampleRows: changes.slice(0, 10) };
+}
+
+function mergeBucketMaterialJson_(value) {
+  if (!value) return { changed: false, value: value };
+  try {
+    const parsed = JSON.parse(value);
+    const result = mergeBucketMaterialObject_(parsed);
+    return { changed: result.changed, value: result.changed ? JSON.stringify(result.value) : value };
+  } catch (err) {
+    const next = mergeBucketMaterialText_(String(value));
+    return { changed: next !== String(value), value: next };
+  }
+}
+
+function mergeBucketMaterialObject_(value) {
+  let changed = false;
+  if (Array.isArray(value)) {
+    const rows = value.map(function(item) {
+      const result = mergeBucketMaterialObject_(item);
+      if (result.changed) changed = true;
+      return result.value;
+    });
+    return { changed: changed, value: rows };
+  }
+  if (value && typeof value === "object") {
+    const next = {};
+    Object.keys(value).forEach(function(key) {
+      const current = value[key];
+      if (["material", "materialName", "stockType", "itemCode", "itemName", "inputMaterial", "sourceType", "outputMaterial"].indexOf(key) !== -1) {
+        const updated = mergeBucketMaterialValue_(current);
+        if (updated !== current) changed = true;
+        next[key] = updated;
+        return;
+      }
+      if (["materialCode", "materialId"].indexOf(key) !== -1) {
+        const updatedCode = mergeBucketMaterialCodeValue_(current);
+        if (updatedCode !== current) changed = true;
+        next[key] = updatedCode;
+        return;
+      }
+      next[key] = current;
+    });
+    return { changed: changed, value: next };
+  }
+  const updated = mergeBucketMaterialValue_(value);
+  return { changed: updated !== value, value: updated };
+}
+
+function mergeBucketMaterialText_(value) {
+  let next = String(value || "");
+  WHITE_PPCP_BUCKET_MERGE.sourceNames.concat(["White PPCP Buckets"]).sort(function(a, b) {
+    return String(b).length - String(a).length;
+  }).forEach(function(name) {
+    if (!bucketMaterialShouldMerge_(name) && bucketMaterialKey_(name) !== WHITE_PPCP_BUCKET_MERGE.targetCode) return;
+    next = next.replace(new RegExp(escapeRegExp_(name), "gi"), WHITE_PPCP_BUCKET_MERGE.targetName);
+  });
+  return next;
+}
+
+function mergeBucketMaterialValue_(value) {
+  if (bucketMaterialShouldMerge_(value) || bucketMaterialKey_(value) === WHITE_PPCP_BUCKET_MERGE.targetCode) return WHITE_PPCP_BUCKET_MERGE.targetName;
+  return value;
+}
+
+function mergeBucketMaterialCodeValue_(value) {
+  if (bucketMaterialShouldMerge_(value) || bucketMaterialKey_(value) === WHITE_PPCP_BUCKET_MERGE.targetCode) return WHITE_PPCP_BUCKET_MERGE.targetCode;
+  return value;
+}
+
+function bucketMaterialShouldMerge_(value) {
+  const key = bucketMaterialKey_(value);
+  if (!key) return false;
+  return WHITE_PPCP_BUCKET_MERGE.sourceNames.map(bucketMaterialKey_).indexOf(key) !== -1;
+}
+
+function bucketMaterialKey_(value) {
+  return materialCode_(value);
+}
+
+function parseRmMaterialLinesNoNormalize_(value) {
+  if (!value) return [];
+  try {
+    const rows = typeof value === "string" ? JSON.parse(value) : value;
+    return Array.isArray(rows) ? rows : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function appendMergeNoteToRow_(sh, headers, rowNumber, note) {
+  ["mergeNote", "remarks"].some(function(field) {
+    const col = headers.indexOf(field);
+    if (col === -1) return false;
+    const current = sh.getRange(rowNumber, col + 1).getValue();
+    if (String(current || "").indexOf(note) !== -1) return true;
+    sh.getRange(rowNumber, col + 1).setValue([current, note].filter(Boolean).join(" | "));
+    return true;
+  });
+}
+
+function setCellByHeader_(sh, headers, rowNumber, field, value) {
+  const col = headers.indexOf(field);
+  if (col !== -1) sh.getRange(rowNumber, col + 1).setValue(value);
+}
+
+function uniqueRowCount_(changes) {
+  const seen = {};
+  (changes || []).forEach(function(change) {
+    seen[String(change.rowNumber)] = true;
+  });
+  return Object.keys(seen).length;
+}
+
+function escapeRegExp_(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function getMaterialMasterRows_() {
   try {
     const rows = getRowsAsObjects("Material_Master").filter((row) => !isDeleted_(row));
@@ -3880,8 +4310,7 @@ function seedStandardMaterialBuckets() {
 
   const standardBuckets = [
     ["White Flakes", "RM", "PP", "RECEIVING", "WASH"],
-    ["White Buckets", "RM", "PP", "RECEIVING", "WASH"],
-    ["Mixed Buckets", "RM", "PP", "RECEIVING", "WASH"],
+    ["White PPCP Buckets", "RM", "PP", "RECEIVING", "WASH"],
     ["Battery Scrap", "RM", "PP", "RECEIVING", "WASH"],
     ["Jars", "RM", "PP", "RECEIVING", "WASH"],
     ["Lids", "RM", "PP", "RECEIVING", "WASH"],
@@ -4999,8 +5428,7 @@ function normalizeRmMaterialForReceiving_(value, strict) {
 function materialMasterDefaultRows_() {
   return [
     ["WHITE_FLAKES", "White Flakes", "RM"],
-    ["WHITE_BUCKETS", "White Buckets", "RM"],
-    ["MIXED_BUCKETS", "Mixed Buckets", "RM"],
+    ["WHITE_PPCP_BUCKETS", "White PPCP Buckets", "RM"],
     ["BATTERY_SCRAP", "Battery Scrap", "RM"],
     ["BATTERY_REGRIND", "Battery Regrind", "RM"],
     ["JARS", "Jars", "RM"],
@@ -8073,10 +8501,10 @@ function rebuildFromGrinderBatches_(ctx) {
 
     const inputs = inputLines.length
       ? inputLines
-      : [{ material: materialName_(row.inputMaterial, "White Buckets"), qtyKg: num(row.inputWeightKg) }];
+      : [{ material: materialName_(row.inputMaterial, "White PPCP Buckets"), qtyKg: num(row.inputWeightKg) }];
 
     inputs.forEach(function(input) {
-      const inputMaterial = materialName_(input.material, "White Buckets");
+      const inputMaterial = materialName_(input.material, "White PPCP Buckets");
       pushRebuiltLedgerRow_(ctx, "Grinder_Batches", sourceId, {
         date: row.date,
         module: "GRINDER",

@@ -189,8 +189,7 @@ Production dropdowns must show only active canonical production materials allowe
 
 Canonical production materials:
 
-- `White Buckets`
-- `Mixed Buckets`
+- `White PPCP Buckets`
 - `White Regrind (Unwashed)`
 - `White Regrind (Washed)`
 - `White Sorted Regrind`

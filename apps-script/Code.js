@@ -103,6 +103,7 @@ function doGet(e) {
     if (p.fn === "dispatch.add") return addDispatch(p);
     if (p.fn === "dispatch.list") return listMaster("Dispatches");
     if (p.fn === "dispatch.update") return updateDispatch(p);
+    if (p.fn === "dispatch.debugSavePreview") return debugDispatchSavePreview(p);
     if (p.fn === "dispatch.patchOldData") return patchOldDispatchData();
     // FG Rates
     if (p.fn === "fgRates.add") return addFgRate(p);
@@ -8432,6 +8433,26 @@ function validateDispatchFgRates_(data, lineRows, date) {
   }
 }
 
+function dispatchTimer_() {
+  const start = Date.now();
+  const timings = [];
+  return {
+    mark: function(step) {
+      timings.push({
+        step,
+        ms: Date.now() - start,
+      });
+    },
+    guard: function(step, maxMs) {
+      const elapsed = Date.now() - start;
+      if (elapsed > (maxMs || 25000)) {
+        throw new Error("Dispatch save timed out at backend step: " + step + " after " + elapsed + " ms");
+      }
+    },
+    timings: timings,
+  };
+}
+
 function dispatchFinancials_(data, lineRows, date) {
   const lines = (lineRows || []).length ? lineRows : parseDispatchLines_(normalizeDispatchLines_(data));
   let quantityKg = 0;
@@ -8570,6 +8591,32 @@ function fgLedgerBalanceByGrade_() {
   return byGrade;
 }
 
+function fgLedgerBalanceForGrades_(grades) {
+  const wanted = {};
+  (grades || []).forEach(function(grade) {
+    const normalized = normalizeDispatchGrade_(grade);
+    if (normalized) wanted[normalized] = true;
+  });
+
+  const byGrade = {};
+  Object.keys(wanted).forEach(function(grade) {
+    byGrade[grade] = 0;
+  });
+
+  if (!Object.keys(wanted).length) return byGrade;
+
+  const rows = getRowsAsObjects("Inventory_Ledger");
+  rows.forEach(function(row) {
+    if (isDeleted_(row)) return;
+    if (String(row.itemType || "").toUpperCase() !== "FG") return;
+    const grade = normalizeDispatchGrade_(row.itemName || row.material || row.grade);
+    if (!wanted[grade]) return;
+    byGrade[grade] = (byGrade[grade] || 0) + num(row.qtyIn) - num(row.qtyOut);
+  });
+
+  return byGrade;
+}
+
 function fgProducedForBatch_(batchId) {
   if (!batchId) return 0;
 
@@ -8637,6 +8684,43 @@ function validateDispatchAvailability_(data = {}) {
       );
     }
   });
+}
+
+function dispatchRequestedByGrade_(data, lineRows) {
+  const requestedByGrade = {};
+  (lineRows || parseDispatchLines_(normalizeDispatchLines_(data))).forEach(function(line) {
+    const grade = dispatchLineGrade_(line, data.grade || data.material);
+    const qty = dispatchLineQty_(line, data.quantityKg);
+    if (!grade || qty <= 0) return;
+    requestedByGrade[grade] = (requestedByGrade[grade] || 0) + qty;
+  });
+  return requestedByGrade;
+}
+
+function validateDispatchAvailabilityFast_(data = {}, lineRows, existingRow) {
+  const requestedByGrade = dispatchRequestedByGrade_(data, lineRows);
+  const grades = Object.keys(requestedByGrade);
+  const balanceByGrade = fgLedgerBalanceForGrades_(grades);
+  const existingByGrade = existingRow ? dispatchQtyByGradeFromRow_(existingRow) : {};
+
+  grades.forEach(function(grade) {
+    const available = num(balanceByGrade[grade]) + num(existingByGrade[grade]);
+
+    if (requestedByGrade[grade] > available + 0.01) {
+      throw new Error(
+        "Dispatch exceeds available FG grade stock for " +
+          grade +
+          ". Available: " +
+          round2(available) +
+          " Kg"
+      );
+    }
+  });
+
+  return {
+    requestedByGrade,
+    availableByGrade: balanceByGrade,
+  };
 }
 
 function voidDispatchLedgerRows_(dispatchId, reason) {
@@ -8716,11 +8800,11 @@ function repairMissingDispatchLedger_(dispatchId, existingDispatch) {
     throw new Error("Cannot repair dispatch ledger because dispatch lines are missing.");
   }
 
-  validateDispatchAvailability_({
+  validateDispatchAvailabilityFast_({
     ...existingDispatch,
     dispatchId: "",
     dispatchLines,
-  });
+  }, lineRows, null);
   validateDispatchFgRates_(existingDispatch, lineRows, date);
 
   const ledgerRows = postDispatchLedgerRows_(dispatchId, date, lineRows, existingDispatch);
@@ -8752,17 +8836,91 @@ function dispatchLedgerPostedCount_(dispatchId) {
     .length;
 }
 
+function debugDispatchSavePreview(data = {}) {
+  const timer = dispatchTimer_();
+  const preview = {
+    ok: false,
+    writeMode: "READ_ONLY_PREVIEW",
+    timings: timer.timings,
+  };
+
+  try {
+    timer.mark("received request");
+    ensureDispatchHeaders_();
+
+    const date = normalizeDateOnly_(data.date || todayYmd());
+    const dispatchLines = normalizeDispatchLines_(data);
+    const lineRows = parseDispatchLines_(dispatchLines);
+    timer.mark("parsed lines");
+
+    const requestedByGrade = dispatchRequestedByGrade_(data, lineRows);
+    const grades = Object.keys(requestedByGrade);
+    const selectedGrade = grades.join(" | ") || normalizeDispatchGrade_(data.grade || data.material);
+    const qty = grades.reduce(function(sum, grade) { return sum + num(requestedByGrade[grade]); }, 0);
+
+    timer.mark("FG rate lookup start");
+    const rates = {};
+    grades.forEach(function(grade) {
+      rates[grade] = lookupFgRateForDispatch_(grade, data.customerName, date);
+    });
+    timer.mark("FG rate lookup end");
+    timer.guard("FG rate lookup", 25000);
+
+    const missingRates = Object.keys(rates).filter(function(grade) {
+      return num(rates[grade].ratePerKg) <= 0;
+    });
+    if (missingRates.length) {
+      preview.blockingReason = "Missing FG_Rates selling rate for " + missingRates.join(", ");
+    }
+
+    timer.mark("inventory availability check start");
+    const availability = validateDispatchAvailabilityFast_(data, lineRows, null);
+    timer.mark("inventory availability check end");
+    timer.guard("inventory availability check", 25000);
+
+    timer.mark("financial estimate start");
+    const financials = dispatchFinancials_(data, lineRows, date);
+    timer.mark("financial estimate end");
+
+    preview.ok = !preview.blockingReason;
+    preview.parsedDispatchLines = lineRows;
+    preview.selectedGrade = selectedGrade;
+    preview.qty = qty;
+    preview.rates = rates;
+    preview.rateFound = missingRates.length === 0;
+    preview.availableStock = availability.availableByGrade;
+    preview.requestedStock = availability.requestedByGrade;
+    preview.estimatedValue = financials.dispatchValue;
+    preview.blockingReason = preview.blockingReason || "";
+    timer.mark("output return");
+    return output(preview);
+  } catch (err) {
+    preview.ok = false;
+    preview.blockingReason = err.message || String(err);
+    preview.error = preview.blockingReason;
+    timer.mark("output return");
+    return output(preview);
+  }
+}
+
 function addDispatch(data = {}) {
+  const timer = dispatchTimer_();
+  timer.mark("received request");
+  try {
   ensureDispatchHeaders_();
   const sh = getSheet("Dispatches");
 
+  timer.mark("duplicate check start");
   const dispatchId = data.dispatchId || generateBatchId("DIS");
   const existingDispatch = getRowById_("Dispatches", "dispatchId", dispatchId);
+  timer.mark("duplicate check end");
+  timer.guard("duplicate check", 25000);
   if (existingDispatch) {
     const existingLedgerCount = dispatchLedgerPostedCount_(dispatchId);
     if (existingLedgerCount <= 0) {
       try {
         const repairedLedgerRows = repairMissingDispatchLedger_(dispatchId, existingDispatch);
+        timer.mark("output return");
         return output({
           ok: true,
           duplicate: true,
@@ -8772,6 +8930,7 @@ function addDispatch(data = {}) {
           dispatchValue: num(existingDispatch.dispatchValue),
           ledgerPosted: true,
           ledgerRows: repairedLedgerRows,
+          debugTimings: timer.timings,
           message: "Dispatch existed; missing ledger posting was repaired.",
         });
       } catch (err) {
@@ -8783,6 +8942,7 @@ function addDispatch(data = {}) {
             "Ledger repair failed: " + (err.message || err),
           updatedAt: new Date(),
         });
+        timer.mark("output return");
         return output({
           ok: false,
           duplicate: true,
@@ -8792,12 +8952,14 @@ function addDispatch(data = {}) {
           ledgerPosted: false,
           ledgerRows: 0,
           ledgerError: err.message || String(err),
+          debugTimings: timer.timings,
           error: "Dispatch existed but ledger repair failed: " + (err.message || err),
           message: "Dispatch ledger repair failed. Form was not cleared.",
         });
       }
     }
 
+    timer.mark("output return");
     return output({
       ok: true,
       duplicate: true,
@@ -8806,6 +8968,7 @@ function addDispatch(data = {}) {
       dispatchValue: num(existingDispatch.dispatchValue),
       ledgerPosted: true,
       ledgerRows: existingLedgerCount,
+      debugTimings: timer.timings,
       message: "Dispatch already exists. No duplicate row was created.",
       error: "",
     });
@@ -8813,12 +8976,23 @@ function addDispatch(data = {}) {
 
   const date = normalizeDateOnly_(data.date || todayYmd());
   const sourceId = "";
+  timer.mark("parse lines start");
   const dispatchLines = normalizeDispatchLines_(data);
   const lineRows = parseDispatchLines_(dispatchLines);
+  timer.mark("parsed lines");
+  timer.guard("parsed lines", 25000);
   const headerGrade = lineRows.map(function(line) { return dispatchLineGrade_(line, data.grade || data.material); }).filter(Boolean).join(" | ");
   validateOperationalWrite_({ ...data, date });
-  validateDispatchAvailability_({ ...data, dispatchId });
+  timer.mark("inventory availability check start");
+  validateDispatchAvailabilityFast_({ ...data, dispatchId }, lineRows, null);
+  timer.mark("inventory availability check end");
+  timer.guard("inventory availability check", 25000);
+
+  timer.mark("FG rate lookup start");
   validateDispatchFgRates_(data, lineRows, date);
+  timer.mark("FG rate lookup end");
+  timer.guard("FG rate lookup", 25000);
+
   const financials = dispatchFinancials_(data, lineRows, date);
 
   lineRows.forEach(function(line) {
@@ -8831,6 +9005,7 @@ function addDispatch(data = {}) {
     });
   });
 
+  timer.mark("append start");
   appendObjectRow(sh, {
     dispatchId,
     sourceExtrusionBatchId: sourceId,
@@ -8865,10 +9040,15 @@ function addDispatch(data = {}) {
     createdAt: new Date(),
     updatedAt: new Date(),
   });
+  timer.mark("append end");
+  timer.guard("append", 25000);
 
   let ledgerRows = 0;
   try {
+    timer.mark("ledger post start");
     ledgerRows = postDispatchLedgerRows_(dispatchId, date, lineRows, data);
+    timer.mark("ledger post end");
+    timer.guard("ledger post", 25000);
   } catch (err) {
     updateById("Dispatches", "dispatchId", dispatchId, {
       status: "LEDGER_ERROR",
@@ -8876,25 +9056,38 @@ function addDispatch(data = {}) {
       remarks: (data.remarks || "") + " | Ledger error: " + (err.message || err),
       updatedAt: new Date(),
     });
+    timer.mark("output return");
     return output({
       ok: false,
       dispatchId,
       dispatchValue: financials.dispatchValue,
       ledgerPosted: false,
       ledgerError: err.message || String(err),
+      debugTimings: timer.timings,
       error: "Dispatch saved but ledger posting failed: " + (err.message || err),
       message: "Dispatch ledger posting failed. Form was not cleared.",
     });
   }
 
+  timer.mark("output return");
   return output({
     ok: true,
     dispatchId,
     dispatchValue: financials.dispatchValue,
     ledgerPosted: ledgerRows > 0,
     ledgerRows,
+    debugTimings: timer.timings,
     message: "Dispatch saved successfully: " + dispatchId,
   });
+  } catch (err) {
+    timer.mark("output return");
+    return output({
+      ok: false,
+      error: err.message || String(err),
+      message: err.message || "Dispatch save failed before record was saved.",
+      debugTimings: timer.timings,
+    });
+  }
 }
 
 function updateDispatch(data = {}) {

@@ -40,6 +40,7 @@ function doGet(e) {
     if (p.fn === "materialMaster.list") return listMaterialMaster(p);
     if (p.fn === "materialMaster.add") return addMaterialMaster(p);
     if (p.fn === "materialMaster.update") return updateMaterialMaster(p);
+    if (p.fn === "materialMaster.updateStatus") return updateMaterialMasterStatus(p);
     if (p.fn === "materialMaster.seedDefaults") return seedMaterialMasterDefaults(p);
     if (p.fn === "materialMaster.buildFromExisting") return buildMaterialMasterFromExisting(p);
     if (p.fn === "productionRecipes.list") return listProductionRecipes(p);
@@ -592,6 +593,7 @@ function debugRoutes() {
       "materialMaster.list",
       "materialMaster.add",
       "materialMaster.update",
+      "materialMaster.updateStatus",
       "materialMaster.seedDefaults",
       "materialMaster.buildFromExisting",
       "rm.add",
@@ -907,6 +909,10 @@ const REGEN_DB_SCHEMA = {
     "status",
     "defaultQualityRequired",
     "defaultStorageLocation",
+    "appearsInRmInward",
+    "appearsInProduction",
+    "appearsInDispatch",
+    "remarks",
     "createdBy",
     "createdAt",
     "updatedAt",
@@ -2123,7 +2129,9 @@ const PRODUCTION_MATERIAL_MASTER_DEFAULTS = [
   ["Metal Reject", "Metal Reject", "WASTE", "GRINDER,WASH", "OUTPUT", "Metal Reject"],
   ["Rubber Reject", "Rubber Reject", "WASTE", "WASH", "OUTPUT", "Rubber Reject"],
   ["Wrapper Reject", "Wrapper Reject", "WASTE", "WASH", "OUTPUT", "Wrapper Reject|Wrappers"],
+  ["Wrappers", "Wrappers", "WASTE", "WASH", "OUTPUT", "Wrappers"],
   ["Sink Material", "Sink Material", "WASTE", "WASH", "OUTPUT", "Sink Material"],
+  ["Micro Plastic", "Micro Plastic", "WASTE", "WASH", "OUTPUT", "Micro Plastic"],
   ["Micro Plastic Reject", "Micro Plastic Reject", "WASTE", "EXTRUSION", "OUTPUT", "Micro Plastic"],
   ["Lumps", "Lumps", "WASTE", "EXTRUSION", "OUTPUT", "Lumps"],
   ["Rework Material", "Rework Material", "REWORK", "EXTRUSION", "OUTPUT,INPUT", "Rework Material"],
@@ -2177,7 +2185,7 @@ const PRODUCTION_MATERIAL_ALIAS_MAP = {
   "SINK MATERIAL": "Sink Material",
   "FLAKES DOMINANT COLOUR": "Colour Reject",
   "RAFFIA REJECT": "Raffia Reject",
-  "MICRO PLASTIC": "Micro Plastic Reject",
+  "MICRO PLASTIC": "Micro Plastic",
   "LUMPS": "Lumps",
   "REWORK MATERIAL": "Rework Material",
   "EXTRUSION WASTE": "Extrusion Waste",
@@ -2220,7 +2228,9 @@ const MATERIAL_ALIAS_MAP_DEFAULTS = [
   ["MASTERBATCH", "Masterbatch", "ADDITIVE", "RM_INWARD,EXTRUSION", "INPUT", "TRUE", 100, "seed"],
   ["ANTIOXIDANT", "Antioxidant", "ADDITIVE", "EXTRUSION", "INPUT", "TRUE", 100, "seed"],
   ["Wrapper Reject", "Wrapper Reject", "WASTE", "WASH", "OUTPUT", "TRUE", 100, "seed"],
+  ["Wrappers", "Wrappers", "WASTE", "WASH", "OUTPUT", "TRUE", 100, "seed"],
   ["Sink Material", "Sink Material", "WASTE", "WASH", "OUTPUT", "TRUE", 100, "seed"],
+  ["Micro Plastic", "Micro Plastic", "WASTE", "WASH", "OUTPUT", "TRUE", 100, "seed"],
   ["Flakes Dominant Colour", "Colour Reject", "WASTE", "SORTING", "OUTPUT", "TRUE", 100, "seed"],
   ["Raffia Reject", "Raffia Reject", "WASTE", "WASH,SORTING", "OUTPUT", "TRUE", 100, "seed"],
   ["Micro Plastic", "Micro Plastic Reject", "WASTE", "EXTRUSION", "OUTPUT", "TRUE", 100, "seed"],
@@ -2453,9 +2463,105 @@ function getProductionMaterialMasterRows_() {
     } : normalizedRow;
   });
 
+  materialMasterRowsForProductionDropdown_().forEach(function(row) {
+    const key = materialCode_(row.canonicalName || row.materialName);
+    if (!key || byCanonical[key]) return;
+    byCanonical[key] = row;
+  });
+
   return Object.keys(byCanonical).map(function(key) {
     return byCanonical[key];
   });
+}
+
+function materialMasterRowsForProductionDropdown_() {
+  let rows = [];
+  try {
+    rows = getMaterialMasterRows_();
+  } catch (err) {
+    rows = [];
+  }
+
+  return rows
+    .filter(function(row) {
+      const status = String(row.status || "ACTIVE").toUpperCase();
+      return status !== "INACTIVE" && status !== "DELETED" && status !== "DISABLED" &&
+        (yesNo_(row.appearsInRmInward) === "YES" || yesNo_(row.appearsInProduction) === "YES" || yesNo_(row.appearsInDispatch) === "YES");
+    })
+    .map(function(row, index) {
+      const category = normalizeMaterialCategoryForDropdown_(row.category);
+      const rm = yesNo_(row.appearsInRmInward) === "YES";
+      const production = yesNo_(row.appearsInProduction) === "YES";
+      const dispatch = yesNo_(row.appearsInDispatch) === "YES";
+      const rules = materialMasterDropdownRules_(category, rm, production, dispatch);
+      return {
+        materialId: row.materialId || row.materialCode || ("MAT-DROPDOWN-" + index),
+        materialCode: materialCode_(row.materialCode || row.materialName),
+        materialName: row.materialName || row.name || row.materialCode,
+        canonicalName: row.materialName || row.name || row.materialCode,
+        category,
+        stageAllowed: rules.stageAllowed,
+        directionAllowed: rules.directionAllowed,
+        active: "TRUE",
+        status: "ACTIVE",
+        aliases: "",
+        sortOrder: num(row.sortOrder) || 500 + index,
+      };
+    })
+    .filter(function(row) {
+      return row.materialName && row.stageAllowed && row.directionAllowed;
+    });
+}
+
+function normalizeMaterialCategoryForDropdown_(category) {
+  const value = String(category || "").trim().toUpperCase();
+  if (value === "STORE" || value === "STORES") return "STORE";
+  if (value === "RM_CONSUMABLE") return "RM";
+  return value;
+}
+
+function materialMasterDropdownRules_(category, rm, production, dispatch) {
+  const stages = [];
+  const directions = [];
+
+  if (rm) {
+    stages.push("RM_INWARD");
+    directions.push("INPUT");
+  }
+
+  if (production) {
+    if (category === "FG") {
+      stages.push("EXTRUSION");
+      directions.push("OUTPUT");
+    } else if (category === "WASTE" || category === "REWORK") {
+      stages.push("GRINDER", "WASH", "SORTING", "EXTRUSION");
+      directions.push("OUTPUT");
+      if (category === "REWORK") directions.push("INPUT");
+    } else if (category !== "STORE") {
+      stages.push("GRINDER", "WASH", "SORTING", "EXTRUSION");
+      directions.push("INPUT");
+    }
+  }
+
+  if (dispatch && category === "FG") {
+    stages.push("DISPATCH");
+    directions.push("INPUT");
+  }
+
+  return {
+    stageAllowed: uniqueCsv_(stages),
+    directionAllowed: uniqueCsv_(directions),
+  };
+}
+
+function uniqueCsv_(values) {
+  const seen = {};
+  return (values || []).filter(function(value) {
+    const key = String(value || "").toUpperCase();
+    if (!key || seen[key]) return false;
+    seen[key] = true;
+    return true;
+  }).join(",");
 }
 
 function productionMaterialCanonicalForList_(value) {
@@ -2640,6 +2746,11 @@ function materialCode_(value) {
     .slice(0, 40);
 }
 
+function yesNo_(value) {
+  const text = String(value === true ? "YES" : value || "").trim().toUpperCase();
+  return ["YES", "TRUE", "Y", "1", "ON"].indexOf(text) !== -1 ? "YES" : "NO";
+}
+
 function normalizeMaterialCategory_(value) {
   const category = String(value || "").trim().toUpperCase();
   if (category === "STORES") return "STORE";
@@ -2649,6 +2760,7 @@ function normalizeMaterialCategory_(value) {
 
 function listMaterialMaster() {
   createSheetIfMissing_("Material_Master", materialMasterHeaders_());
+  ensureHeaders_("Material_Master", materialMasterHeaders_());
   return output({
     ok: true,
     rows: getMaterialMasterRows_(),
@@ -2691,6 +2803,10 @@ function addMaterialMaster(data = {}) {
     status: data.status || "ACTIVE",
     defaultQualityRequired: data.defaultQualityRequired || "NO",
     defaultStorageLocation: data.defaultStorageLocation || "",
+    appearsInRmInward: yesNo_(data.appearsInRmInward),
+    appearsInProduction: yesNo_(data.appearsInProduction),
+    appearsInDispatch: yesNo_(data.appearsInDispatch),
+    remarks: data.remarks || "",
     createdBy: data.createdBy || "System",
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -2718,7 +2834,40 @@ function updateMaterialMaster(data = {}) {
     status: data.status || "ACTIVE",
     defaultQualityRequired: data.defaultQualityRequired || "NO",
     defaultStorageLocation: data.defaultStorageLocation || "",
+    appearsInRmInward: yesNo_(data.appearsInRmInward),
+    appearsInProduction: yesNo_(data.appearsInProduction),
+    appearsInDispatch: yesNo_(data.appearsInDispatch),
+    remarks: data.remarks || "",
     updatedAt: new Date(),
+  });
+}
+
+function updateMaterialMasterStatus(data = {}) {
+  createSheetIfMissing_("Material_Master", materialMasterHeaders_());
+  ensureHeaders_("Material_Master", materialMasterHeaders_());
+
+  const materialId = data.materialId || "";
+  let target = materialId ? { materialId } : null;
+  if (!target && data.materialCode) {
+    const code = materialCode_(data.materialCode);
+    const row = getMaterialMasterRows_().find(function(item) {
+      return materialCode_(item.materialCode || item.materialName) === code;
+    });
+    if (row && row.materialId) target = { materialId: row.materialId };
+  }
+
+  if (!target) return output({ ok: false, error: "Missing materialId or materialCode" });
+
+  const status = String(data.status || "ACTIVE").trim().toUpperCase();
+  if (["ACTIVE", "INACTIVE", "MERGED", "DISABLED"].indexOf(status) === -1) {
+    return output({ ok: false, error: "Status must be ACTIVE or INACTIVE" });
+  }
+
+  return updateById("Material_Master", "materialId", target.materialId, {
+    status,
+    updatedAt: new Date(),
+    updatedBy: data.updatedBy || data.createdBy || "System",
+    remarks: data.remarks || "",
   });
 }
 
@@ -5552,6 +5701,8 @@ function materialMasterDefaultRows_() {
     ["MASTERBATCH", "Masterbatch", "ADDITIVE"],
     ["ANTIOXIDANT", "Antioxidant", "ADDITIVE"],
     ["SINK_MATERIAL", "Sink Material", "WASTE"],
+    ["WRAPPERS", "Wrappers", "WASTE"],
+    ["MICRO_PLASTIC", "Micro Plastic", "WASTE"],
     ["MICRO_PLASTIC_REJECT", "Micro Plastic Reject", "WASTE"],
     ["WRAPPER_REJECT", "Wrapper Reject", "WASTE"],
     ["RAFFIA_REJECT", "Raffia Reject", "WASTE"],

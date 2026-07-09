@@ -21,6 +21,8 @@ export const PRODUCTION_MATERIAL_ALIASES = {
   "WHITE SORTED": "White Sorted Regrind",
   "SORTED WHITE": "White Sorted Regrind",
   "SORTED MATERIAL": "White Sorted Regrind",
+  "WRAPPERS": "Wrappers",
+  "MICRO PLASTIC": "Micro Plastic",
 };
 
 export const FALLBACK_PRODUCTION_MATERIALS = [
@@ -39,6 +41,9 @@ export const FALLBACK_PRODUCTION_MATERIALS = [
   ["Dust", "Dust", "WASTE", "GRINDER,WASH", "OUTPUT", "Dust"],
   ["Metal Reject", "Metal Reject", "WASTE", "GRINDER,WASH", "OUTPUT", "Metal Reject"],
   ["Rubber Reject", "Rubber Reject", "WASTE", "WASH", "OUTPUT", "Rubber Reject"],
+  ["Sink Material", "Sink Material", "WASTE", "WASH", "OUTPUT", "Sink Material"],
+  ["Wrappers", "Wrappers", "WASTE", "WASH", "OUTPUT", "Wrappers"],
+  ["Micro Plastic", "Micro Plastic", "WASTE", "WASH", "OUTPUT", "Micro Plastic"],
   ["Colour Reject", "Colour Reject", "WASTE", "SORTING", "OUTPUT", "Colour Reject|Color Reject"],
 ].map(([materialName, canonicalName, category, stageAllowed, directionAllowed, aliases], index) => ({
   materialId: `PMM-${index + 1}`,

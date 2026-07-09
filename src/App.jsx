@@ -44,6 +44,7 @@ import StoresCosting from "./pages/StoresCosting";
 import AlertSettings from "./pages/AlertSettings";
 import AlertCenter from "./pages/AlertCenter";
 import SystemHealth from "./pages/SystemHealth";
+import MaterialMasterAdmin from "./pages/MaterialMasterAdmin";
 export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -147,6 +148,7 @@ export default function App() {
               <Route path="/alert-center" element={<AlertCenter />} />
               <Route path="/alert-settings" element={<AlertSettings />} />
               <Route path="/system-health" element={<SystemHealth />} />
+              <Route path="/material-master-admin" element={<MaterialMasterAdmin />} />
 
               <Route path="*" element={<Navigate to="/dashboard" />} />
             </Routes>

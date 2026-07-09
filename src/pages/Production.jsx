@@ -33,6 +33,9 @@ export default function Production() {
     { material: "Dust", qtyKg: "" },
     { material: "Rubber Reject", qtyKg: "" },
     { material: "Metal Reject", qtyKg: "" },
+    { material: "Sink Material", qtyKg: "" },
+    { material: "Wrappers", qtyKg: "" },
+    { material: "Micro Plastic", qtyKg: "" },
   ];
 
   const sorterOutputDefaults = [
@@ -554,8 +557,8 @@ export default function Production() {
           washedOutputKg: outputKgByName(washOutputRows, ["WASHED"]),
           dustKg: outputKgByName(washOutputRows, ["DUST"]),
           sinkMaterialKg: outputKgByName(washOutputRows, ["SINK"]),
-          microPlasticKg: 0,
-          wrappersKg: 0,
+          microPlasticKg: outputKgByName(washOutputRows, ["MICRO"]),
+          wrappersKg: outputKgByName(washOutputRows, ["WRAPPER"]),
           sludgeKg: 0,
           raffiaKg: 0,
           otherColorKg: outputKgByName(washOutputRows, ["OTHER COLOUR", "OTHER COLOR"]),

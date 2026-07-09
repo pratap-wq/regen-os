@@ -158,7 +158,6 @@ export default function Dashboard() {
         row.acceptedWeightKg ||
         Number(row.whiteSortedKg || 0) +
           Number(row.allMixSortedKg || 0) +
-          Number(row.commodityKg || 0) +
           Number(row.whiteGreyKg || 0)
     );
   }

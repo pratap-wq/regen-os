@@ -54,7 +54,6 @@ export function calculateMonthClose({
       (num(r.acceptedQtyKg) ||
         num(r.whiteSortedKg) +
           num(r.allMixSortedKg) +
-          num(r.commodityKg) +
           num(r.whiteGreyKg)),
     0
   );

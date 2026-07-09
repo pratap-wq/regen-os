@@ -83,7 +83,6 @@ export default function InventoryDashboard() {
       sum(sorting, "acceptedQtyKg") ||
       sum(sorting, "whiteSortedKg") +
         sum(sorting, "allMixSortedKg") +
-        sum(sorting, "commodityKg") +
         sum(sorting, "whiteGreyKg");
 
     const extrusionInput = sum(extrusion, "inputWeightKg");

@@ -76,7 +76,6 @@ export default function ProductionControlCenter() {
       sum(monthSorting, "acceptedQtyKg") ||
       sum(monthSorting, "whiteSortedKg") +
         sum(monthSorting, "allMixSortedKg") +
-        sum(monthSorting, "commodityKg") +
         sum(monthSorting, "whiteGreyKg");
 
     const extrusionInput = sum(monthExtrusion, "inputWeightKg");

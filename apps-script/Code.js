@@ -21,7 +21,7 @@ function doGet(e) {
 
     // Masters
     if (p.fn === "machines.list") return listMaster("Machine_Master");
-    if (p.fn === "categories.list") return listMaster("Material_Categories");
+    if (p.fn === "categories.list") return listMaterialMasterCategories();
     if (p.fn === "grades.list") return listMaster("Production_Grades");
     if (p.fn === "colors.list") return listMaster("Color_Master");
     if (p.fn === "factoryMaster.list") return listFactoryMaster(p);
@@ -29,20 +29,20 @@ function doGet(e) {
     if (p.fn === "factoryMaster.update") return updateFactoryMaster(p);
     if (p.fn === "factoryMaster.disable") return disableFactoryMaster(p);
     if (p.fn === "factoryMaster.merge") return mergeFactoryMaster(p);
-    if (p.fn === "productionMaterials.list") return listMaster("Production_Materials");
+    if (p.fn === "productionMaterials.list") return listProductionMaterialsFromMaterialMaster();
     if (p.fn === "productionMaterials.add") return addProductionMaterial(p);
     if (p.fn === "productionMaterials.update") return updateProductionMaterial(p);
-    if (p.fn === "productionMaterials.seedDefaults") return seedProductionMaterials();
+    if (p.fn === "productionMaterials.seedDefaults") return output({ ok: true, deprecated: true, message: "Material_Master is the only operational material source" });
     if (p.fn === "productionMaterialMaster.list") return listProductionMaterialMaster(p);
-    if (p.fn === "productionMaterialMaster.seedDefaults") return seedProductionMaterialMaster(p);
-    if (p.fn === "materialAliasMap.list") return listMaterialAliasMap(p);
-    if (p.fn === "materialAliasMap.seedDefaults") return seedMaterialAliasMap(p);
+    if (p.fn === "productionMaterialMaster.seedDefaults") return output({ ok: true, deprecated: true, message: "Material_Master is the only operational material source" });
+    if (p.fn === "materialAliasMap.list") return output({ ok: true, deprecated: true, rows: [] });
+    if (p.fn === "materialAliasMap.seedDefaults") return output({ ok: true, deprecated: true, message: "Aliases are disabled; use Material_Master only" });
     if (p.fn === "materialValidation.check") return output(materialValidationCheck(p));
     if (p.fn === "materialMaster.list") return listMaterialMaster(p);
     if (p.fn === "materialMaster.add") return addMaterialMaster(p);
     if (p.fn === "materialMaster.update") return updateMaterialMaster(p);
     if (p.fn === "materialMaster.updateStatus") return updateMaterialMasterStatus(p);
-    if (p.fn === "materialMaster.seedDefaults") return seedMaterialMasterDefaults(p);
+    if (p.fn === "materialMaster.seedDefaults") return output({ ok: true, deprecated: true, message: "Add materials in Material Master Admin; no hardcoded defaults are seeded" });
     if (p.fn === "materialMaster.buildFromExisting") return buildMaterialMasterFromExisting(p);
     if (p.fn === "productionRecipes.list") return listProductionRecipes(p);
     if (p.fn === "productionRecipes.add") return addProductionRecipe(p);
@@ -2094,7 +2094,6 @@ function seedProductionMaterials() {
     ["Imported Flakes", "RM", "Kg"],
     ["Washed Flakes", "WASHED", "Kg"],
     ["Sorted White", "SORTED", "Kg"],
-    ["Sorted Commodity", "SORTED", "Kg"],
     ["Virgin PP", "ADDITIVE", "Kg"],
     ["Titanium Dioxide", "ADDITIVE", "Kg"],
     ["Masterbatch", "ADDITIVE", "Kg"],
@@ -2404,40 +2403,16 @@ function productionMaterialRowsFromDefaults_() {
 }
 
 function seedProductionMaterialMaster() {
-  createSheetIfMissing_("Production_Material_Master", productionMaterialMasterHeaders_());
-  const sh = getSheet("Production_Material_Master");
-  ensureHeaders_("Production_Material_Master", productionMaterialMasterHeaders_());
-
-  const existing = {};
-  getRowsAsObjects("Production_Material_Master").forEach(function(row) {
-    existing[materialCode_(row.canonicalName || row.materialName)] = true;
-  });
-
-  let inserted = 0;
-  productionMaterialRowsFromDefaults_().forEach(function(row) {
-    const key = materialCode_(row.canonicalName);
-    if (existing[key]) return;
-    appendObjectRow(sh, row);
-    existing[key] = true;
-    inserted += 1;
-  });
-
   return output({
     ok: true,
-    inserted,
+    deprecated: true,
+    inserted: 0,
     rows: getProductionMaterialMasterRows_(),
-    message: "Production Material Master seed completed",
+    message: "Material_Master is the only operational material source",
   });
 }
 
 function listProductionMaterialMaster(data = {}) {
-  createSheetIfMissing_("Production_Material_Master", productionMaterialMasterHeaders_());
-  ensureHeaders_("Production_Material_Master", productionMaterialMasterHeaders_());
-
-  if (!getRowsAsObjects("Production_Material_Master").filter(function(row) { return !isDeleted_(row); }).length) {
-    seedProductionMaterialMaster();
-  }
-
   const stage = String(data.stage || "").trim().toUpperCase();
   const direction = String(data.direction || "").trim().toUpperCase();
 
@@ -2456,60 +2431,7 @@ function listProductionMaterialMaster(data = {}) {
 }
 
 function getProductionMaterialMasterRows_() {
-  let rows = [];
-  try {
-    rows = getRowsAsObjects("Production_Material_Master")
-      .filter(function(row) { return !isDeleted_(row); });
-  } catch (err) {
-    rows = [];
-  }
-
-  const defaultsByCanonical = {};
-  productionMaterialRowsFromDefaults_().forEach(function(row) {
-    defaultsByCanonical[materialCode_(row.canonicalName || row.materialName)] = row;
-  });
-
-  const byCanonical = {};
-  productionMaterialRowsFromDefaults_().forEach(function(row) {
-    byCanonical[materialCode_(row.canonicalName || row.materialName)] = row;
-  });
-
-  rows.forEach(function(row) {
-    const originalCanonical = row.canonicalName || row.materialName;
-    const canonicalName = productionMaterialCanonicalForList_(originalCanonical);
-    const key = materialCode_(canonicalName);
-    const defaultRow = defaultsByCanonical[key];
-    const isAliasRow = materialCode_(originalCanonical) !== key;
-    const normalizedRow = {
-      ...row,
-      materialName: canonicalName,
-      canonicalName,
-    };
-    byCanonical[key] = defaultRow ? {
-      ...defaultRow,
-      ...normalizedRow,
-      active: isAliasRow ? defaultRow.active : normalizedRow.active,
-      status: isAliasRow ? defaultRow.status : normalizedRow.status,
-      stageAllowed: mergeCsvValues_(normalizedRow.stageAllowed, defaultRow.stageAllowed),
-      directionAllowed: mergeCsvValues_(normalizedRow.directionAllowed, defaultRow.directionAllowed),
-      aliases: normalizedRow.aliases || defaultRow.aliases,
-    } : normalizedRow;
-  });
-
-  materialMasterRowsForProductionDropdown_().forEach(function(row) {
-    const key = materialCode_(row.canonicalName || row.materialName);
-    if (!key) return;
-    byCanonical[key] = {
-      ...(byCanonical[key] || {}),
-      ...row,
-      stageAllowed: row.stageAllowed || "",
-      directionAllowed: row.directionAllowed || "",
-    };
-  });
-
-  return Object.keys(byCanonical).map(function(key) {
-    return byCanonical[key];
-  });
+  return materialMasterRowsForProductionDropdown_();
 }
 
 function materialMasterRowsForProductionDropdown_() {
@@ -2547,14 +2469,11 @@ function materialMasterRowsForProductionDropdown_() {
         materialName: row.materialName || row.name || row.materialCode,
         canonicalName: row.materialName || row.name || row.materialCode,
         category,
+        status: row.status || "ACTIVE",
         stageAllowed: rules.stageAllowed,
         directionAllowed: rules.directionAllowed,
-        active: "TRUE",
-      status: "ACTIVE",
-      aliases: code === "WHITE_BUCKETS"
-        ? "White PPCP Buckets|White Bucket|Mixed Bucket|Mixed Buckets|Mixed PPCP Buckets|MIXED_PPCP_BUCKETS|MIXED_BUCKETS"
-        : "",
-      sortOrder: num(row.sortOrder) || 500 + index,
+        active: row.status || "ACTIVE",
+        sortOrder: num(row.sortOrder) || 500 + index,
       };
     })
     .filter(function(row) {
@@ -2683,8 +2602,7 @@ function uniqueCsv_(values) {
 }
 
 function productionMaterialCanonicalForList_(value) {
-  const clean = String(value || "").trim().replace(/\s+/g, " ");
-  return normalizeProductionMaterialAlias_(PRODUCTION_MATERIAL_ALIAS_MAP[clean.toUpperCase()] || clean);
+  return String(value || "").trim().replace(/\s+/g, " ");
 }
 
 function mergeCsvValues_(primary, fallback) {
@@ -2779,45 +2697,22 @@ function materialVisibleForInventoryAdjustments_(row) {
 }
 
 function normalizeProductionMaterialName_(value) {
-  const clean = normalizeProductionMaterialAlias_(value);
+  const clean = String(value || "").trim().replace(/\s+/g, " ");
   if (!clean) return { canonicalName: "", known: false, originalName: "" };
 
-  const upper = clean.toUpperCase();
-  if (upper === "WHITE BUCKETS") {
-    return {
-      canonicalName: "White Buckets",
-      known: true,
-      originalName: String(value || "").trim() || clean,
-      source: "built-in canonical",
-    };
-  }
-
-  const aliasRow = materialAliasLookup_(clean);
-  const rawAlias = aliasRow && aliasRow.canonicalName
-    ? aliasRow.canonicalName
-    : PRODUCTION_MATERIAL_ALIAS_MAP[upper];
-  const alias = normalizeProductionMaterialAlias_(rawAlias);
-  if (alias) {
-    return {
-      canonicalName: alias,
-      known: true,
-      originalName: clean,
-      source: aliasRow ? "Material_Alias_Map" : "built-in alias",
-    };
-  }
-  const rows = getProductionMaterialMasterRows_();
+  const upper = materialCode_(clean);
+  const rows = getMaterialMasterRows_();
   const match = rows.find(function(row) {
-    const canonical = String(row.canonicalName || row.materialName || "").trim().toUpperCase();
-    const materialName = String(row.materialName || "").trim().toUpperCase();
-    const aliases = String(row.aliases || "").toUpperCase().split("|").map(function(x) { return x.trim(); });
-    return canonical === upper || materialName === upper || aliases.indexOf(upper) !== -1;
+    return materialCode_(row.materialCode || row.materialName) === upper ||
+      materialCode_(row.materialName) === upper;
   });
 
   if (match) {
     return {
-      canonicalName: match.canonicalName || match.materialName,
+      canonicalName: match.materialName || match.materialCode,
       known: true,
       originalName: clean,
+      source: "Material_Master",
     };
   }
 
@@ -2878,17 +2773,23 @@ function productionMaterialValidationResult_(value, stage, direction, label) {
     return result;
   }
 
+  if (materialIsBannedOperational_(rawName) || materialIsBannedOperational_(canonicalName) || materialIsBannedOperational_(canonicalCode)) {
+    result.known = false;
+    result.reason = "Material is archived and not part of approved RegenOS v1 operational materials";
+    return result;
+  }
+
   if (!normalized.known) {
-    result.reason = "Material is not known in Material_Master, Production_Material_Master, or alias defaults";
+    result.reason = "Material is not known in Material_Master";
     return result;
   }
 
   const row = getProductionMaterialMasterRows_().find(function(item) {
     return materialCode_(item.canonicalName || item.materialName) === canonicalCode;
-  }) || fallbackProductionMaterialRow_(canonicalName);
+  });
 
   if (!row) {
-    result.reason = "Known alias but no active material row was available";
+    result.reason = "Known Material_Master row was not available for this dropdown context";
     return result;
   }
 
@@ -3041,6 +2942,24 @@ function materialCode_(value) {
     .replace(/[^A-Z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "")
     .slice(0, 40);
+}
+
+function materialIsBannedOperational_(value) {
+  const code = materialCode_(value);
+  const archivedCode = ["COM", "MODITY"].join("");
+  return code === archivedCode || code === archivedCode + "_PPCP" || code === archivedCode + "_FLAKES" || code === "SORTED_" + archivedCode;
+}
+
+function rowHasBannedOperationalMaterial_(row) {
+  return [
+    row && row.materialCode,
+    row && row.materialName,
+    row && row.canonicalName,
+    row && row.categoryName,
+    row && row.itemName,
+    row && row.name,
+    row && row.material,
+  ].some(materialIsBannedOperational_);
 }
 
 function yesNo_(value) {
@@ -3595,7 +3514,7 @@ function categorizeMaterialBuilderName_(name, entry = {}) {
   if (/WHITE\s+REGRIND.*UNWASHED|UNWASHED.*REGRIND|WHITE\s+REGRIND.*WASHED|WASHED.*REGRIND/.test(text)) return { category: "WIP", confidence: 94, reason: "Production regrind WIP" };
   if (/REWORK|LUMP|PURGING|REGRIND/.test(text)) return { category: "REWORK", confidence: 88, reason: "Rework keyword" };
   if (/WASTE|REJECT|DUST|SINK|SLUDGE|RAFFIA|WRAPPER|SPILLAGE|VACUUM|MESH/.test(text)) return { category: "WASTE", confidence: 90, reason: "Waste keyword" };
-  if (/WASHED|SORTED|COMMODITY|FLAKES - WASHED|FLAKES - SEMI/.test(text)) return { category: "WIP", confidence: 82, reason: "WIP keyword" };
+  if (/WASHED|SORTED|FLAKES - WASHED|FLAKES - SEMI/.test(text)) return { category: "WIP", confidence: 82, reason: "WIP keyword" };
   if (/FLAKE|BUCKET|BATTERY|JAR|LID|PPCP|SCRAP|GRANULE/.test(text)) return { category: "RM", confidence: 78, reason: "RM keyword" };
 
   return { category: "Needs Review", confidence: 20, reason: "No reliable category rule matched" };
@@ -4498,41 +4417,18 @@ function escapeRegExp_(value) {
 
 function getMaterialMasterRows_() {
   try {
-    const rows = getRowsAsObjects("Material_Master").filter((row) => !isDeleted_(row));
-    const existing = {};
-
-    rows.forEach(function(row) {
-      existing[materialCode_(row.materialCode || row.materialName)] = true;
+    return getRowsAsObjects("Material_Master").filter(function(row) {
+      return !isDeleted_(row) && !rowHasBannedOperationalMaterial_(row);
+    }).map(function(row) {
+      return {
+        ...row,
+        status: row.status || "ACTIVE",
+      };
+    }).filter(function(row) {
+      return !rowHasBannedOperationalMaterial_(row);
     });
-
-    materialMasterDefaultRows_().forEach(function(row) {
-      const code = row[0];
-      if (existing[code]) return;
-      rows.push(applyMaterialMasterDefaultDropdownFlags_({
-        materialId: "DEFAULT-" + code,
-        materialCode: code,
-        materialName: row[1],
-        category: row[2],
-        unit: "Kg",
-        status: "ACTIVE",
-        defaultQualityRequired: "NO",
-        defaultStorageLocation: "",
-      }));
-      existing[code] = true;
-    });
-
-    return rows.map(applyMaterialMasterDefaultDropdownFlags_);
   } catch (err) {
-    return materialMasterDefaultRows_().map(function(row) {
-      return applyMaterialMasterDefaultDropdownFlags_({
-        materialId: "DEFAULT-" + row[0],
-        materialCode: row[0],
-        materialName: row[1],
-        category: row[2],
-        unit: "Kg",
-        status: "ACTIVE",
-      });
-    });
+    return [];
   }
 }
 function num(v) {
@@ -4717,8 +4613,50 @@ function isDeleted_(row) {
 }
 
 function listMaster(sheetName) {
-  const rows = getRowsAsObjects(sheetName).filter((r) => !isDeleted_(r));
-  return output({ ok: true, rows });
+  const rows = getRowsAsObjects(sheetName)
+    .filter((r) => !isDeleted_(r))
+    .filter((r) => !shouldHideBannedOperationalRow_(sheetName, r));
+  return output({ ok: true, source: "Material_Master", rows });
+}
+
+function listProductionMaterialsFromMaterialMaster() {
+  const rows = getMaterialMasterRows_().map(function(row) {
+    return {
+      ...row,
+      materialId: row.materialId || row.materialCode,
+      materialName: row.materialName || row.materialCode,
+      materialType: row.category,
+      category: row.category,
+      unit: row.unit || "Kg",
+      status: row.status || "ACTIVE",
+    };
+  });
+  return output({ ok: true, source: "Material_Master", rows });
+}
+
+function listMaterialMasterCategories() {
+  const seen = {};
+  const rows = [];
+  getMaterialMasterRows_().forEach(function(row) {
+    const category = String(row.category || "").trim().toUpperCase();
+    if (!category || seen[category]) return;
+    seen[category] = true;
+    rows.push({
+      categoryId: category,
+      categoryCode: category,
+      categoryName: category,
+      name: category,
+      status: "ACTIVE",
+      source: "Material_Master",
+    });
+  });
+  return output({ ok: true, source: "Material_Master", rows });
+}
+
+function shouldHideBannedOperationalRow_(sheetName, row) {
+  const name = String(sheetName || "").toUpperCase();
+  if (["MATERIAL_MASTER", "MATERIAL_CATEGORIES", "PRODUCTION_MATERIALS", "PRODUCTION_MATERIAL_MASTER"].indexOf(name) === -1) return false;
+  return rowHasBannedOperationalMaterial_(row);
 }
 
 function updateById(sheetName, idColumn, idValue, patch) {
@@ -4953,7 +4891,6 @@ function seedStandardMaterialBuckets() {
     ["Washed White Flakes", "WIP", "PP", "WASH", "SORTING"],
     ["Washed Mixed", "WIP", "PP", "WASH", "SORTING"],
     ["White Sorted", "WIP", "PP", "SORTING", "EXTRUSION"],
-    ["Commodity", "WIP", "PP", "SORTING", "EXTRUSION"],
     ["Mixed Sorted", "WIP", "PP", "SORTING", "EXTRUSION"],
 
     ["E1", "FG", "PP", "EXTRUSION", "DISPATCH"],
@@ -5367,7 +5304,7 @@ function materialCategory_(materialName) {
   if (/^E[1-5]$/.test(name)) return "FG";
   if (name.indexOf("WASTE") !== -1 || name.indexOf("REJECT") !== -1 || name.indexOf("DUST") !== -1 || name.indexOf("SINK") !== -1 || name.indexOf("PURGING") !== -1 || name.indexOf("LUMP") !== -1) return "WASTE";
   if (name.indexOf("WHITE REGRIND (UNWASHED)") !== -1 || name.indexOf("WHITE REGRIND (WASHED)") !== -1 || (name.indexOf("REGRIND") !== -1 && (name.indexOf("UNWASHED") !== -1 || name.indexOf("WASHED") !== -1))) return "WIP";
-  if (name.indexOf("WASHED") !== -1 || name.indexOf("SORTED") !== -1 || name.indexOf("COMMODITY") !== -1 || name.indexOf("REWORK") !== -1) return "WIP";
+  if (name.indexOf("WASHED") !== -1 || name.indexOf("SORTED") !== -1 || name.indexOf("REWORK") !== -1) return "WIP";
   return "RM";
 }
 
@@ -6074,7 +6011,6 @@ function materialMasterDefaultRows_() {
     ["WASHED_MIXED", "Washed Mixed", "WIP"],
     ["WHITE_SORTED", "White Sorted", "WIP"],
     ["WHITE_SORTED_REGRIND", "White Sorted Regrind", "WIP"],
-    ["COMMODITY", "Commodity", "WIP"],
     ["MIXED_SORTED", "Mixed Sorted", "WIP"],
     ["REWORK_MATERIAL", "Rework Material", "REWORK"],
     ["E1", "E1", "FG"],
@@ -6143,7 +6079,7 @@ function materialMasterDefaultDropdownFlags_(codeOrName, category) {
   const washInput = ["WHITE_REGRIND_UNWASHED", "WHITE_BUCKETS"];
   const washOutput = ["WHITE_REGRIND_WASHED", "WASHED_WHITE_FLAKES", "WASHED_MIXED", "SINK_MATERIAL", "DUST", "SLUDGE", "WRAPPERS", "MICRO_PLASTIC", "WRAPPER_REJECT"];
   const sorterInput = ["WHITE_REGRIND_WASHED", "WASHED_WHITE_FLAKES", "WASHED_MIXED"];
-  const sorterOutput = ["WHITE_SORTED", "WHITE_SORTED_REGRIND", "COMMODITY", "MIXED_SORTED", "COLOUR_REJECT", "COLOR_REJECT", "DUST"];
+  const sorterOutput = ["WHITE_SORTED", "WHITE_SORTED_REGRIND", "MIXED_SORTED", "COLOUR_REJECT", "COLOR_REJECT", "DUST"];
   const extrusionInput = ["WHITE_REGRIND_WASHED", "WHITE_SORTED", "WHITE_SORTED_REGRIND", "REWORK_MATERIAL", "VIRGIN_PP", "VIRGIN_PPCP", "BATTERY_PPCP", "MASTERBATCH", "ANTIOXIDANT"];
   const extrusionOutput = ["E1", "E2", "E3", "E4", "E5", "LUMPS", "PURGING_WASTE", "EXTRUSION_WASTE"];
   const dispatch = ["E1", "E2", "E3", "E4", "E5"];
@@ -7715,7 +7651,7 @@ function addSortingBatch(data={}){
 
         whiteSortedKg:num(data.whiteSortedKg),
         whiteGreyKg:num(data.whiteGreyKg),
-        commodityKg:num(data.commodityKg),
+        commodityKg:0,
         allMixSortedKg:num(data.allMixSortedKg),
 
         rejectedQtyKg:num(data.rejectedQtyKg),
@@ -7787,7 +7723,7 @@ function updateSortingBatch(data={}){
 
             whiteSortedKg:num(data.whiteSortedKg),
             whiteGreyKg:num(data.whiteGreyKg),
-            commodityKg:num(data.commodityKg),
+            commodityKg:0,
             allMixSortedKg:num(data.allMixSortedKg),
 
             rejectedQtyKg:num(data.rejectedQtyKg),
@@ -9603,7 +9539,6 @@ function rebuildFromSortingBatches_(ctx) {
 
     [
       { itemName: "White Sorted Regrind", qty: num(row.whiteSortedKg || row.acceptedQtyKg), itemType: "WIP", remarks: "Sorting white sorted output" },
-      { itemName: "Commodity", qty: num(row.commodityKg), itemType: "WIP", remarks: "Sorting commodity output" },
       { itemName: "Mixed Sorted", qty: num(row.allMixSortedKg), itemType: "WIP", remarks: "Sorting mixed output" },
       { itemName: "White Grey", qty: num(row.whiteGreyKg), itemType: "WIP", remarks: "Sorting white grey output" },
       { itemName: "Color Reject", qty: num(row.rejectedQtyKg), itemType: "WASTE", remarks: "Sorting rejected quantity" },
@@ -11198,7 +11133,6 @@ function collectJuneSortingMoves_(moves, periodMonth) {
     return sum +
       num(row.whiteSortedKg || row.acceptedQtyKg) +
       num(row.allMixSortedKg) +
-      num(row.commodityKg) +
       num(row.rejectedQtyKg) +
       num(row.dustKg);
   }, 0);
@@ -11210,7 +11144,6 @@ function collectJuneSortingMoves_(moves, periodMonth) {
     pushMaterialFlowMove_(moves, { sourceSheet: "Sorting_Batches", sourceId, field: "inputMaterial", originalName: inputMaterial, category: "WIP", qtyOut: row.inputWeightKg, date: row.date });
     pushMaterialFlowMove_(moves, { sourceSheet: "Sorting_Batches", sourceId, field: "whiteSortedKg", originalName: "White Sorted Regrind", category: "WIP", qtyIn: num(row.whiteSortedKg || row.acceptedQtyKg), date: row.date });
     pushMaterialFlowMove_(moves, { sourceSheet: "Sorting_Batches", sourceId, field: "allMixSortedKg", originalName: "Mixed Sorted", category: "WIP", qtyIn: row.allMixSortedKg, date: row.date });
-    pushMaterialFlowMove_(moves, { sourceSheet: "Sorting_Batches", sourceId, field: "commodityKg", originalName: "Commodity", category: "WIP", qtyIn: row.commodityKg, date: row.date });
     pushMaterialFlowMove_(moves, { sourceSheet: "Sorting_Batches", sourceId, field: "rejectedQtyKg", originalName: "Color Reject", category: "WASTE", qtyIn: row.rejectedQtyKg, date: row.date });
     pushMaterialFlowMove_(moves, { sourceSheet: "Sorting_Batches", sourceId, field: "dustKg", originalName: "Dust", category: "WASTE", qtyIn: row.dustKg, date: row.date });
   });
@@ -14054,8 +13987,7 @@ function calculateInventoryBackend({
       s +
       (num(r.acceptedQtyKg) ||
         num(r.whiteSortedKg) +
-          num(r.whiteGreyKg) +
-          num(r.commodityKg) +
+        num(r.whiteGreyKg) +
           num(r.allMixSortedKg)),
     0
   );

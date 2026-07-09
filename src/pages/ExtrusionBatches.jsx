@@ -22,8 +22,6 @@ export default function ExtrusionBatches() {
     "COLOUR_FLAKES",
     "GREY_FLAKES",
     "ALL_MIX_FLAKES",
-    "COMMODITY_FLAKES",
-
     "RECOVERY_LUMPS",
     "RECOVERY_GRANULES",
     "REWORK_LUMPS",

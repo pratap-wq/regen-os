@@ -256,7 +256,6 @@ export function buildInventoryLots({
       n(r.acceptedQtyKg) ||
       n(r.whiteSortedKg) +
         n(r.allMixSortedKg) +
-        n(r.commodityKg) +
         n(r.whiteGreyKg);
 
     if (qty > 0) {

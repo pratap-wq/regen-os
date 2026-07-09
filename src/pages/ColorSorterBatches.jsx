@@ -53,7 +53,6 @@ export default function ColorSorterBatches() {
 
     allMixSortedKg: "",
 
-    commodityKg: "",
 
     whiteGreyKg: "",
 
@@ -180,11 +179,6 @@ export default function ColorSorterBatches() {
         updated.allMixSortedKg || 0
       );
 
-    const commodity =
-      Number(
-        updated.commodityKg || 0
-      );
-
     const whiteGrey =
       Number(
         updated.whiteGreyKg || 0
@@ -226,7 +220,6 @@ export default function ColorSorterBatches() {
       accepted +
       white +
       allMix +
-      commodity +
       whiteGrey;
 
     const totalReject =
@@ -738,24 +731,6 @@ export default function ColorSorterBatches() {
               name="allMixSortedKg"
               value={
                 form.allMixSortedKg
-              }
-              onChange={
-                onChange
-              }
-              style={
-                inputStyle
-              }
-            />
-
-          </Field>
-
-          <Field label="Commodity">
-
-            <input
-              type="number"
-              name="commodityKg"
-              value={
-                form.commodityKg
               }
               onChange={
                 onChange

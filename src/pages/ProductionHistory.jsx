@@ -200,7 +200,6 @@ export default function ProductionHistory() {
       n(row.acceptedQtyKg) ||
       n(row.whiteSortedKg) +
         n(row.allMixSortedKg) +
-        n(row.commodityKg) +
         n(row.whiteGreyKg)
     );
   }
@@ -442,7 +441,6 @@ export default function ProductionHistory() {
             ["acceptedQtyKg", "Accepted Qty Kg", "number"],
             ["whiteSortedKg", "White Kg", "number"],
             ["allMixSortedKg", "All Mix Kg", "number"],
-            ["commodityKg", "Commodity Kg", "number"],
             ["whiteGreyKg", "White Grey Kg", "number"],
             ["rejectedQtyKg", "Reject Kg", "number"],
             ["sorterVarianceKg", "Sorter Variance Kg", "number"],

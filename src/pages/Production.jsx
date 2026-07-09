@@ -84,7 +84,6 @@ export default function Production() {
 
     whiteSortedKg: "",
     allMixSortedKg: "",
-    commodityKg: "",
     whiteGreyKg: "",
     sorterRejectKg: "",
 
@@ -629,7 +628,6 @@ export default function Production() {
           acceptedQtyKg: sorterOutputKg - outputKgByName(sorterOutputRows, ["REJECT", "DUST"]),
           whiteSortedKg: outputKgByName(sorterOutputRows, ["WHITE SORTED"]),
           allMixSortedKg: outputKgByName(sorterOutputRows, ["MIXED SORTED"]),
-          commodityKg: outputKgByName(sorterOutputRows, ["COMMODITY"]),
           whiteGreyKg: 0,
           rejectedQtyKg: outputKgByName(sorterOutputRows, ["REJECT", "DUST"]),
           sorterVarianceKg: sorterVariance,

@@ -154,7 +154,6 @@ export function calculateCostEngine({
       (n(r.acceptedQtyKg) ||
         n(r.whiteSortedKg) +
           n(r.whiteGreyKg) +
-          n(r.commodityKg) +
           n(r.allMixSortedKg)),
     0
   );

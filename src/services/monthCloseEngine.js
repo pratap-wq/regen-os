@@ -192,6 +192,7 @@ export function calculateMonthClose({
       virginReceivedKg: rmFeed.virginReceivedKg,
       batteryReceivedKg: rmFeed.batteryReceivedKg,
       additivesReceivedKg: rmFeed.additivesReceivedKg,
+      excludedMaterialBreakdown: rmFeed.excludedMaterialBreakdown,
       virginAddedKg: extrusionFeed.virginAddedKg,
       batteryMaterialKg: extrusionFeed.batteryMaterialKg,
       additivesKg: extrusionFeed.additivesKg,
@@ -263,7 +264,15 @@ function classifyRmReceivedFeed(rows) {
       addRmFeedQty(acc, materialLabel(row.material || row.materialName || row.materialType || row.itemName), qty, value);
       return acc;
     },
-    { totalReceivedKg: 0, recycledRmKg: 0, recycledRmValue: 0, virginReceivedKg: 0, batteryReceivedKg: 0, additivesReceivedKg: 0 }
+    {
+      totalReceivedKg: 0,
+      recycledRmKg: 0,
+      recycledRmValue: 0,
+      virginReceivedKg: 0,
+      batteryReceivedKg: 0,
+      additivesReceivedKg: 0,
+      excludedMaterialBreakdown: { virgin: {}, battery: {}, additives: {} },
+    }
   );
 }
 
@@ -272,18 +281,26 @@ function addRmFeedQty(acc, label, qty, value) {
   acc.totalReceivedKg += qty;
   if (isVirginMaterial(label)) {
     acc.virginReceivedKg += qty;
+    addExcludedMaterial(acc.excludedMaterialBreakdown.virgin, label, qty);
     return;
   }
   if (isBatteryMaterial(label)) {
     acc.batteryReceivedKg += qty;
+    addExcludedMaterial(acc.excludedMaterialBreakdown.battery, label, qty);
     return;
   }
   if (isAdditiveMaterial(label)) {
     acc.additivesReceivedKg += qty;
+    addExcludedMaterial(acc.excludedMaterialBreakdown.additives, label, qty);
     return;
   }
   acc.recycledRmKg += qty;
   acc.recycledRmValue += value;
+}
+
+function addExcludedMaterial(group, label, qty) {
+  const name = materialLabel(label) || "Unknown";
+  group[name] = num(group[name]) + num(qty);
 }
 
 function classifyExtrusionFeed(rows) {

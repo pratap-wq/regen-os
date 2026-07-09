@@ -612,8 +612,11 @@ export default function MonthlyAudit() {
               rows={[
                 ["Total RM Received before exclusions", close.rm.totalReceivedKg],
                 ["Minus Virgin Polymer", -num(close.production.virginReceivedKg)],
+                ["Excluded Virgin Materials", formatMaterialBreakdown(close.production.excludedMaterialBreakdown?.virgin), "text"],
                 ["Minus Battery Material", -num(close.production.batteryReceivedKg)],
+                ["Excluded Battery Materials", formatMaterialBreakdown(close.production.excludedMaterialBreakdown?.battery), "text"],
                 ["Minus Excluded Additives", -num(close.production.additivesReceivedKg)],
+                ["Excluded Additive Materials", formatMaterialBreakdown(close.production.excludedMaterialBreakdown?.additives), "text"],
                 ["RM Stock Received", close.rm.purchasedKg],
                 ["Formula Check Difference", rmReceivedProofDifferenceKg],
                 ["Opening Rule", openingDebug.rule, "text"],
@@ -1135,6 +1138,14 @@ function movementSummary(line) {
 
 function formatQtyCount(value) {
   return num(value).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+}
+
+function formatMaterialBreakdown(items = {}) {
+  const rows = Object.entries(items)
+    .filter(([, qty]) => Math.abs(num(qty)) > 0.01)
+    .sort(([a], [b]) => a.localeCompare(b));
+  if (!rows.length) return "-";
+  return rows.map(([name, qty]) => `${name}: ${formatKg(qty)}`).join(" | ");
 }
 
 function getDifferenceValue(line, close) {

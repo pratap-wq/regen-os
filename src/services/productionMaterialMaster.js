@@ -229,7 +229,7 @@ function mergeCsv(primary, fallback) {
 
 function normalizeProductionMaterialRow(row) {
   const canonicalName = row.canonicalName || row.materialName || "";
-  return {
+  return enforceRequiredMaterialFlags({
     ...defaultDropdownFlags(canonicalName || row.materialCode, row.category || row.materialType),
     ...row,
     id: row.materialId || row.materialCode || row.canonicalName || row.materialName || "",
@@ -238,7 +238,7 @@ function normalizeProductionMaterialRow(row) {
     canonicalName,
     category: row.category || row.materialType || "",
     active: row.active || row.isActive || row.status || "TRUE",
-  };
+  });
 }
 
 function defaultDropdownFlags(value, category = "") {
@@ -287,4 +287,23 @@ function defaultDropdownFlags(value, category = "") {
   ].includes("YES") ? "YES" : "NO";
 
   return flags;
+}
+
+function enforceRequiredMaterialFlags(row) {
+  const code = materialCode(row.materialCode || row.canonicalName || row.materialName);
+  if (code !== "WHITE_REGRIND_UNWASHED") return row;
+  return {
+    ...row,
+    materialCode: "WHITE_REGRIND_UNWASHED",
+    materialName: row.materialName || "White Regrind (Unwashed)",
+    canonicalName: row.canonicalName || "White Regrind (Unwashed)",
+    category: "WIP",
+    status: "ACTIVE",
+    active: "TRUE",
+    appearsInRMInward: "YES",
+    appearsInRmInward: "YES",
+    appearsInGrinderOutput: "YES",
+    appearsInWashInput: "YES",
+    appearsInProduction: "YES",
+  };
 }

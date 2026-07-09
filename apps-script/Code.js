@@ -2934,13 +2934,23 @@ function fallbackProductionMaterialRow_(canonicalName) {
   const normalized = normalizeProductionMaterialAlias_(canonicalName);
   const category = normalizeMaterialCategoryForDropdown_(materialCategory_(normalized));
   if (!normalized || category === "UNKNOWN" || category === "STORE") return null;
+  const flags = enforceRequiredMaterialMasterFlags_({
+    ...materialMasterDefaultDropdownFlags_(materialCode_(normalized), category),
+    materialCode: materialCode_(normalized),
+    materialName: normalized,
+    category,
+    status: "ACTIVE",
+  });
   const rules = materialMasterDropdownRules_(
     category,
-    category === "RM" || category === "WIP",
-    ["RM", "WIP", "REWORK", "ADDITIVE", "FG", "WASTE"].indexOf(category) !== -1,
-    category === "FG"
+    materialMasterFlag_(flags, ["appearsInRMInward", "appearsInRmInward"]) === "YES",
+    materialMasterFlag_(flags, ["appearsInProduction"]) === "YES" || materialHasAnyProductionDropdownFlag_(flags),
+    materialMasterFlag_(flags, ["appearsInDispatch"]) === "YES",
+    materialMasterFlag_(flags, ["appearsInMonthClose"]) === "YES",
+    materialMasterFlag_(flags, ["appearsInInventoryAdjustments"]) === "YES"
   );
   return {
+    ...flags,
     materialName: normalized,
     canonicalName: normalized,
     category,
@@ -6174,6 +6184,25 @@ function applyMaterialMasterDefaultDropdownFlags_(row) {
   Object.keys(defaults).forEach(function(key) {
     if (next[key] === undefined || next[key] === "") next[key] = defaults[key];
   });
+  return enforceRequiredMaterialMasterFlags_(next);
+}
+
+function enforceRequiredMaterialMasterFlags_(row) {
+  const code = materialCode_(row.materialCode || row.materialName);
+  const next = { ...row };
+
+  if (code === "WHITE_REGRIND_UNWASHED") {
+    next.materialCode = "WHITE_REGRIND_UNWASHED";
+    next.materialName = next.materialName || "White Regrind (Unwashed)";
+    next.category = "WIP";
+    next.status = "ACTIVE";
+    next.appearsInRMInward = "YES";
+    next.appearsInRmInward = "YES";
+    next.appearsInGrinderOutput = "YES";
+    next.appearsInWashInput = "YES";
+    next.appearsInProduction = "YES";
+  }
+
   return next;
 }
 
@@ -7010,6 +7039,7 @@ function testProductionInputAliasNormalization() {
     };
   });
   const sortingOutput = assertProductionMaterialAllowed_("Flakes - Dominant Colour", "SORTING", "OUTPUT", "Sorting output material");
+  const grinderOutput = assertProductionMaterialAllowed_("White Regrind (Unwashed)", "GRINDER", "OUTPUT", "GRINDER output material");
   let dispatchBlocked = false;
   try {
     assertProductionMaterialAllowed_("White Regrind (Unwashed)", "DISPATCH", "INPUT", "Dispatch material");
@@ -7019,9 +7049,10 @@ function testProductionInputAliasNormalization() {
   return output({
     ok: rows.every(function(row) {
       return row.rmInward && row.washInput && (row.grinderInput || row.alias.toUpperCase().indexOf("BUCKET") === -1);
-    }) && sortingOutput === "Colour Reject" && dispatchBlocked,
+    }) && sortingOutput === "Colour Reject" && grinderOutput === "White Regrind (Unwashed)" && dispatchBlocked,
     rows,
     sortingOutput,
+    grinderOutput,
     dispatchBlocked
   });
 }

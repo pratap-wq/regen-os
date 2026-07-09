@@ -2154,6 +2154,7 @@ const PRODUCTION_MATERIAL_ALIAS_MAP = {
   "WHITE PPCP BUCKETS": "White Buckets",
   "WHITE BUCKET": "White Buckets",
   "WHITE BUCKETS": "White Buckets",
+  "WHITE_BUCKETS": "White Buckets",
   "MIXED BUCKET": "White Buckets",
   "MIXED BUCKETS": "White Buckets",
   "MIXED PPCP BUCKETS": "White Buckets",
@@ -2489,13 +2490,22 @@ function materialMasterRowsForProductionDropdown_() {
   return rows
     .filter(function(row) {
       const status = String(row.status || "ACTIVE").toUpperCase();
+      const code = materialCode_(row.materialCode || row.materialName);
+      const defaultProductionMaterial = code === "WHITE_BUCKETS";
       return status !== "INACTIVE" && status !== "DELETED" && status !== "DISABLED" &&
-        (yesNo_(row.appearsInRmInward) === "YES" || yesNo_(row.appearsInProduction) === "YES" || yesNo_(row.appearsInDispatch) === "YES");
+        (
+          defaultProductionMaterial ||
+          yesNo_(row.appearsInRmInward) === "YES" ||
+          yesNo_(row.appearsInProduction) === "YES" ||
+          yesNo_(row.appearsInDispatch) === "YES"
+        );
     })
     .map(function(row, index) {
       const category = normalizeMaterialCategoryForDropdown_(row.category);
-      const rm = yesNo_(row.appearsInRmInward) === "YES";
-      const production = yesNo_(row.appearsInProduction) === "YES";
+      const code = materialCode_(row.materialCode || row.materialName);
+      const defaultProductionMaterial = code === "WHITE_BUCKETS";
+      const rm = defaultProductionMaterial || yesNo_(row.appearsInRmInward) === "YES";
+      const production = defaultProductionMaterial || yesNo_(row.appearsInProduction) === "YES";
       const dispatch = yesNo_(row.appearsInDispatch) === "YES";
       const rules = materialMasterDropdownRules_(category, rm, production, dispatch);
       return {
@@ -2507,9 +2517,11 @@ function materialMasterRowsForProductionDropdown_() {
         stageAllowed: rules.stageAllowed,
         directionAllowed: rules.directionAllowed,
         active: "TRUE",
-        status: "ACTIVE",
-        aliases: "",
-        sortOrder: num(row.sortOrder) || 500 + index,
+      status: "ACTIVE",
+      aliases: code === "WHITE_BUCKETS"
+        ? "White PPCP Buckets|White Bucket|Mixed Bucket|Mixed Buckets|Mixed PPCP Buckets|MIXED_PPCP_BUCKETS|MIXED_BUCKETS"
+        : "",
+      sortOrder: num(row.sortOrder) || 500 + index,
       };
     })
     .filter(function(row) {
@@ -2570,7 +2582,7 @@ function uniqueCsv_(values) {
 
 function productionMaterialCanonicalForList_(value) {
   const clean = String(value || "").trim().replace(/\s+/g, " ");
-  return PRODUCTION_MATERIAL_ALIAS_MAP[clean.toUpperCase()] || clean;
+  return normalizeProductionMaterialAlias_(PRODUCTION_MATERIAL_ALIAS_MAP[clean.toUpperCase()] || clean);
 }
 
 function mergeCsvValues_(primary, fallback) {
@@ -2618,6 +2630,15 @@ function normalizeProductionMaterialName_(value) {
   if (!clean) return { canonicalName: "", known: false, originalName: "" };
 
   const upper = clean.toUpperCase();
+  if (upper === "WHITE BUCKETS") {
+    return {
+      canonicalName: "White Buckets",
+      known: true,
+      originalName: String(value || "").trim() || clean,
+      source: "built-in canonical",
+    };
+  }
+
   const aliasRow = materialAliasLookup_(clean);
   const rawAlias = aliasRow && aliasRow.canonicalName
     ? aliasRow.canonicalName
@@ -3332,6 +3353,9 @@ function seedMaterialMasterDefaults() {
       status: "ACTIVE",
       defaultQualityRequired: "NO",
       defaultStorageLocation: "",
+      appearsInRmInward: row[2] === "FG" || row[2] === "WASTE" || row[2] === "REWORK" ? "NO" : "YES",
+      appearsInProduction: row[2] === "STORE" ? "NO" : "YES",
+      appearsInDispatch: row[2] === "FG" ? "YES" : "NO",
       createdBy: "seedMaterialMasterDefaults",
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -6568,7 +6592,7 @@ function normalizeProductionMaterialAliasesInText_(value) {
 }
 
 function testProductionInputAliasNormalization() {
-  const aliases = ["White Bucket", "White Buckets", "Mixed Buckets", "Mixed PPCP Buckets"];
+  const aliases = ["White Buckets", "WHITE_BUCKETS", "White Bucket", "Mixed Buckets", "Mixed PPCP Buckets"];
   const rows = aliases.map(function(alias) {
     return {
       alias,

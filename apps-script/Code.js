@@ -2351,17 +2351,41 @@ function getProductionMaterialMasterRows_() {
     defaultsByCanonical[materialCode_(row.canonicalName || row.materialName)] = row;
   });
 
-  return rows.map(function(row) {
-    const defaultRow = defaultsByCanonical[materialCode_(row.canonicalName || row.materialName)];
-    if (!defaultRow) return row;
-    return {
-      ...defaultRow,
-      ...row,
-      stageAllowed: mergeCsvValues_(row.stageAllowed, defaultRow.stageAllowed),
-      directionAllowed: mergeCsvValues_(row.directionAllowed, defaultRow.directionAllowed),
-      aliases: row.aliases || defaultRow.aliases,
-    };
+  const byCanonical = {};
+  productionMaterialRowsFromDefaults_().forEach(function(row) {
+    byCanonical[materialCode_(row.canonicalName || row.materialName)] = row;
   });
+
+  rows.forEach(function(row) {
+    const originalCanonical = row.canonicalName || row.materialName;
+    const canonicalName = productionMaterialCanonicalForList_(originalCanonical);
+    const key = materialCode_(canonicalName);
+    const defaultRow = defaultsByCanonical[key];
+    const isAliasRow = materialCode_(originalCanonical) !== key;
+    const normalizedRow = {
+      ...row,
+      materialName: canonicalName,
+      canonicalName,
+    };
+    byCanonical[key] = defaultRow ? {
+      ...defaultRow,
+      ...normalizedRow,
+      active: isAliasRow ? defaultRow.active : normalizedRow.active,
+      status: isAliasRow ? defaultRow.status : normalizedRow.status,
+      stageAllowed: mergeCsvValues_(normalizedRow.stageAllowed, defaultRow.stageAllowed),
+      directionAllowed: mergeCsvValues_(normalizedRow.directionAllowed, defaultRow.directionAllowed),
+      aliases: normalizedRow.aliases || defaultRow.aliases,
+    } : normalizedRow;
+  });
+
+  return Object.keys(byCanonical).map(function(key) {
+    return byCanonical[key];
+  });
+}
+
+function productionMaterialCanonicalForList_(value) {
+  const clean = String(value || "").trim().replace(/\s+/g, " ");
+  return PRODUCTION_MATERIAL_ALIAS_MAP[clean.toUpperCase()] || clean;
 }
 
 function mergeCsvValues_(primary, fallback) {
@@ -2400,6 +2424,14 @@ function normalizeProductionMaterialName_(value) {
   const alias = aliasRow && aliasRow.canonicalName
     ? aliasRow.canonicalName
     : PRODUCTION_MATERIAL_ALIAS_MAP[upper];
+  if (alias) {
+    return {
+      canonicalName: alias,
+      known: true,
+      originalName: clean,
+      source: aliasRow ? "Material_Alias_Map" : "built-in alias",
+    };
+  }
   const rows = getProductionMaterialMasterRows_();
   const match = rows.find(function(row) {
     const canonical = String(row.canonicalName || row.materialName || "").trim().toUpperCase();
@@ -2413,15 +2445,6 @@ function normalizeProductionMaterialName_(value) {
       canonicalName: match.canonicalName || match.materialName,
       known: true,
       originalName: clean,
-    };
-  }
-
-  if (alias) {
-    return {
-      canonicalName: alias,
-      known: true,
-      originalName: clean,
-      source: aliasRow ? "Material_Alias_Map" : "built-in alias",
     };
   }
 

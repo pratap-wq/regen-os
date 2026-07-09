@@ -98,12 +98,19 @@ function mergeProductionMaterialRows(rows = []) {
   });
 
   (Array.isArray(rows) ? rows : []).forEach((row) => {
-    const key = materialKey(row.canonicalName || row.materialName);
+    const originalCanonical = row.canonicalName || row.materialName;
+    const canonicalName = normalizeProductionMaterialName(originalCanonical);
+    const key = materialKey(canonicalName);
     if (!key) return;
     const fallback = byName.get(key) || {};
+    const isAliasRow = materialKey(originalCanonical) !== key;
     byName.set(key, {
       ...fallback,
       ...row,
+      materialName: canonicalName,
+      canonicalName,
+      active: isAliasRow ? fallback.active : row.active,
+      status: isAliasRow ? fallback.status : row.status,
       stageAllowed: mergeCsv(row.stageAllowed, fallback.stageAllowed),
       directionAllowed: mergeCsv(row.directionAllowed, fallback.directionAllowed),
       aliases: row.aliases || fallback.aliases || "",

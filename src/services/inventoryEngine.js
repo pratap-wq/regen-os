@@ -195,8 +195,8 @@ export function materialInventoryFromLedgerBalances(
     })
     .forEach((row) => {
       const material = normalizeInventoryMaterial(row.itemName);
-      const availableKg = Number(row.qty || row.balance || 0);
-      if (!material || availableKg <= 0) return;
+      const balanceKg = Number(row.qty || row.balance || 0);
+      if (!material) return;
 
       if (!byMaterial[material]) {
         byMaterial[material] = {
@@ -204,11 +204,13 @@ export function materialInventoryFromLedgerBalances(
           material,
           itemType: row.itemType || "",
           availableKg: 0,
+          balanceKg: 0,
           source: "Inventory Ledger",
         };
       }
 
-      byMaterial[material].availableKg += availableKg;
+      byMaterial[material].balanceKg += balanceKg;
+      byMaterial[material].availableKg = Math.max(0, byMaterial[material].balanceKg);
     });
 
   return Object.values(byMaterial).sort((a, b) =>

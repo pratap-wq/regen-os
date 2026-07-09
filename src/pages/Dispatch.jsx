@@ -15,7 +15,6 @@ import { materialKey } from "../utils/materialInventory";
 
 export default function Dispatch() {
   const today = new Date().toISOString().split("T")[0];
-  const fgGrades = ["E1", "E2", "E3", "E4", "E5"];
 
   const blankLine = {
     sourceExtrusionBatchId: "",
@@ -64,6 +63,7 @@ export default function Dispatch() {
   const [customerRows, setCustomerRows] = useState([]);
   const [customerUnitRows, setCustomerUnitRows] = useState([]);
   const [fgRateRows, setFgRateRows] = useState([]);
+  const [materialRows, setMaterialRows] = useState([]);
   const [status, setStatus] = useState("");
   const [editingRow, setEditingRow] = useState(null);
   const [form, setForm] = useState(blankForm);
@@ -75,13 +75,14 @@ export default function Dispatch() {
 
   async function loadData() {
     try {
-      const [dispatch, extrusion, ledgerBalance, customers, customerUnits, fgRates] = await Promise.all([
+      const [dispatch, extrusion, ledgerBalance, customers, customerUnits, fgRates, materials] = await Promise.all([
         apiCall({ fn: "dispatch.list" }),
         apiCall({ fn: "extrusion.list" }),
         apiCall({ fn: "inventoryLedger.balance" }),
         apiCall({ fn: "factoryMaster.list", masterType: "customer" }),
         apiCall({ fn: "factoryMaster.list", masterType: "customerUnit" }),
         apiCall({ fn: "fgRates.list" }),
+        apiCall({ fn: "materialMaster.list" }),
       ]);
 
       setRows(dispatch.rows || []);
@@ -90,6 +91,7 @@ export default function Dispatch() {
       setCustomerRows(customers.rows || []);
       setCustomerUnitRows(customerUnits.rows || []);
       setFgRateRows(fgRates.rows || []);
+      setMaterialRows(materials.rows || []);
     } catch (err) {
       console.log(err);
       setStatus(err.message);
@@ -248,6 +250,22 @@ export default function Dispatch() {
     );
   }, [ledgerBalanceRows, allLiveLots]);
 
+  const fgGrades = useMemo(() => {
+    return materialRows
+      .filter((row) => {
+        const status = String(row.status || "ACTIVE").toUpperCase();
+        const category = String(row.category || row.materialType || "").toUpperCase();
+        const appearsInDispatch = ["YES", "TRUE", "Y", "1"].includes(
+          String(row.appearsInDispatch || "").toUpperCase()
+        );
+        return status === "ACTIVE" && category === "FG" && appearsInDispatch;
+      })
+      .map((row) => normalizeFgGrade(row.materialName || row.materialCode || ""))
+      .filter(Boolean)
+      .filter((grade, index, list) => list.indexOf(grade) === index)
+      .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
+  }, [materialRows]);
+
   const selectedInventory = materialInventory.find(
     (x) => normalizeFgGrade(x.material) === normalizeFgGrade(form.material || form.grade || "")
   );
@@ -332,7 +350,7 @@ export default function Dispatch() {
         return !rowCustomer || !customerKey || rowCustomer === customerKey;
       })
       .map((row) => {
-        const rowTime = new Date(dateForInput(row.date) || today).getTime();
+        const rowTime = fgRateEffectiveTime(row);
         return {
           row,
           rowTime: Number.isNaN(rowTime) ? 0 : rowTime,
@@ -348,19 +366,45 @@ export default function Dispatch() {
     return matches[0]?.row || null;
   }
 
+  function fgRateEffectiveTime(row) {
+    const rowDate = dateForInput(row.date);
+    if (rowDate) {
+      const time = new Date(rowDate).getTime();
+      if (!Number.isNaN(time)) return time;
+    }
+
+    const year = Number(row.year || 0);
+    const month = monthNumber(row.month);
+    if (year && month) return new Date(year, month - 1, 1).getTime();
+    return 0;
+  }
+
+  function monthNumber(value) {
+    const text = String(value || "").trim();
+    const numeric = Number(text);
+    if (numeric >= 1 && numeric <= 12) return numeric;
+    const index = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"].indexOf(
+      text.slice(0, 3).toUpperCase()
+    );
+    return index >= 0 ? index + 1 : 0;
+  }
+
   function rateForGrade(material) {
     const grade = normalizeFgGrade(material);
-    if (grade === normalizeFgGrade(form.material) && Number(form.ratePerKg || 0) > 0) {
-      return Number(form.ratePerKg || 0);
-    }
     const rateRow = lookupFgRate(grade, form.customerName, form.date);
     return Number(rateRow?.ratePerKg || 0);
   }
 
   function applyAutoRate(updated) {
-    if (!updated.material || Number(updated.ratePerKg || 0) > 0) return updated;
+    if (!updated.material) return updated;
     const rateRow = lookupFgRate(updated.material, updated.customerName, updated.date);
-    if (!rateRow) return updated;
+    if (!rateRow) {
+      return {
+        ...updated,
+        ratePerKg: "",
+        rateSource: "",
+      };
+    }
     return {
       ...updated,
       ratePerKg: rateRow.ratePerKg || "",
@@ -480,6 +524,11 @@ export default function Dispatch() {
       const stockError = validateLinesAgainstStock(cleanLines);
       if (stockError) {
         setStatus(stockError);
+        return;
+      }
+      const rate = rateForGrade(material);
+      if (rate <= 0) {
+        setStatus(`Missing FG Rates selling rate for ${material}. Add the rate before saving dispatch.`);
         return;
       }
 
@@ -915,10 +964,12 @@ export default function Dispatch() {
             <input
               name="ratePerKg"
               value={form.ratePerKg}
-              onChange={onChange}
-              style={inputStyle}
+              readOnly
+              style={readonlyStyle}
             />
-            {form.rateSource && <div style={hintText}>{form.rateSource}</div>}
+            <div style={hintText}>
+              {form.rateSource || "Loaded from FG Rates. Add rate before dispatch if blank."}
+            </div>
           </Field>
 
           <Field label="Sales Value">

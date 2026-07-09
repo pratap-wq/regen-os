@@ -8361,7 +8361,7 @@ function lookupFgRateForDispatch_(grade, customerName, dateValue) {
       return !rowCustomer || !customerKey || rowCustomer === customerKey;
     })
     .map(function(row) {
-      const rowTime = new Date(normalizeDateOnly_(row.date || todayYmd())).getTime();
+      const rowTime = fgRateEffectiveTime_(row);
       return {
         row,
         rowTime: isNaN(rowTime) ? 0 : rowTime,
@@ -8375,7 +8375,7 @@ function lookupFgRateForDispatch_(grade, customerName, dateValue) {
     });
 
   const match = candidates[0];
-  if (!match) return { ratePerKg: 0, freightPerKg: 0, source: "Manual / Missing FG_Rates" };
+  if (!match) return { ratePerKg: 0, freightPerKg: 0, source: "Missing FG_Rates" };
   return {
     ratePerKg: num(match.row.ratePerKg),
     freightPerKg: num(match.row.freightPerKg),
@@ -8383,12 +8383,60 @@ function lookupFgRateForDispatch_(grade, customerName, dateValue) {
   };
 }
 
+function fgRateEffectiveTime_(row) {
+  if (row.date) {
+    const time = new Date(normalizeDateOnly_(row.date)).getTime();
+    if (!isNaN(time)) return time;
+  }
+
+  const year = num(row.year);
+  const month = monthNumber_(row.month);
+  if (year && month) {
+    return new Date(year, month - 1, 1).getTime();
+  }
+
+  return 0;
+}
+
+function monthNumber_(value) {
+  const text = String(value || "").trim();
+  const numeric = num(text);
+  if (numeric >= 1 && numeric <= 12) return numeric;
+  const key = text.slice(0, 3).toUpperCase();
+  const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  const index = months.indexOf(key);
+  return index >= 0 ? index + 1 : 0;
+}
+
+function validateDispatchFgRates_(data, lineRows, date) {
+  const missing = {};
+
+  (lineRows || []).forEach(function(line) {
+    const grade = dispatchLineGrade_(line, data.grade || data.material);
+    const qty = dispatchLineQty_(line, data.quantityKg);
+    if (!grade || qty <= 0) return;
+
+    const rateLookup = lookupFgRateForDispatch_(grade, data.customerName, date);
+    if (num(rateLookup.ratePerKg) <= 0) {
+      missing[grade] = true;
+    }
+  });
+
+  const missingGrades = Object.keys(missing);
+  if (missingGrades.length) {
+    throw new Error(
+      "Missing FG_Rates selling rate for " +
+        missingGrades.join(", ") +
+        ". Add the rate in FG Rates before saving dispatch."
+    );
+  }
+}
+
 function dispatchFinancials_(data, lineRows, date) {
   const lines = (lineRows || []).length ? lineRows : parseDispatchLines_(normalizeDispatchLines_(data));
   let quantityKg = 0;
   let dispatchValue = 0;
   let freightAmount = 0;
-  let manualRateUsed = false;
   const rateSources = {};
 
   lines.forEach(function(line) {
@@ -8396,15 +8444,12 @@ function dispatchFinancials_(data, lineRows, date) {
     const qty = dispatchLineQty_(line, data.quantityKg);
     if (!grade || qty <= 0) return;
     const rateLookup = lookupFgRateForDispatch_(grade, data.customerName, date);
-    const manualRate = num(line.ratePerKg) || ((lines.length === 1) ? num(data.ratePerKg) : 0);
-    const manualFreight = num(line.freightPerKg) || ((lines.length === 1) ? num(data.freightPerKg) : 0);
-    const ratePerKg = manualRate || rateLookup.ratePerKg;
-    const freightPerKg = manualFreight || rateLookup.freightPerKg;
+    const ratePerKg = num(rateLookup.ratePerKg);
+    const freightPerKg = num(rateLookup.freightPerKg);
     quantityKg += qty;
     dispatchValue += qty * ratePerKg;
     freightAmount += qty * freightPerKg;
-    if (manualRate) manualRateUsed = true;
-    rateSources[manualRate ? "Manual" : rateLookup.source] = true;
+    rateSources[rateLookup.source] = true;
   });
 
   if (quantityKg <= 0) quantityKg = num(data.quantityKg);
@@ -8413,9 +8458,9 @@ function dispatchFinancials_(data, lineRows, date) {
   return {
     ratePerKg: round2(ratePerKg),
     freightPerKg: round2(freightPerKg),
-    dispatchValue: round2(dispatchValue || quantityKg * num(data.ratePerKg)),
-    freightAmount: round2(freightAmount || quantityKg * num(data.freightPerKg)),
-    rateSource: Object.keys(rateSources).join(" + ") || (manualRateUsed ? "Manual" : "Manual / Missing FG_Rates"),
+    dispatchValue: round2(dispatchValue),
+    freightAmount: round2(freightAmount),
+    rateSource: Object.keys(rateSources).join(" + ") || "FG_Rates",
   };
 }
 
@@ -8594,6 +8639,72 @@ function validateDispatchAvailability_(data = {}) {
   });
 }
 
+function voidDispatchLedgerRows_(dispatchId, reason) {
+  if (!dispatchId) return 0;
+
+  const sh = getSheet("Inventory_Ledger");
+  ensureHeaders_("Inventory_Ledger", inventoryLedgerHeaders_().concat([
+    "voidedBy",
+    "voidedAt",
+    "voidReason",
+  ]));
+
+  const headers = getHeaders(sh);
+  const values = sh.getDataRange().getValues();
+  const statusCol = headers.indexOf("status");
+  const targetRefCol = headers.indexOf("targetRef");
+  const moduleCol = headers.indexOf("module");
+  const remarksCol = headers.indexOf("remarks");
+  const voidedByCol = headers.indexOf("voidedBy");
+  const voidedAtCol = headers.indexOf("voidedAt");
+  const voidReasonCol = headers.indexOf("voidReason");
+  let voided = 0;
+
+  for (let r = 1; r < values.length; r += 1) {
+    const status = statusCol >= 0 ? String(values[r][statusCol] || "").toUpperCase() : "";
+    const module = moduleCol >= 0 ? String(values[r][moduleCol] || "").toUpperCase() : "";
+    const targetRef = targetRefCol >= 0 ? String(values[r][targetRefCol] || "") : "";
+
+    if (status === "DELETED" || module !== "DISPATCH" || targetRef !== String(dispatchId)) continue;
+
+    if (statusCol >= 0) sh.getRange(r + 1, statusCol + 1).setValue("DELETED");
+    if (remarksCol >= 0) {
+      const oldRemarks = String(values[r][remarksCol] || "");
+      sh.getRange(r + 1, remarksCol + 1).setValue(
+        oldRemarks ? oldRemarks + " | Voided: " + reason : "Voided: " + reason
+      );
+    }
+    if (voidedByCol >= 0) sh.getRange(r + 1, voidedByCol + 1).setValue("Dispatch Update");
+    if (voidedAtCol >= 0) sh.getRange(r + 1, voidedAtCol + 1).setValue(new Date());
+    if (voidReasonCol >= 0) sh.getRange(r + 1, voidReasonCol + 1).setValue(reason || "Dispatch changed");
+    voided += 1;
+  }
+
+  return voided;
+}
+
+function postDispatchLedgerRows_(dispatchId, date, lineRows, data) {
+  (lineRows || []).forEach(function(line) {
+    const grade = dispatchLineGrade_(line, data.grade || data.material);
+    const qty = dispatchLineQty_(line, data.quantityKg);
+    if (!grade || qty <= 0) return;
+    addInventoryLedger({
+      date,
+      module: "DISPATCH",
+      movementType: "OUT",
+      itemType: "FG",
+      itemName: grade,
+      sourceRef: grade,
+      targetRef: dispatchId,
+      qtyIn: 0,
+      qtyOut: qty,
+      unit: "Kg",
+      remarks: data.remarks || "FG dispatched",
+      createdBy: data.createdBy || "System",
+    });
+  });
+}
+
 function addDispatch(data = {}) {
   ensureDispatchHeaders_();
   const sh = getSheet("Dispatches");
@@ -8607,9 +8718,10 @@ function addDispatch(data = {}) {
   const dispatchLines = normalizeDispatchLines_(data);
   const lineRows = parseDispatchLines_(dispatchLines);
   const headerGrade = lineRows.map(function(line) { return dispatchLineGrade_(line, data.grade || data.material); }).filter(Boolean).join(" | ");
-  const financials = dispatchFinancials_(data, lineRows, date);
   validateOperationalWrite_({ ...data, date });
   validateDispatchAvailability_({ ...data, dispatchId });
+  validateDispatchFgRates_(data, lineRows, date);
+  const financials = dispatchFinancials_(data, lineRows, date);
 
   lineRows.forEach(function(line) {
     const grade = dispatchLineGrade_(line, data.grade || data.material);
@@ -8656,25 +8768,7 @@ function addDispatch(data = {}) {
     updatedAt: new Date(),
   });
 
-  lineRows.forEach(function(line) {
-    const grade = dispatchLineGrade_(line, data.grade || data.material);
-    const qty = dispatchLineQty_(line, data.quantityKg);
-    if (!grade || qty <= 0) return;
-    addInventoryLedger({
-      date,
-      module: "DISPATCH",
-      movementType: "OUT",
-      itemType: "FG",
-      itemName: grade,
-      sourceRef: grade,
-      targetRef: dispatchId,
-      qtyIn: 0,
-      qtyOut: qty,
-      unit: "Kg",
-      remarks: data.remarks || "FG dispatched",
-      createdBy: data.createdBy || "System",
-    });
-  });
+  postDispatchLedgerRows_(dispatchId, date, lineRows, data);
 
   return output({
     ok: true,
@@ -8685,25 +8779,41 @@ function addDispatch(data = {}) {
 function updateDispatch(data = {}) {
   ensureDispatchHeaders_();
 
+  if (!data.dispatchId) {
+    return output({ ok: false, error: "Missing dispatchId" });
+  }
+
+  const existingDispatch = getRowById_("Dispatches", "dispatchId", data.dispatchId);
+  if (!existingDispatch) {
+    return output({ ok: false, error: "Dispatch not found: " + data.dispatchId });
+  }
+
   const date = normalizeDateOnly_(data.date || todayYmd());
   const sourceId = data.sourceExtrusionBatchId || data.linkedFgBatchId || "";
-  const dispatchLines = normalizeDispatchLines_(data);
-  const lineRows = parseDispatchLines_(dispatchLines);
-  const headerGrade = lineRows.map(function(line) { return dispatchLineGrade_(line, data.grade || data.material); }).filter(Boolean).join(" | ");
-  const financials = dispatchFinancials_(data, lineRows, date);
   const isDeleted =
     String(data.status || "").toUpperCase() === "DELETED" ||
     String(data.dispatchStatus || "").toUpperCase() === "DELETED";
+  const dispatchLines = isDeleted
+    ? data.dispatchLines || existingDispatch.dispatchLines || ""
+    : normalizeDispatchLines_(data);
+  const lineRows = isDeleted ? [] : parseDispatchLines_(dispatchLines);
+  const headerGrade = isDeleted
+    ? data.grade || existingDispatch.grade || ""
+    : lineRows.map(function(line) { return dispatchLineGrade_(line, data.grade || data.material); }).filter(Boolean).join(" | ");
   validateOperationalWrite_(
     { ...data, date },
-    getRowById_("Dispatches", "dispatchId", data.dispatchId)
+    existingDispatch
   );
 
   if (!isDeleted) {
     validateDispatchAvailability_(data);
+    validateDispatchFgRates_(data, lineRows, date);
   }
+  const financials = isDeleted
+    ? { ratePerKg: num(data.ratePerKg), dispatchValue: num(data.dispatchValue), freightPerKg: num(data.freightPerKg), freightAmount: num(data.freightAmount), rateSource: data.rateSource || "" }
+    : dispatchFinancials_(data, lineRows, date);
 
-  return updateById("Dispatches", "dispatchId", data.dispatchId, {
+  const updateResult = updateById("Dispatches", "dispatchId", data.dispatchId, {
     sourceExtrusionBatchId: sourceId,
     sourceSupplier: data.sourceSupplier || "",
     availableFGQty: num(data.availableFGQty),
@@ -8713,7 +8823,7 @@ function updateDispatch(data = {}) {
     invoiceNo: data.invoiceNo || "",
     vehicleNo: data.vehicleNo || "",
     driverName: data.driverName || "",
-    grade: headerGrade || normalizeDispatchFgGrade_(data.grade || data.material),
+    grade: isDeleted ? headerGrade : headerGrade || normalizeDispatchFgGrade_(data.grade || data.material),
     lotNo: data.lotNo || sourceId,
     quantityKg: num(data.quantityKg),
     noOfBags: num(data.noOfBags),
@@ -8734,6 +8844,13 @@ function updateDispatch(data = {}) {
     productionShift: data.productionShift || "",
     updatedAt: new Date(),
   });
+
+  voidDispatchLedgerRows_(data.dispatchId, isDeleted ? "Dispatch deleted" : "Dispatch updated");
+  if (!isDeleted) {
+    postDispatchLedgerRows_(data.dispatchId, date, lineRows, data);
+  }
+
+  return updateResult;
 }
 
 function patchOldDispatchData() {

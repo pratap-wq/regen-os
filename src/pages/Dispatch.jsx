@@ -65,6 +65,7 @@ export default function Dispatch() {
   const [fgRateRows, setFgRateRows] = useState([]);
   const [materialRows, setMaterialRows] = useState([]);
   const [status, setStatus] = useState("");
+  const [saveDebug, setSaveDebug] = useState(null);
   const [saving, setSaving] = useState(false);
   const [editingRow, setEditingRow] = useState(null);
   const [form, setForm] = useState(blankForm);
@@ -291,6 +292,12 @@ export default function Dispatch() {
     return lines.reduce((s, r) => s + Number(r.dispatchQtyKg || 0), 0);
   }
 
+  function formatRs(value) {
+    return `Rs. ${Number(value || 0).toLocaleString("en-IN", {
+      maximumFractionDigits: 0,
+    })}`;
+  }
+
   function getGradeSummary(lines = dispatchLines) {
     const map = {};
 
@@ -316,6 +323,7 @@ export default function Dispatch() {
 
   function autoCalculate(updated, lines = dispatchLines) {
     const totalQty = getLineTotal(lines);
+    const quantityKg = totalQty > 0 ? totalQty : Number(updated.quantityKg || 0);
 
     const cleanLines = lines.map((x) => ({
       ...x,
@@ -323,14 +331,14 @@ export default function Dispatch() {
       material: normalizeFgGrade(x.material || x.grade || updated.material || updated.grade),
       itemType: "FG",
       availableKg: Number(x.availableKg || 0),
-      dispatchQtyKg: Number(x.dispatchQtyKg || 0),
+      dispatchQtyKg: Number(x.dispatchQtyKg || 0) || (lines.length === 1 ? quantityKg : 0),
     }));
 
     updated.dispatchId =
       updated.dispatchId ||
       makeDispatchId(updated.productionDate, updated.productionShift);
 
-    updated.quantityKg = totalQty.toFixed(2);
+    updated.quantityKg = quantityKg > 0 ? quantityKg.toFixed(2) : "";
     updated.dispatchLines = JSON.stringify(cleanLines);
     updated.material = normalizeFgGrade(updated.material || updated.grade);
     updated.grade = updated.material || getGradeSummary(cleanLines);
@@ -441,7 +449,12 @@ export default function Dispatch() {
     }
 
     if (e.target.name === "quantityKg") {
-      updated.dispatchLines = JSON.stringify([]);
+      const nextMaterial = normalizeFgGrade(updated.material || updated.grade);
+      const nextLines = nextMaterial
+        ? buildGradeDispatchLines(nextMaterial, e.target.value)
+        : [{ ...blankLine, dispatchQtyKg: e.target.value }];
+      setDispatchLines(nextLines);
+      updated = autoCalculate(updated, nextLines);
     } else {
       updated = autoCalculate(updated, dispatchLines);
     }
@@ -514,6 +527,7 @@ export default function Dispatch() {
 
     setSaving(true);
     setStatus("Saving dispatch...");
+    setSaveDebug(null);
     try {
       if (!form.material) {
         setStatus("Select material.");
@@ -552,20 +566,33 @@ export default function Dispatch() {
         cleanLines
       );
 
-      let res;
+      const debugSummary = {
+        dispatchId: editingRow?.dispatchId || finalForm.dispatchId,
+        grade: material,
+        quantityKg: Number(finalForm.quantityKg || 0),
+        ratePerKg: rate,
+        value: Number(finalForm.quantityKg || 0) * rate,
+        customer: finalForm.customerName || "",
+        unit: finalForm.customerUnit || "",
+      };
+      setSaveDebug(debugSummary);
 
-      if (editingRow?.dispatchId) {
-        res = await apiCall({
-          fn: "dispatch.update",
-          ...finalForm,
-          dispatchId: editingRow.dispatchId,
-        });
-      } else {
-        res = await apiCall({
-          fn: "dispatch.add",
-          ...finalForm,
-        });
-      }
+      const saveRequest = editingRow?.dispatchId
+        ? apiCall({
+            fn: "dispatch.update",
+            ...finalForm,
+            dispatchId: editingRow.dispatchId,
+          })
+        : apiCall({
+            fn: "dispatch.add",
+            ...finalForm,
+          });
+
+      const res = await withTimeout(
+        saveRequest,
+        30000,
+        "Dispatch save timed out. Please check if record was saved before retrying."
+      );
 
       const responseError = validateDispatchSaveResponse(res);
       if (responseError) {
@@ -575,21 +602,29 @@ export default function Dispatch() {
 
       const savedDispatchId = res.dispatchId || finalForm.dispatchId || editingRow?.dispatchId;
       setStatus(res.message || `Dispatch saved successfully: ${savedDispatchId}`);
-      const reloaded = await loadData();
-      if (!reloaded) {
-        setStatus(`Dispatch saved successfully: ${savedDispatchId}, but refresh failed. Please press Refresh/reopen Dispatch before entering another dispatch.`);
-        return;
-      }
       setEditingRow(null);
       setForm(blankForm);
       setDispatchLines([{ ...blankLine }]);
       setStatus(res.message || `Dispatch saved successfully: ${savedDispatchId}`);
+      loadData().then((reloaded) => {
+        if (!reloaded) {
+          setStatus(`Dispatch saved successfully: ${savedDispatchId}, but refresh failed. Please reopen Dispatch before entering another dispatch.`);
+        }
+      });
     } catch (err) {
       console.log("dispatch save failed", err);
       setStatus(err.message || "Dispatch save failed.");
     } finally {
       setSaving(false);
     }
+  }
+
+  function withTimeout(promise, ms, message) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
   }
 
   function validateDispatchSaveResponse(res) {
@@ -677,6 +712,7 @@ export default function Dispatch() {
     setEditingRow(null);
     setForm(blankForm);
     setDispatchLines([{ ...blankLine }]);
+    setSaveDebug(null);
     setStatus("Ready for new dispatch");
   }
 
@@ -746,8 +782,8 @@ export default function Dispatch() {
 
       <div className="factory-kpi-grid">
         <KpiCard title="Dispatch Qty" value={`${totalDispatch.toFixed(0)} Kg`} />
-        <KPI title="Sales" value={`₹ ${totalSales.toFixed(0)}`} />
-        <KPI title="Avg Realization" value={`₹ ${avgRealization}`} />
+        <KPI title="Sales" value={formatRs(totalSales)} />
+        <KPI title="Avg Realization" value={`Rs. ${avgRealization}`} />
         <KpiCard title="FG Available" value={`${totalFgAvailableKg.toFixed(0)} Kg`} tone="neutral" />
         <KpiCard
           title="Selected Available"
@@ -953,7 +989,7 @@ export default function Dispatch() {
           <Field label="Total Value">
             <input
               readOnly
-              value={`â‚¹ ${currentSalesValue.toFixed(0)}`}
+              value={formatRs(currentSalesValue)}
               style={readonlyStyle}
             />
           </Field>
@@ -1006,7 +1042,7 @@ export default function Dispatch() {
           <Field label="Sales Value">
             <input
               readOnly
-              value={`₹ ${currentSalesValue.toFixed(0)}`}
+              value={formatRs(currentSalesValue)}
               style={readonlyStyle}
             />
           </Field>
@@ -1053,6 +1089,15 @@ export default function Dispatch() {
             {saving ? "Saving..." : editingRow ? "Update Dispatch" : "Save Dispatch"}
           </button>
         </div>
+
+        <div style={saveDebugBox}>
+          <b>Save Check</b>
+          <div>Grade: {saveDebug?.grade || normalizeFgGrade(form.material || form.grade) || "-"}</div>
+          <div>Quantity: {Number(saveDebug?.quantityKg ?? operatorDispatchQty ?? 0).toFixed(2)} Kg</div>
+          <div>Rate: Rs. {Number(saveDebug?.ratePerKg ?? rateForGrade(form.material) ?? 0).toLocaleString("en-IN")}</div>
+          <div>Value: {formatRs(saveDebug?.value ?? currentSalesValue)}</div>
+          {saveDebug?.dispatchId && <div>Dispatch ID: {saveDebug.dispatchId}</div>}
+        </div>
       </form>
 
       <div style={sectionCard}>
@@ -1074,7 +1119,7 @@ export default function Dispatch() {
               </div>
 
               <div style={{ color: "#64748b", fontSize: 12, marginTop: 4 }}>
-                ₹ {Number(c.value).toFixed(0)}
+                {formatRs(c.value)}
               </div>
             </div>
           ))}
@@ -1328,6 +1373,16 @@ const stickyBar = {
   justifyContent: "flex-end",
   gap: 10,
   zIndex: 10,
+};
+
+const saveDebugBox = {
+  background: "#f8fafc",
+  border: "1px solid #e2e8f0",
+  borderRadius: 10,
+  padding: 12,
+  color: "#334155",
+  fontSize: 13,
+  lineHeight: 1.7,
 };
 
 const statusStyle = {

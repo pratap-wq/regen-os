@@ -223,8 +223,11 @@ export default function Dispatch() {
     const ledgerFg = materialInventoryFromLedgerBalances(ledgerBalanceRows, {
       itemType: "FG",
     });
+    const hasFgLedgerRows = ledgerBalanceRows.some(
+      (row) => String(row.itemType || "").toUpperCase() === "FG"
+    );
 
-    if (ledgerFg.length > 0) {
+    if (hasFgLedgerRows) {
       return ledgerFg;
     }
 

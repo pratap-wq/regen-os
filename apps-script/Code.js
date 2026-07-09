@@ -104,6 +104,7 @@ function doGet(e) {
     if (p.fn === "dispatch.list") return listMaster("Dispatches");
     if (p.fn === "dispatch.update") return updateDispatch(p);
     if (p.fn === "dispatch.debugSavePreview") return debugDispatchSavePreview(p);
+    if (p.fn === "dispatch.debugLedger") return debugDispatchLedger(p);
     if (p.fn === "dispatch.patchOldData") return patchOldDispatchData();
     // FG Rates
     if (p.fn === "fgRates.add") return addFgRate(p);
@@ -8901,6 +8902,91 @@ function debugDispatchSavePreview(data = {}) {
     timer.mark("output return");
     return output(preview);
   }
+}
+
+function debugDispatchLedger(data = {}) {
+  const dispatchId = String(data.dispatchId || "").trim();
+  if (!dispatchId) {
+    return output({
+      ok: false,
+      error: "dispatch.debugLedger requires dispatchId",
+    });
+  }
+
+  ensureDispatchHeaders_();
+  ensureHeaders_("Inventory_Ledger", inventoryLedgerHeaders_());
+
+  const dispatchRow = getRowById_("Dispatches", "dispatchId", dispatchId);
+  const ledgerRows = getRowsAsObjects("Inventory_Ledger").filter(function(row) {
+    return String(row.sourceRef || "") === dispatchId ||
+      String(row.targetRef || "") === dispatchId;
+  });
+  const activeLedgerRows = ledgerRows.filter(function(row) { return !isDeleted_(row); });
+
+  const gradeSet = {};
+  if (dispatchRow) {
+    parseDispatchLines_(dispatchRow.dispatchLines).forEach(function(line) {
+      const grade = normalizeDispatchGrade_(line.grade || line.material || dispatchRow.grade || dispatchRow.material);
+      if (grade) gradeSet[grade] = true;
+    });
+    const headerGrade = normalizeDispatchGrade_(dispatchRow.grade || dispatchRow.material);
+    if (headerGrade) gradeSet[headerGrade] = true;
+  }
+  activeLedgerRows.forEach(function(row) {
+    const grade = normalizeDispatchGrade_(row.itemName || row.material || row.grade || row.sourceRef);
+    if (grade) gradeSet[grade] = true;
+  });
+
+  const grades = Object.keys(gradeSet);
+  const balanceIncluding = fgLedgerBalanceForGrades_(grades);
+  const dispatchOutByGrade = {};
+  activeLedgerRows.forEach(function(row) {
+    if (String(row.module || "").toUpperCase() !== "DISPATCH") return;
+    const grade = normalizeDispatchGrade_(row.itemName || row.material || row.grade || row.sourceRef);
+    if (!grade) return;
+    dispatchOutByGrade[grade] = (dispatchOutByGrade[grade] || 0) + num(row.qtyOut) - num(row.qtyIn);
+  });
+
+  const balanceBeforeThisDispatch = {};
+  grades.forEach(function(grade) {
+    balanceBeforeThisDispatch[grade] = num(balanceIncluding[grade]) + num(dispatchOutByGrade[grade]);
+  });
+
+  const stockCardRows = getRowsAsObjects("Inventory_Ledger")
+    .filter(function(row) { return !isDeleted_(row); })
+    .filter(function(row) { return String(row.itemType || "").toUpperCase() === "FG"; })
+    .reduce(function(map, row) {
+      const key = (row.materialId || "") + "|FG|" + (row.itemName || "");
+      if (!map[key]) {
+        map[key] = {
+          itemType: row.itemType,
+          materialId: row.materialId || "",
+          itemName: row.itemName,
+          qty: 0,
+        };
+      }
+      map[key].qty += num(row.qtyIn) - num(row.qtyOut);
+      return map;
+    }, {});
+
+  return output({
+    ok: true,
+    dispatchId,
+    dispatchFound: !!dispatchRow,
+    dispatchRow,
+    matchingLedgerRows: ledgerRows,
+    activeLedgerRows,
+    ledgerRowCount: ledgerRows.length,
+    activeLedgerRowCount: activeLedgerRows.length,
+    fgBalanceBeforeThisDispatch: balanceBeforeThisDispatch,
+    fgBalanceAfterThisDispatch: balanceIncluding,
+    dispatchOutByGrade,
+    stockCardSource: "inventoryLedger.balance uses Inventory_Ledger grouped by materialId|itemType|itemName and sums qtyIn - qtyOut. Dispatch UI must not use legacy extrusion fallback when any FG ledger rows exist.",
+    stockCardRows: Object.values(stockCardRows),
+    reasonStockCardValue: activeLedgerRows.length
+      ? "Dispatch ledger rows found. E-grade card should reflect fgBalanceAfterThisDispatch after inventoryLedger.balance refresh."
+      : "No active Inventory_Ledger rows found for this dispatchId; dispatch.add ledger posting or repair must be checked.",
+  });
 }
 
 function addDispatch(data = {}) {

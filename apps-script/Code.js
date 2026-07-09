@@ -2129,7 +2129,7 @@ function seedProductionMaterials() {
 
 const PRODUCTION_MATERIAL_MASTER_DEFAULTS = [
   ["White Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "White PPCP Buckets|White Bucket|Mixed Bucket|Mixed Buckets|Mixed PPCP Buckets|MIXED_PPCP_BUCKETS|MIXED_BUCKETS"],
-  ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "OUTPUT,INPUT", "Flakes|Flakes Unwashed|Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Unwashed Regrind|Unwashed Regrinds|White Regrind|White Regrind Unwashed|Regrinds"],
+  ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "RM", "RM_INWARD,GRINDER,WASH", "OUTPUT,INPUT", "Flakes|Flakes Unwashed|Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Unwashed Regrind|Unwashed Regrinds|White Regrind|White Regrind Unwashed|Regrinds"],
   ["White Regrind (Washed)", "White Regrind (Washed)", "WIP", "RM_INWARD,WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "Washed Flakes|Washed White Flakes|White Washed Flakes|Washed Regrind|White Regrind Washed|Washed Mixed"],
   ["White Sorted Regrind", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "White Sorted Flakes|White Sorted|Sorted White|Sorted Material"],
   ["Virgin PPCP", "Virgin PPCP", "ADDITIVE", "RM_INWARD,EXTRUSION", "INPUT", "Virgin PP|Virgin Material|Virgin"],
@@ -2222,24 +2222,24 @@ const PRODUCTION_MATERIAL_ALIAS_MAP = {
 };
 
 const MATERIAL_ALIAS_MAP_DEFAULTS = [
-  ["Flakes", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 95, "seed"],
-  ["Flakes Unwashed", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 95, "seed"],
-  ["Flakes - Unwashed", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 100, "seed"],
-  ["Mixed Regrind", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 100, "seed"],
+  ["Flakes", "White Regrind (Unwashed)", "RM", "RM_INWARD,WASH", "INPUT", "TRUE", 95, "seed"],
+  ["Flakes Unwashed", "White Regrind (Unwashed)", "RM", "RM_INWARD,WASH", "INPUT", "TRUE", 95, "seed"],
+  ["Flakes - Unwashed", "White Regrind (Unwashed)", "RM", "RM_INWARD,WASH", "INPUT", "TRUE", 100, "seed"],
+  ["Mixed Regrind", "White Regrind (Unwashed)", "RM", "RM_INWARD,WASH", "INPUT", "TRUE", 100, "seed"],
   ["White Bucket", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "TRUE", 100, "seed"],
   ["White Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "TRUE", 100, "seed"],
   ["White PPCP Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "TRUE", 100, "seed"],
   ["Mixed Bucket", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "TRUE", 100, "seed"],
   ["Mixed Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "TRUE", 100, "seed"],
   ["Mixed PPCP Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "TRUE", 100, "seed"],
-  ["Unwashed White Flakes", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 100, "seed"],
-  ["White Flakes (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 100, "seed"],
-  ["Unwashed Regrind", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 100, "seed"],
-  ["Unwashed Regrinds", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 100, "seed"],
-  ["White Regrind", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 95, "seed"],
-  ["White Regrind Unwashed", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 100, "seed"],
-  ["Grinder Flakes", "White Regrind (Unwashed)", "WIP", "GRINDER,WASH", "OUTPUT,INPUT", "TRUE", 100, "seed"],
-  ["Regrinds", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 90, "seed"],
+  ["Unwashed White Flakes", "White Regrind (Unwashed)", "RM", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 100, "seed"],
+  ["White Flakes (Unwashed)", "White Regrind (Unwashed)", "RM", "RM_INWARD,WASH", "INPUT", "TRUE", 100, "seed"],
+  ["Unwashed Regrind", "White Regrind (Unwashed)", "RM", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 100, "seed"],
+  ["Unwashed Regrinds", "White Regrind (Unwashed)", "RM", "RM_INWARD,WASH", "INPUT", "TRUE", 100, "seed"],
+  ["White Regrind", "White Regrind (Unwashed)", "RM", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 95, "seed"],
+  ["White Regrind Unwashed", "White Regrind (Unwashed)", "RM", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 100, "seed"],
+  ["Grinder Flakes", "White Regrind (Unwashed)", "RM", "GRINDER,WASH", "OUTPUT,INPUT", "TRUE", 100, "seed"],
+  ["Regrinds", "White Regrind (Unwashed)", "RM", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 90, "seed"],
   ["Washed White Flakes", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
   ["White Washed Flakes", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
   ["Washed Regrind", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
@@ -3674,7 +3674,7 @@ function approvedV1MaterialMasterRows_() {
   return [
     row("WHITE_BUCKETS", "White Buckets", "RM", { appearsInRMInward: "YES", appearsInGrinderInput: "YES", appearsInWashInput: "YES" }),
     row("WHITE_FLAKES", "White Flakes", "RM", { appearsInRMInward: "YES", appearsInWashInput: "YES" }),
-    row("WHITE_REGRIND_UNWASHED", "White Regrind (Unwashed)", "WIP", { appearsInRMInward: "YES", appearsInGrinderOutput: "YES", appearsInWashInput: "YES" }),
+    row("WHITE_REGRIND_UNWASHED", "White Regrind (Unwashed)", "RM", { appearsInRMInward: "YES", appearsInGrinderOutput: "YES", appearsInWashInput: "YES" }),
     row("WHITE_REGRIND_WASHED", "White Regrind (Washed)", "WIP", { appearsInWashOutput: "YES", appearsInSorterInput: "YES", appearsInExtrusionInput: "YES" }),
     row("WHITE_SORTED_REGRIND", "White Sorted Regrind", "WIP", { appearsInSorterOutput: "YES", appearsInExtrusionInput: "YES" }),
     row("MIXED_SORTED", "Mixed Sorted", "WIP", { appearsInSorterOutput: "YES", appearsInExtrusionInput: "YES" }),
@@ -6178,7 +6178,7 @@ function materialMasterDefaultRows_() {
     ["JARS", "Jars", "RM"],
     ["LIDS", "Lids", "RM"],
     ["PP_MIXED", "PP Mixed", "RM"],
-    ["WHITE_REGRIND_UNWASHED", "White Regrind (Unwashed)", "WIP"],
+    ["WHITE_REGRIND_UNWASHED", "White Regrind (Unwashed)", "RM"],
     ["WHITE_REGRIND_WASHED", "White Regrind (Washed)", "WIP"],
     ["WASHED_WHITE_FLAKES", "Washed White Flakes", "WIP"],
     ["WASHED_MIXED", "Washed Mixed", "WIP"],
@@ -6303,7 +6303,7 @@ function enforceRequiredMaterialMasterFlags_(row) {
   if (code === "WHITE_REGRIND_UNWASHED") {
     next.materialCode = "WHITE_REGRIND_UNWASHED";
     next.materialName = next.materialName || "White Regrind (Unwashed)";
-    next.category = "WIP";
+    next.category = "RM";
     next.status = "ACTIVE";
     next.appearsInRMInward = "YES";
     next.appearsInRmInward = "YES";

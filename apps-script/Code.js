@@ -241,6 +241,15 @@ function addMonthClose(data = {}) {
   const closeId = data.closeId || generateBatchId("MCLOSE");
   const periodMonth = data.periodMonth || getPeriodMonth(todayYmd());
 
+  const validation = validateMonthClosePayload_(data);
+  if (!validation.ok) {
+    return output({
+      ok: false,
+      error: validation.error,
+      blockers: validation.blockers,
+    });
+  }
+
   if (isMonthClosed_(periodMonth)) {
     return output({
       ok: false,
@@ -354,6 +363,47 @@ function addMonthClose(data = {}) {
     periodMonth,
     message: "Monthly close snapshot saved and month locked",
   });
+}
+function validateMonthClosePayload_(data) {
+  const blockers = [];
+  [
+    ["Production sign-off", data.productionSignoff],
+    ["Stores sign-off", data.storesSignoff],
+    ["Accounts sign-off", data.accountsSignoff],
+    ["CEO sign-off", data.ceoSignoff],
+  ].forEach(function(pair) {
+    if (!String(pair[1] || "").trim()) blockers.push(pair[0] + " is required");
+  });
+
+  let exceptionRows = [];
+  try {
+    exceptionRows = JSON.parse(data.exceptions || "[]");
+  } catch (err) {
+    blockers.push("Stock check rows are invalid");
+  }
+  if (!Array.isArray(exceptionRows) || exceptionRows.length === 0) {
+    blockers.push("Stock check rows are required");
+    exceptionRows = [];
+  }
+
+  exceptionRows.forEach(function(row) {
+    const label = row.stockType || row.materialName || row.key || "Stock row";
+    const hasPhysical = row.hasPhysical === true || row.hasPhysical === "true" || row.physicalKg !== "" && row.physicalKg !== null && row.physicalKg !== undefined;
+    const difference = num(row.differenceKg);
+    const reason = String(row.reason || "").trim();
+    const status = String(row.status || "").toUpperCase();
+    if (!hasPhysical) blockers.push(label + ": actual stock is required");
+    if (status.indexOf("APPROVAL PENDING") !== -1) blockers.push(label + ": approval is pending");
+    if (Math.abs(difference) > 0.01 && !reason && status.indexOf("RECONCILED") === -1) {
+      blockers.push(label + ": difference reason is required");
+    }
+  });
+
+  return {
+    ok: blockers.length === 0,
+    blockers,
+    error: blockers.length ? "Month cannot be closed: " + blockers.slice(0, 5).join("; ") : "",
+  };
 }
 function addFactoryCostMaster(data = {}) {
   const sh = getSheet("Factory_Cost_Master");
@@ -10478,7 +10528,7 @@ function materialNormalizationDecision_(value, sheetName, field, row) {
     };
   }
 
-  const storesOnly = materialNormalizationStoresOnly_(original) || materialNormalizationStoresOnly_(clean);
+  const storesOnly = materialNormalizationStoresOnly_(original, sheetName, field, row) || materialNormalizationStoresOnly_(clean, sheetName, field, row);
   if (storesOnly) {
     return {
       action: "IGNORE",
@@ -10566,8 +10616,24 @@ function materialNormalizationDecision_(value, sheetName, field, row) {
   };
 }
 
-function materialNormalizationStoresOnly_(value) {
+function materialNormalizationStoresOnly_(value, sheetName, field, row) {
   const key = materialAliasKey_(value);
+  const contextText = [
+    sheetName,
+    field,
+    row && row.sourceSheet,
+    row && row.legacySourceSheet,
+    row && row.sourceRef,
+    row && row.targetRef,
+    row && row.legacySourceId,
+    row && row.ledgerId,
+  ].join(" ").toUpperCase();
+  if (/STORES[_ ]?INWARD|STORES[_ ]?ISSUE|RBL-STORESINWARD|RBL-STORESISSUE/.test(contextText)) {
+    return {
+      canonicalName: String(value || "").trim(),
+      reason: "Stores-source ledger row excluded from production material migration",
+    };
+  }
   const storesOnly = {
     "CUT RESISTANCE HAND GLOVES": "Cut Resistance Hand Gloves",
     "3 PLY MASK": "3 PLY Mask",

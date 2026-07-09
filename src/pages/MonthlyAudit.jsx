@@ -39,6 +39,10 @@ export default function MonthlyAudit() {
   });
   const [physicalMaterialLines, setPhysicalMaterialLines] = useState({});
   const [adjustmentReasons, setAdjustmentReasons] = useState({});
+  const [showDebug, setShowDebug] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [approvingKey, setApprovingKey] = useState("");
 
   useEffect(() => {
     loadAll();
@@ -169,13 +173,17 @@ export default function MonthlyAudit() {
 
   const readiness = useMemo(() => {
     const physicalPending = materialLines.filter((line) => !line.hasPhysical).length;
-    const investigation = materialLines.filter((line) => line.statusType === "danger").length;
-    const adjustmentPending = materialLines.filter((line) => line.statusType === "warning").length;
+    const openingPending = materialLines.filter((line) => line.openingEditable && !line.hasOpening).length;
+    const openingBlocked = materialLines.filter((line) => line.openingBlocked).length;
+    const approvalPending = materialLines.filter((line) => line.statusType === "warning").length;
+    const differenceLines = materialLines.filter((line) => line.statusType === "danger");
+    const differenceReasonPending = differenceLines.filter((line) => !String(adjustmentReasons[line.key] || "").trim()).length;
     const productionDone = close.production.washInputKg > 0 && close.production.fgProducedKg > 0;
     const dispatchDone = close.production.dispatchKg > 0;
     const expensesEntered = close.costs.factoryExpenseValue > 0 || close.costs.storesIssueValue > 0;
     const physicalDone = materialLines.length > 0 && physicalPending === 0;
-    const differencesResolved = physicalDone && adjustmentPending === 0 && investigation === 0;
+    const openingOk = openingPending === 0 && openingBlocked === 0;
+    const differencesResolvedOrExplained = physicalDone && approvalPending === 0 && differenceReasonPending === 0;
     const signoffsComplete = [
       physical.productionSignoff,
       physical.storesSignoff,
@@ -184,6 +192,15 @@ export default function MonthlyAudit() {
     ].every((value) => String(value || "").trim());
 
     return [
+      {
+        title: "Opening Stock Ready?",
+        ok: openingOk,
+        next: openingBlocked > 0
+          ? "Close the immediate previous month first"
+          : openingPending > 0
+          ? `${openingPending} opening value(s) pending`
+          : "Opening stock ready",
+      },
       {
         title: "Production Done?",
         ok: productionDone,
@@ -200,29 +217,52 @@ export default function MonthlyAudit() {
         next: expensesEntered ? "Costs found" : "Enter factory/stores costs",
       },
       {
-        title: "Physical Stock Entered?",
+        title: "Actual Stock Entered?",
         ok: physicalDone,
-        next: physicalDone ? "Actual stock entered" : `${physicalPending || materialLines.length || 0} stock type(s) pending`,
+        next: physicalDone ? "Actual stock entered" : `${physicalPending || materialLines.length || 0} stock row(s) pending`,
       },
       {
         title: "Differences Resolved?",
-        ok: differencesResolved,
+        ok: differencesResolvedOrExplained,
         next:
-          adjustmentPending > 0
-            ? `${adjustmentPending} approval pending`
-            : investigation > 0
-            ? `${investigation} difference(s) to check`
+          approvalPending > 0
+            ? `${approvalPending} approval pending`
+            : differenceReasonPending > 0
+            ? `${differenceReasonPending} difference reason(s) pending`
+            : differenceLines.length > 0
+            ? "Differences have reasons"
             : "All differences resolved",
       },
       {
-        title: "Sign-Off Done?",
+        title: "Production Sign-Off?",
+        ok: Boolean(String(physical.productionSignoff || "").trim()),
+        next: physical.productionSignoff ? "Production signed" : "Production sign-off pending",
+      },
+      {
+        title: "Stores Sign-Off?",
+        ok: Boolean(String(physical.storesSignoff || "").trim()),
+        next: physical.storesSignoff ? "Stores signed" : "Stores sign-off pending",
+      },
+      {
+        title: "Accounts Sign-Off?",
+        ok: Boolean(String(physical.accountsSignoff || "").trim()),
+        next: physical.accountsSignoff ? "Accounts signed" : "Accounts sign-off pending",
+      },
+      {
+        title: "CEO Sign-Off?",
+        ok: Boolean(String(physical.ceoSignoff || "").trim()),
+        next: monthClosed ? "Month closed" : physical.ceoSignoff ? "CEO signed" : "CEO sign-off pending",
+      },
+      {
+        title: "All Sign-Offs Done?",
         ok: signoffsComplete,
         next: monthClosed ? "Month closed" : signoffsComplete ? "Sign-off complete" : "Complete sign-off",
       },
     ];
-  }, [close, materialLines, physical, monthClosed]);
+  }, [close, materialLines, physical, monthClosed, adjustmentReasons]);
 
   const readyToClose = !monthClosed && readiness.every((card) => card.ok);
+  const busy = loading || saving || closing || Boolean(approvingKey);
 
   function onPhysicalChange(lineKey, value) {
     setPhysicalMaterialLines((prev) => ({ ...prev, [lineKey]: value }));
@@ -273,6 +313,7 @@ export default function MonthlyAudit() {
   }
 
   async function approveAdjustment(line) {
+    if (approvingKey || saving || closing) return;
     if (!line.hasPhysical) {
       setStatus("Enter physical closing stock first.");
       return;
@@ -288,109 +329,123 @@ export default function MonthlyAudit() {
     }
     if (!window.confirm(`Approve ${formatKg(line.remainingKg)} difference for ${line.materialName}?`)) return;
 
-    await savePhysicalSnapshot({ silent: true });
-    const res = await apiCall({
-      fn: "inventoryAdjustments.approveMonthClose",
-      periodMonth: month,
-      closeMonth: month,
-      date: `${month}-01`,
-      module: "MONTH_CLOSE",
-      itemType: line.group,
-      materialId: line.materialId,
-      materialCode: line.materialCode,
-      itemCode: line.materialName,
-      material: line.materialName,
-      stage: line.group,
-      systemQty: line.systemClosing,
-      physicalQty: line.physicalKg,
-      differenceQty: line.remainingKg,
-      value: getDifferenceValue(line, close),
-      reason,
-      remarks: physical.remarks || "",
-      sourceRef: `MONTH_CLOSE:${month}:${line.key}`,
-      approvedBy: physical.accountsSignoff || physical.ceoSignoff || "Month Close",
-    });
-    if (!res?.ok) {
-      setStatus(res?.error || "Difference approval failed.");
-      return;
+    setApprovingKey(line.key);
+    try {
+      await savePhysicalSnapshot({ silent: true });
+      const res = await apiCall({
+        fn: "inventoryAdjustments.approveMonthClose",
+        periodMonth: month,
+        closeMonth: month,
+        date: `${month}-01`,
+        module: "MONTH_CLOSE",
+        itemType: line.group,
+        materialId: line.materialId,
+        materialCode: line.materialCode,
+        itemCode: line.materialName,
+        material: line.materialName,
+        stage: line.group,
+        systemQty: line.systemClosing,
+        physicalQty: line.physicalKg,
+        differenceQty: line.remainingKg,
+        value: getDifferenceValue(line, close),
+        reason,
+        remarks: physical.remarks || "",
+        sourceRef: `MONTH_CLOSE:${month}:${line.key}`,
+        approvedBy: physical.accountsSignoff || physical.ceoSignoff || "Month Close",
+      });
+      if (!res?.ok) {
+        setStatus(res?.error || "Difference approval failed.");
+        return;
+      }
+      setStatus("Difference approved.");
+      await loadAll();
+    } finally {
+      setApprovingKey("");
     }
-    setStatus("Difference approved.");
-    await loadAll();
   }
-
   async function saveSignoffs() {
+    if (saving || closing) return;
+    setSaving(true);
     try {
       setStatus("Saving physical stock and sign-off...");
       await savePhysicalSnapshot();
       await loadAll();
     } catch (err) {
       setStatus(err.message || "Save failed.");
+    } finally {
+      setSaving(false);
     }
   }
-
   async function closeMonth() {
+    if (closing || saving) return;
     if (monthClosed) {
       setStatus("This month is already closed.");
       return;
     }
     if (!readyToClose) {
-      setStatus("Month cannot be closed yet. Enter actual stock, clear differences, and complete sign-off.");
+      setStatus("Month cannot be closed yet. Enter actual stock, add reasons for differences, and complete sign-off.");
       return;
     }
     if (!window.confirm(`Close ${monthLabel(month)}?`)) return;
-    await savePhysicalSnapshot({ silent: true });
-    const res = await apiCall({
-      fn: "monthClose.add",
-      periodMonth: month,
-      status: "Closed",
-      rmSystemClosingKg: sumByGroup(materialLines, "RM", "systemClosing"),
-      washSystemClosingKg: sumByGroup(materialLines, "WIP", "systemClosing"),
-      sortingSystemClosingKg: 0,
-      fgSystemClosingKg: sumByGroup(materialLines, "FG", "systemClosing"),
-      rmPhysicalKg: sumByGroup(materialLines, "RM", "physicalKg"),
-      washPhysicalKg: sumByGroup(materialLines, "WIP", "physicalKg"),
-      sortingPhysicalKg: 0,
-      fgPhysicalKg: sumByGroup(materialLines, "FG", "physicalKg"),
-      storesPhysicalValue: physical.storesPhysicalValue,
-      rmVarianceKg: sumByGroup(materialLines, "RM", "remainingKg"),
-      washVarianceKg: sumByGroup(materialLines, "WIP", "remainingKg"),
-      sortingVarianceKg: 0,
-      fgVarianceKg: sumByGroup(materialLines, "FG", "remainingKg"),
-      rmInwardKg: close.rm.purchasedKg,
-      washInputKg: close.production.washInputKg,
-      washedOutputKg: close.production.washedOutputKg,
-      sortingInputKg: close.production.sortingInputKg,
-      sortingAcceptedKg: close.production.sortingAcceptedKg,
-      extrusionInputKg: close.production.extrusionInputKg,
-      fgProducedKg: close.production.fgProducedKg,
-      dispatchKg: close.production.dispatchKg,
-      salesValue: close.profitability.salesValue,
-      factoryExpenses: close.costs.factoryExpenseValue,
-      storesIssueQty: close.costs.storesIssueValue,
-      estimatedRmConsumedValue: close.costs.estimatedRmConsumedValue,
-      manufacturingProfit: close.profitability.manufacturingProfit,
-      exceptions: JSON.stringify(materialLines.map((line) => ({
-        key: line.key,
-        stockType: line.materialName,
-        category: line.group,
-        openingKg: line.opening,
-        flowInKg: line.flowIn,
-        flowOutKg: line.flowOut,
-        systemKg: line.systemClosing,
-        physicalKg: line.physicalKg,
-        differenceKg: line.remainingKg,
-        status: line.status,
-      }))),
-      productionSignoff: physical.productionSignoff,
-      storesSignoff: physical.storesSignoff,
-      accountsSignoff: physical.accountsSignoff,
-      ceoSignoff: physical.ceoSignoff,
-      remarks: physical.remarks,
-    });
-    setStatus(res?.ok ? "Month closed successfully." : res?.error || "Month close failed.");
-    await loadAll();
+    setClosing(true);
+    try {
+      await savePhysicalSnapshot({ silent: true });
+      const res = await apiCall({
+        fn: "monthClose.add",
+        periodMonth: month,
+        status: "Closed",
+        rmSystemClosingKg: sumByGroup(materialLines, "RM", "systemClosing"),
+        washSystemClosingKg: sumByGroup(materialLines, "WIP", "systemClosing"),
+        sortingSystemClosingKg: 0,
+        fgSystemClosingKg: sumByGroup(materialLines, "FG", "systemClosing"),
+        rmPhysicalKg: sumByGroup(materialLines, "RM", "physicalKg"),
+        washPhysicalKg: sumByGroup(materialLines, "WIP", "physicalKg"),
+        sortingPhysicalKg: 0,
+        fgPhysicalKg: sumByGroup(materialLines, "FG", "physicalKg"),
+        storesPhysicalValue: physical.storesPhysicalValue,
+        rmVarianceKg: sumByGroup(materialLines, "RM", "remainingKg"),
+        washVarianceKg: sumByGroup(materialLines, "WIP", "remainingKg"),
+        sortingVarianceKg: 0,
+        fgVarianceKg: sumByGroup(materialLines, "FG", "remainingKg"),
+        rmInwardKg: close.rm.purchasedKg,
+        washInputKg: close.production.washInputKg,
+        washedOutputKg: close.production.washedOutputKg,
+        sortingInputKg: close.production.sortingInputKg,
+        sortingAcceptedKg: close.production.sortingAcceptedKg,
+        extrusionInputKg: close.production.extrusionInputKg,
+        fgProducedKg: close.production.fgProducedKg,
+        dispatchKg: close.production.dispatchKg,
+        salesValue: close.profitability.salesValue,
+        factoryExpenses: close.costs.factoryExpenseValue,
+        storesIssueQty: close.costs.storesIssueValue,
+        estimatedRmConsumedValue: close.costs.estimatedRmConsumedValue,
+        manufacturingProfit: close.profitability.manufacturingProfit,
+        exceptions: JSON.stringify(materialLines.map((line) => ({
+          key: line.key,
+          stockType: line.materialName,
+          category: line.group,
+          openingKg: line.opening,
+          flowInKg: line.flowIn,
+          flowOutKg: line.flowOut,
+          systemKg: line.systemClosing,
+          physicalKg: line.physicalKg,
+          hasPhysical: line.hasPhysical,
+          differenceKg: line.remainingKg,
+          reason: adjustmentReasons[line.key] || "",
+          status: line.status,
+        }))),
+        productionSignoff: physical.productionSignoff,
+        storesSignoff: physical.storesSignoff,
+        accountsSignoff: physical.accountsSignoff,
+        ceoSignoff: physical.ceoSignoff,
+        remarks: physical.remarks,
+      });
+      setStatus(res?.ok ? "Month closed successfully." : res?.error || "Month close failed.");
+      await loadAll();
+    } finally {
+      setClosing(false);
+    }
   }
-
   return (
     <div style={page}>
       <div style={header}>
@@ -401,7 +456,7 @@ export default function MonthlyAudit() {
         </div>
         <div style={headerActions}>
           <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={input} />
-          <button onClick={loadAll} style={secondaryButton}>{loading ? "Loading..." : "Refresh"}</button>
+          <button onClick={loadAll} disabled={busy} style={busy ? disabledSmallButton : secondaryButton}>{loading ? "Loading..." : "Refresh"}</button>
         </div>
       </div>
 
@@ -463,7 +518,12 @@ export default function MonthlyAudit() {
                         placeholder="Opening"
                         style={qtyInput}
                       />
-                    ) : formatKg(line.opening)}
+                    ) : (
+                      <div>
+                        <div>{formatKg(line.opening)}</div>
+                        <div style={tinyMuted}>{line.openingSource}</div>
+                      </div>
+                    )}
                   </td>
                   <td style={td}>{formatKg(line.flowIn)}</td>
                   <td style={td}>{formatKg(line.flowOut)}</td>
@@ -492,7 +552,7 @@ export default function MonthlyAudit() {
                   <td style={td}><span style={pill(line.statusType)}>{line.status}</span></td>
                   <td style={td}>
                     {line.statusType === "danger" ? (
-                      <button onClick={() => approveAdjustment(line)} style={miniButton}>Approve Difference</button>
+                      <button onClick={() => approveAdjustment(line)} disabled={busy} style={busy ? disabledMiniButton : miniButton}>{approvingKey === line.key ? "Approving..." : "Approve Difference"}</button>
                     ) : line.status}
                   </td>
                 </tr>
@@ -512,6 +572,24 @@ export default function MonthlyAudit() {
         <div style={muted}>Stores are summarized here so consumable items do not crowd the manufacturing stock table.</div>
       </Section>
 
+      <div style={debugToggleRow}>
+        <button onClick={() => setShowDebug((value) => !value)} style={debugButton}>
+          {showDebug ? "Hide Debug" : "Show Debug"}
+        </button>
+      </div>
+      {showDebug && materialGroupView && (
+        <Section title="Mapping Check">
+          <div style={muted}>Debug-only view for migration and Month Close stabilization.</div>
+          <ReconTable
+            rows={[
+              ["Unmapped ledger rows", materialGroupView.unmappedLedgerRows?.length || 0, "text"],
+              ["Invalid ledger rows", materialGroupView.invalidLedgerRows?.length || 0, "text"],
+              ["Mapping warnings", materialGroupView.movementSourceSummary?.mappingWarnings?.length || 0, "text"],
+              ["System source", materialGroupView.source || "-", "text"],
+            ]}
+          />
+        </Section>
+      )}
       <div style={twoColumn}>
         <Section title="Production Summary">
           <ReconTable
@@ -552,7 +630,7 @@ export default function MonthlyAudit() {
           <InputBox label="CEO" name="ceoSignoff" value={physical.ceoSignoff} onChange={onSignoffChange} />
         </div>
         <textarea name="remarks" value={physical.remarks} onChange={onSignoffChange} style={textarea} placeholder="Remarks" />
-        <button onClick={saveSignoffs} style={secondaryButton}>Save Sign-Off</button>
+        <button onClick={saveSignoffs} disabled={saving || closing} style={saving || closing ? disabledSmallButton : secondaryButton}>{saving ? "Saving..." : "Save Sign-Off"}</button>
       </Section>
 
       <div style={closePanel}>
@@ -560,8 +638,8 @@ export default function MonthlyAudit() {
           <h2 style={{ margin: 0 }}>Close Month</h2>
           <div style={muted}>Close is allowed only after actual stock, differences, and sign-off are complete.</div>
         </div>
-        <button onClick={closeMonth} style={readyToClose ? closeButton : disabledButton}>
-          {monthClosed ? "Month Closed" : "Close Month"}
+        <button onClick={closeMonth} disabled={!readyToClose || closing || saving} style={readyToClose && !closing && !saving ? closeButton : disabledButton}>
+          {closing ? "Closing..." : monthClosed ? "Month Closed" : "Close Month"}
         </button>
       </div>
 
@@ -631,7 +709,7 @@ function parsePhysicalMaterialLines(value) {
 }
 
 function buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }) {
-  const previousClose = getPreviousClosedMonth(rows.closeRows, month);
+  const openingContext = getOpeningContext(rows.closeRows, month);
   const wasteReworkGenerated = getWasteReworkGenerated(close);
   const storesPurchasedQty = sumAny(rowsInSelectedMonth(rows.storesInward, month), ["qty", "quantity", "quantityKg", "receivedQty", "inwardQty"]);
   const storesIssuedQty = sumAny(rowsInSelectedMonth(rows.storesIssue, month), ["qty", "quantity", "quantityKg", "issuedQty", "issueQty"]);
@@ -643,7 +721,7 @@ function buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }
       group: "RM",
       flowIn: close.rm.purchasedKg,
       flowOut: close.rm.consumedKg,
-      previousClose,
+      openingContext,
       physicalMaterialLines,
       month,
       adjustments: rows.adjustments,
@@ -654,7 +732,7 @@ function buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }
       group: "WIP",
       flowIn: close.rm.consumedKg,
       flowOut: close.production.fgProducedKg + wasteReworkGenerated,
-      previousClose,
+      openingContext,
       physicalMaterialLines,
       month,
       adjustments: rows.adjustments,
@@ -665,7 +743,7 @@ function buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }
       group: "FG",
       flowIn: close.production.fgProducedKg,
       flowOut: close.production.dispatchKg,
-      previousClose,
+      openingContext,
       physicalMaterialLines,
       month,
       adjustments: rows.adjustments,
@@ -676,7 +754,7 @@ function buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }
       group: "WASTE",
       flowIn: wasteReworkGenerated,
       flowOut: 0,
-      previousClose,
+      openingContext,
       physicalMaterialLines,
       month,
       adjustments: rows.adjustments,
@@ -687,7 +765,7 @@ function buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }
       group: "STORE",
       flowIn: storesPurchasedQty,
       flowOut: storesIssuedQty,
-      previousClose,
+      openingContext,
       physicalMaterialLines,
       month,
       adjustments: rows.adjustments,
@@ -695,11 +773,17 @@ function buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }
   ];
 }
 
-function createFlowStockLine({ key, materialName, group, flowIn, flowOut, previousClose, physicalMaterialLines, month, adjustments }) {
-  const openingEditable = !previousClose;
+function createFlowStockLine({ key, materialName, group, flowIn, flowOut, openingContext, physicalMaterialLines, month, adjustments }) {
+  const previousClose = openingContext?.previousClose || null;
+  const openingEditable = openingContext?.mode === "FIRST_CLOSE_SETUP";
+  const openingBlocked = openingContext?.mode === "PREVIOUS_CLOSE_REQUIRED";
+  const openingValue = physicalMaterialLines[openingKey(key)];
+  const hasOpening = !openingEditable || (openingValue !== "" && openingValue !== undefined && openingValue !== null);
   const opening = openingEditable
-    ? num(physicalMaterialLines[openingKey(key)])
-    : getPreviousClosingForFlow(previousClose, key, group);
+    ? num(openingValue)
+    : previousClose
+    ? getPreviousClosingForFlow(previousClose, key, group)
+    : 0;
   const related = (adjustments || []).filter((a) => {
     const sameMonth = String(a.periodMonth || a.closeMonth || "").slice(0, 7) === String(month);
     const sameSource = String(a.sourceRef || "") === `MONTH_CLOSE:${month}:${key}`;
@@ -722,7 +806,13 @@ function createFlowStockLine({ key, materialName, group, flowIn, flowOut, previo
 
   let status = "Actual Stock Pending";
   let statusType = "pending";
-  if (hasPhysical && Math.abs(differenceKg) <= 0.01) {
+  if (openingBlocked) {
+    status = "Previous Close Pending";
+    statusType = "danger";
+  } else if (openingEditable && !hasOpening) {
+    status = "Opening Pending";
+    statusType = "pending";
+  } else if (hasPhysical && Math.abs(differenceKg) <= 0.01) {
     status = "Reconciled";
     statusType = "success";
   } else if (hasPhysical && Math.abs(pendingAdjustmentKg) > 0.01) {
@@ -732,7 +822,6 @@ function createFlowStockLine({ key, materialName, group, flowIn, flowOut, previo
     status = "Check Difference";
     statusType = "danger";
   }
-
   return {
     key,
     materialId: key,
@@ -741,6 +830,9 @@ function createFlowStockLine({ key, materialName, group, flowIn, flowOut, previo
     group,
     opening,
     openingEditable,
+    openingBlocked,
+    hasOpening,
+    openingSource: openingEditable ? "First close setup" : previousClose ? `Previous approved close: ${previousClose.periodMonth}` : "Previous close required",
     flowIn: num(flowIn),
     flowOut: num(flowOut),
     inward: group === "RM" || group === "STORE" ? num(flowIn) : 0,
@@ -769,14 +861,23 @@ function getWasteReworkGenerated(close) {
   return num(close.materialFlow.wasteSaleKg) + num(close.materialFlow.trueLossKg) + num(close.materialFlow.recoveryReuseKg);
 }
 
-function getPreviousClosedMonth(closeRows = [], month) {
-  return closeRows
+function getOpeningContext(closeRows = [], month) {
+  const closedRows = closeRows
     .filter((row) => String(row.status || "").toUpperCase() === "CLOSED")
-    .filter((row) => String(row.periodMonth || "").slice(0, 7) < String(month))
-    .sort((a, b) => String(a.periodMonth || "").localeCompare(String(b.periodMonth || "")))
-    .pop() || null;
+    .filter((row) => String(row.periodMonth || "").slice(0, 7) < String(month));
+  const previousMonth = getPreviousMonth(month);
+  const previousClose = closedRows.find((row) => String(row.periodMonth || "").slice(0, 7) === previousMonth) || null;
+  if (previousClose) return { mode: "PREVIOUS_CLOSE", previousClose };
+  if (closedRows.length === 0) return { mode: "FIRST_CLOSE_SETUP", previousClose: null };
+  return { mode: "PREVIOUS_CLOSE_REQUIRED", previousClose: null };
 }
 
+function getPreviousMonth(month) {
+  const [year, mm] = String(month || "").split("-").map(Number);
+  if (!year || !mm) return "";
+  const date = new Date(year, mm - 2, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
 function getPreviousClosingForFlow(previousClose, key, group) {
   const fromException = parsePreviousCloseStockJson(previousClose).find((row) => row.key === key);
   if (fromException && fromException.physicalKg !== "" && fromException.physicalKg !== undefined) return num(fromException.physicalKg);
@@ -1007,6 +1108,11 @@ const secondaryButton = { background: "#0f172a", color: "white", border: "none",
 const miniButton = { background: "#0f766e", color: "white", border: "none", borderRadius: 8, padding: "7px 10px", fontWeight: 900, cursor: "pointer", fontSize: 12 };
 const closeButton = { background: "#0f766e", color: "white", border: "none", padding: "14px 22px", borderRadius: 12, cursor: "pointer", fontWeight: 900 };
 const disabledButton = { ...closeButton, background: "#94a3b8", cursor: "not-allowed" };
+const disabledSmallButton = { ...secondaryButton, background: "#94a3b8", cursor: "not-allowed" };
+const disabledMiniButton = { ...miniButton, background: "#94a3b8", cursor: "not-allowed" };
+const debugToggleRow = { display: "flex", justifyContent: "flex-end", margin: "-8px 0 18px" };
+const debugButton = { background: "#e2e8f0", color: "#334155", border: "1px solid #cbd5e1", borderRadius: 999, padding: "7px 12px", fontWeight: 900, cursor: "pointer", fontSize: 12 };
+const tinyMuted = { color: "#64748b", fontSize: 11, marginTop: 3 };
 const closePanel = { ...panel, display: "flex", justifyContent: "space-between", alignItems: "center" };
 const muted = { color: "#64748b", marginTop: 6 };
 const warningBox = { background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 12, fontWeight: 800, marginBottom: 12 };

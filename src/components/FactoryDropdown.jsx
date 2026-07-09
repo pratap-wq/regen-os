@@ -51,7 +51,9 @@ export default function FactoryDropdown({
     return items
       .filter((item) => (filter ? filter(item) : true))
       .filter((item) => String(item.status || "").toUpperCase() !== "DISABLED")
+      .filter((item) => String(item.status || "").toUpperCase() !== "INACTIVE")
       .filter((item) => String(item.status || "").toUpperCase() !== "MERGED")
+      .filter((item) => String(item.status || "").toUpperCase() !== "ARCHIVED")
       .filter((item) => !term || itemLabel(item).toLowerCase().includes(term))
       .slice(0, 250);
   }, [items, inputValue, filter]);

@@ -1,7 +1,13 @@
 import { apiCall } from "../api/api";
 
 export function normalizeProductionMaterialName(value) {
-  return String(value || "").trim().replace(/\s+/g, " ");
+  const clean = String(value || "").trim().replace(/\s+/g, " ");
+  const key = materialCode(clean);
+  return {
+    WHITE_BUCKET: "White Buckets",
+    MIXED_BUCKET: "White Buckets",
+    MIXED_BUCKETS: "White Buckets",
+  }[key] || clean;
 }
 
 export function dropdownFlagForContext(stage, direction) {
@@ -53,4 +59,12 @@ function normalizeMaterialMasterRow(row) {
 
 function isYes(value) {
   return ["YES", "TRUE", "Y", "1", "ON"].includes(String(value || "").toUpperCase());
+}
+
+function materialCode(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }

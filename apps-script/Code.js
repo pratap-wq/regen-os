@@ -30,8 +30,8 @@ function doGet(e) {
     if (p.fn === "factoryMaster.disable") return disableFactoryMaster(p);
     if (p.fn === "factoryMaster.merge") return mergeFactoryMaster(p);
     if (p.fn === "productionMaterials.list") return listProductionMaterialsFromMaterialMaster();
-    if (p.fn === "productionMaterials.add") return addProductionMaterial(p);
-    if (p.fn === "productionMaterials.update") return updateProductionMaterial(p);
+    if (p.fn === "productionMaterials.add") return output({ ok: false, deprecated: true, error: "Use Material Master Admin. Material_Master is the only operational material source." });
+    if (p.fn === "productionMaterials.update") return output({ ok: false, deprecated: true, error: "Use Material Master Admin. Material_Master is the only operational material source." });
     if (p.fn === "productionMaterials.seedDefaults") return output({ ok: true, deprecated: true, message: "Material_Master is the only operational material source" });
     if (p.fn === "productionMaterialMaster.list") return listProductionMaterialMaster(p);
     if (p.fn === "productionMaterialMaster.seedDefaults") return output({ ok: true, deprecated: true, message: "Material_Master is the only operational material source" });
@@ -42,8 +42,9 @@ function doGet(e) {
     if (p.fn === "materialMaster.add") return addMaterialMaster(p);
     if (p.fn === "materialMaster.update") return updateMaterialMaster(p);
     if (p.fn === "materialMaster.updateStatus") return updateMaterialMasterStatus(p);
-    if (p.fn === "materialMaster.seedDefaults") return output({ ok: true, deprecated: true, message: "Add materials in Material Master Admin; no hardcoded defaults are seeded" });
-    if (p.fn === "materialMaster.buildFromExisting") return buildMaterialMasterFromExisting(p);
+    if (p.fn === "materialMaster.seedDefaults") return seedMaterialMasterV1Clean(p);
+    if (p.fn === "materialMaster.seedV1Clean") return seedMaterialMasterV1Clean(p);
+    if (p.fn === "materialMaster.buildFromExisting") return output({ ok: false, deprecated: true, error: "Heavy material ETL is disabled for RegenOS v1. Use materialMaster.seedV1Clean." });
     if (p.fn === "productionRecipes.list") return listProductionRecipes(p);
     if (p.fn === "productionRecipes.add") return addProductionRecipe(p);
     if (p.fn === "productionRecipes.update") return updateProductionRecipe(p);
@@ -599,6 +600,7 @@ function debugRoutes() {
       "materialMaster.update",
       "materialMaster.updateStatus",
       "materialMaster.seedDefaults",
+      "materialMaster.seedV1Clean",
       "materialMaster.buildFromExisting",
       "rm.add",
       "rm.list",
@@ -2640,7 +2642,7 @@ function productionMaterialAllowedFor_(row, stage, direction) {
 
 function materialRowIsActive_(row) {
   const active = String(row.active || row.isActive || row.status || "TRUE").toUpperCase();
-  return active !== "FALSE" && active !== "NO" && active !== "INACTIVE" && active !== "DELETED" && active !== "DISABLED";
+  return active !== "FALSE" && active !== "NO" && active !== "INACTIVE" && active !== "DELETED" && active !== "DISABLED" && active !== "ARCHIVED";
 }
 
 function materialIsProductionStage_(stageName) {
@@ -2700,7 +2702,9 @@ function normalizeProductionMaterialName_(value) {
   const clean = String(value || "").trim().replace(/\s+/g, " ");
   if (!clean) return { canonicalName: "", known: false, originalName: "" };
 
-  const upper = materialCode_(clean);
+  const approvedAlias = approvedV1MaterialAlias_(clean);
+  const lookupName = approvedAlias || clean;
+  const upper = materialCode_(lookupName);
   const rows = getMaterialMasterRows_();
   const match = rows.find(function(row) {
     return materialCode_(row.materialCode || row.materialName) === upper ||
@@ -2712,7 +2716,7 @@ function normalizeProductionMaterialName_(value) {
       canonicalName: match.materialName || match.materialCode,
       known: true,
       originalName: clean,
-      source: "Material_Master",
+      source: approvedAlias ? "Material_Master approved alias" : "Material_Master",
     };
   }
 
@@ -2721,6 +2725,16 @@ function normalizeProductionMaterialName_(value) {
     known: false,
     originalName: clean,
   };
+}
+
+function approvedV1MaterialAlias_(value) {
+  const key = materialCode_(value);
+  const aliases = {
+    WHITE_BUCKET: "White Buckets",
+    MIXED_BUCKET: "White Buckets",
+    MIXED_BUCKETS: "White Buckets",
+  };
+  return aliases[key] || "";
 }
 
 function assertProductionMaterialAllowed_(value, stage, direction, label) {
@@ -3142,8 +3156,8 @@ function updateMaterialMasterStatus(data = {}) {
   if (!target) return output({ ok: false, error: "Missing materialId or materialCode" });
 
   const status = String(data.status || "ACTIVE").trim().toUpperCase();
-  if (["ACTIVE", "INACTIVE", "MERGED", "DISABLED"].indexOf(status) === -1) {
-    return output({ ok: false, error: "Status must be ACTIVE or INACTIVE" });
+  if (["ACTIVE", "INACTIVE", "MERGED", "DISABLED", "ARCHIVED"].indexOf(status) === -1) {
+    return output({ ok: false, error: "Status must be ACTIVE, INACTIVE, MERGED, DISABLED, or ARCHIVED" });
   }
 
   return updateById("Material_Master", "materialId", target.materialId, {
@@ -3613,6 +3627,165 @@ function seedMaterialMasterDefaults() {
   });
 }
 
+function approvedV1MaterialMasterRows_() {
+  function row(materialCode, materialName, category, flags) {
+    const base = {
+      materialCode,
+      materialName,
+      category,
+      unit: "Kg",
+      status: "ACTIVE",
+      defaultQualityRequired: category === "RM" || category === "FG" ? "YES" : "NO",
+      defaultStorageLocation: "",
+      appearsInRmInward: "NO",
+      appearsInRMInward: "NO",
+      appearsInProduction: "NO",
+      appearsInGrinderInput: "NO",
+      appearsInGrinderOutput: "NO",
+      appearsInWashInput: "NO",
+      appearsInWashOutput: "NO",
+      appearsInSorterInput: "NO",
+      appearsInSorterOutput: "NO",
+      appearsInExtrusionInput: "NO",
+      appearsInExtrusionOutput: "NO",
+      appearsInDispatch: "NO",
+      appearsInMonthClose: category === "STORE" ? "NO" : "YES",
+      appearsInInventoryAdjustments: "YES",
+      remarks: "Approved RegenOS v1 material",
+    };
+    Object.keys(flags || {}).forEach(function(key) {
+      base[key] = yesNo_(flags[key]);
+    });
+    if (base.appearsInRMInward === "YES") base.appearsInRmInward = "YES";
+    if (base.appearsInRmInward === "YES") base.appearsInRMInward = "YES";
+    base.appearsInProduction = [
+      base.appearsInGrinderInput,
+      base.appearsInGrinderOutput,
+      base.appearsInWashInput,
+      base.appearsInWashOutput,
+      base.appearsInSorterInput,
+      base.appearsInSorterOutput,
+      base.appearsInExtrusionInput,
+      base.appearsInExtrusionOutput,
+    ].indexOf("YES") !== -1 ? "YES" : "NO";
+    return base;
+  }
+
+  return [
+    row("WHITE_BUCKETS", "White Buckets", "RM", { appearsInRMInward: "YES", appearsInGrinderInput: "YES", appearsInWashInput: "YES" }),
+    row("WHITE_FLAKES", "White Flakes", "RM", { appearsInRMInward: "YES", appearsInWashInput: "YES" }),
+    row("WHITE_REGRIND_UNWASHED", "White Regrind (Unwashed)", "WIP", { appearsInRMInward: "YES", appearsInGrinderOutput: "YES", appearsInWashInput: "YES" }),
+    row("WHITE_REGRIND_WASHED", "White Regrind (Washed)", "WIP", { appearsInWashOutput: "YES", appearsInSorterInput: "YES", appearsInExtrusionInput: "YES" }),
+    row("WHITE_SORTED_REGRIND", "White Sorted Regrind", "WIP", { appearsInSorterOutput: "YES", appearsInExtrusionInput: "YES" }),
+    row("MIXED_SORTED", "Mixed Sorted", "WIP", { appearsInSorterOutput: "YES", appearsInExtrusionInput: "YES" }),
+    row("VIRGIN_PP", "Virgin PP", "ADDITIVE", { appearsInRMInward: "YES", appearsInExtrusionInput: "YES" }),
+    row("BATTERY_PPCP", "Battery PPCP", "RM", { appearsInRMInward: "YES", appearsInExtrusionInput: "YES" }),
+    row("MASTERBATCH", "Masterbatch", "ADDITIVE", { appearsInRMInward: "YES", appearsInExtrusionInput: "YES" }),
+    row("ANTIOXIDANT", "Antioxidant", "ADDITIVE", { appearsInExtrusionInput: "YES" }),
+    row("E1", "E1", "FG", { appearsInExtrusionOutput: "YES", appearsInDispatch: "YES" }),
+    row("E2", "E2", "FG", { appearsInExtrusionOutput: "YES", appearsInDispatch: "YES" }),
+    row("E3", "E3", "FG", { appearsInExtrusionOutput: "YES", appearsInDispatch: "YES" }),
+    row("E4", "E4", "FG", { appearsInExtrusionOutput: "YES", appearsInDispatch: "YES" }),
+    row("E5", "E5", "FG", { appearsInExtrusionOutput: "YES", appearsInDispatch: "YES" }),
+    row("SINK_MATERIAL", "Sink Material", "WASTE", { appearsInWashOutput: "YES" }),
+    row("DUST", "Dust", "WASTE", { appearsInGrinderOutput: "YES", appearsInWashOutput: "YES", appearsInSorterOutput: "YES" }),
+    row("SLUDGE", "Sludge", "WASTE", { appearsInWashOutput: "YES" }),
+    row("WRAPPERS", "Wrappers", "WASTE", { appearsInWashOutput: "YES" }),
+    row("MICRO_PLASTIC", "Micro Plastic", "WASTE", { appearsInWashOutput: "YES" }),
+    row("METAL_REJECT", "Metal Reject", "WASTE", { appearsInGrinderOutput: "YES", appearsInWashOutput: "YES" }),
+    row("COLOUR_REJECT", "Colour Reject", "WASTE", { appearsInSorterOutput: "YES" }),
+    row("LUMPS", "Lumps", "REWORK", { appearsInExtrusionInput: "YES", appearsInExtrusionOutput: "YES" }),
+    row("PURGING", "Purging", "REWORK", { appearsInExtrusionInput: "YES", appearsInExtrusionOutput: "YES" }),
+    row("REWORK_MATERIAL", "Rework Material", "REWORK", { appearsInExtrusionInput: "YES", appearsInExtrusionOutput: "YES" }),
+    row("EXTRUSION_WASTE", "Extrusion Waste", "WASTE", { appearsInExtrusionOutput: "YES" }),
+  ];
+}
+
+function seedMaterialMasterV1Clean(data = {}) {
+  createSheetIfMissing_("Material_Master", materialMasterHeaders_());
+  const sh = getSheet("Material_Master");
+  ensureHeaders_("Material_Master", materialMasterHeaders_());
+
+  const dryRun = String(data.dryRun || "").toUpperCase() === "TRUE";
+  const headers = getHeaders(sh);
+  const existingRows = getRowsAsObjects("Material_Master");
+  const approvedRows = approvedV1MaterialMasterRows_();
+  const approvedByCode = {};
+  approvedRows.forEach(function(row) {
+    approvedByCode[materialCode_(row.materialCode)] = row;
+  });
+
+  const rowByCode = {};
+  existingRows.forEach(function(row, index) {
+    const code = materialCode_(row.materialCode || row.materialName);
+    if (code && !rowByCode[code]) rowByCode[code] = { row, rowNumber: index + 2 };
+  });
+
+  let inserted = 0;
+  let updated = 0;
+  let archived = 0;
+  const archivedRows = [];
+
+  approvedRows.forEach(function(row) {
+    const existing = rowByCode[materialCode_(row.materialCode)];
+    const payload = {
+      ...row,
+      updatedBy: data.createdBy || "seedMaterialMasterV1Clean",
+      updatedAt: new Date(),
+    };
+    if (existing) {
+      if (!dryRun) {
+        Object.keys(payload).forEach(function(key) {
+          setCellByHeader_(sh, headers, existing.rowNumber, key, payload[key]);
+        });
+      }
+      updated += 1;
+    } else {
+      if (!dryRun) {
+        appendObjectRow(sh, {
+          materialId: generateBatchId("MAT"),
+          ...payload,
+          createdBy: data.createdBy || "seedMaterialMasterV1Clean",
+          createdAt: new Date(),
+        });
+      }
+      inserted += 1;
+    }
+  });
+
+  existingRows.forEach(function(row, index) {
+    const code = materialCode_(row.materialCode || row.materialName);
+    const status = String(row.status || "ACTIVE").toUpperCase();
+    if (!code || approvedByCode[code] || status === "ARCHIVED") return;
+    archived += 1;
+    archivedRows.push({
+      materialCode: row.materialCode || code,
+      materialName: row.materialName || "",
+      oldStatus: row.status || "",
+    });
+    if (!dryRun) {
+      const rowNumber = index + 2;
+      setCellByHeader_(sh, headers, rowNumber, "status", "ARCHIVED");
+      setCellByHeader_(sh, headers, rowNumber, "remarks", "Archived during RegenOS v1 clean material reset; retained for pilot-data audit only");
+      setCellByHeader_(sh, headers, rowNumber, "updatedBy", data.createdBy || "seedMaterialMasterV1Clean");
+      setCellByHeader_(sh, headers, rowNumber, "updatedAt", new Date());
+    }
+  });
+
+  return output({
+    ok: true,
+    dryRun,
+    approvedMaterialCount: approvedRows.length,
+    inserted,
+    updated,
+    archived,
+    archivedPreview: archivedRows.slice(0, 25),
+    message: dryRun
+      ? "Dry run complete. Material_Master was not changed."
+      : "Material_Master reset to approved RegenOS v1 operational materials.",
+  });
+}
+
 function listProductionRecipes() {
   createSheetIfMissing_("Production_Recipes", recipeHeaders_());
   createSheetIfMissing_("Recipe_Components", recipeComponentHeaders_());
@@ -3880,7 +4053,7 @@ function listFactoryMaster(data = {}) {
     .map((row) => normalizeFactoryMasterRow_(row, config));
 
   if (!includeDisabled) {
-    rows = rows.filter((row) => ["DISABLED", "INACTIVE", "MERGED"].indexOf(String(row.status || "").toUpperCase()) === -1);
+    rows = rows.filter((row) => ["DISABLED", "INACTIVE", "MERGED", "ARCHIVED"].indexOf(String(row.status || "").toUpperCase()) === -1);
   }
 
   if (search) {
@@ -4418,7 +4591,7 @@ function escapeRegExp_(value) {
 function getMaterialMasterRows_() {
   try {
     return getRowsAsObjects("Material_Master").filter(function(row) {
-      return !isDeleted_(row) && !rowHasBannedOperationalMaterial_(row);
+      return !isDeleted_(row) && materialRowIsActive_(row) && !rowHasBannedOperationalMaterial_(row);
     }).map(function(row) {
       return {
         ...row,
@@ -9103,7 +9276,7 @@ function getInventoryLedgerLiveBalance(data = {}) {
     canonicalMaterials: productionRows.map(function(row) {
       return row.canonicalName || row.materialName || "";
     }).filter(function(name) { return name; }),
-    note: "Live Inventory is grouped from Inventory_Ledger using canonical Production_Material_Master names. Stores are excluded from production inventory; approved extrusion additives are shown separately.",
+    note: "Live Inventory is grouped from Inventory_Ledger using active Material_Master names. Stores are excluded from production inventory; approved extrusion additives are shown separately.",
   });
 }
 
@@ -9138,27 +9311,7 @@ function normalizeLiveInventoryMaterial_(value, aliasIndex) {
 }
 
 function liveInventoryProductionMaterialRows_() {
-  const byCanonical = {};
-
-  productionMaterialRowsFromDefaults_().forEach(function(row) {
-    const key = String(row.canonicalName || row.materialName || "").trim().toUpperCase();
-    if (key) byCanonical[key] = row;
-  });
-
-  getProductionMaterialMasterRows_().forEach(function(row) {
-    const key = String(row.canonicalName || row.materialName || "").trim().toUpperCase();
-    if (!key) return;
-    const fallback = byCanonical[key] || {};
-    byCanonical[key] = {
-      ...fallback,
-      ...row,
-      stageAllowed: mergeCsvValues_(row.stageAllowed, fallback.stageAllowed),
-      directionAllowed: mergeCsvValues_(row.directionAllowed, fallback.directionAllowed),
-      aliases: row.aliases || fallback.aliases || "",
-    };
-  });
-
-  return Object.values(byCanonical);
+  return getProductionMaterialMasterRows_();
 }
 
 function normalizeLiveInventoryCategory_(value) {

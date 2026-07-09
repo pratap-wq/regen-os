@@ -2466,11 +2466,13 @@ function materialMasterRowsForProductionDropdown_() {
       const inventoryAdjustments = materialMasterFlag_(row, ["appearsInInventoryAdjustments"]) === "YES";
       const rules = materialMasterDropdownRules_(category, rm, production, dispatch, monthClose, inventoryAdjustments);
       return {
+        ...row,
         materialId: row.materialId || row.materialCode || ("MAT-DROPDOWN-" + index),
         materialCode: materialCode_(row.materialCode || row.materialName),
         materialName: row.materialName || row.name || row.materialCode,
         canonicalName: row.materialName || row.name || row.materialCode,
         category,
+        materialType: category,
         status: row.status || "ACTIVE",
         stageAllowed: rules.stageAllowed,
         directionAllowed: rules.directionAllowed,
@@ -2810,6 +2812,10 @@ function productionMaterialValidationResult_(value, stage, direction, label) {
   result.category = normalizeMaterialCategoryForDropdown_(row.materialType || row.category);
   result.stageAllowed = row.stageAllowed || "";
   result.directionAllowed = row.directionAllowed || "";
+  result.dropdownFlagKeys = productionDropdownFlagFor_(stageName, directionName);
+  result.dropdownFlagValue = materialMasterFlag_(row, result.dropdownFlagKeys);
+  result.appearsInProduction = materialMasterFlag_(row, ["appearsInProduction"]);
+  result.status = row.status || row.active || "";
   result.materialRowName = row.canonicalName || row.materialName || "";
   result.eligible = productionMaterialAllowedFor_(row, stageName, directionName);
   result.reason = result.eligible

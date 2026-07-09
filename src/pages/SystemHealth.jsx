@@ -24,16 +24,16 @@ export default function SystemHealth() {
   async function loadHealth() {
     try {
       setStatus("Loading connectivity health...");
-      const res = await apiCall({ fn: "systemHealth.connectivity" });
+      const res = await apiCall({ fn: "health.check" });
       if (res.ok === false) {
-        setStatus(res.error || "Failed loading health check");
+        setStatus(formatHealthError(res.error || "Health check route returned an error."));
         return;
       }
       setHealth(res);
       setStatus("");
     } catch (err) {
       console.log(err);
-      setStatus(err.message || "Failed loading health check");
+      setStatus(formatHealthError(err.message || err));
     }
   }
 
@@ -84,6 +84,29 @@ export default function SystemHealth() {
       )}
     </div>
   );
+}
+
+function formatHealthError(error) {
+  const message = String(error || "");
+  const lower = message.toLowerCase();
+
+  if (lower.includes("failed to fetch") || lower.includes("networkerror")) {
+    return "Backend unreachable. Check the Apps Script deployment URL, internet connection, and whether the /exec endpoint is reachable.";
+  }
+
+  if (lower.includes("unknown fn")) {
+    return "Route missing. The deployed Apps Script does not recognize health.check yet. Push/deploy the latest apps-script/Code.js.";
+  }
+
+  if (lower.includes("non-json") || lower.includes("html/404") || lower.includes("<!doctype") || lower.includes("<html")) {
+    return "Non-JSON response. Check that VITE_REGEN_API_URL points to the Apps Script /exec deployment, not an HTML page or old URL.";
+  }
+
+  if (lower.includes("permission") || lower.includes("authorization") || lower.includes("access") || lower.includes("spreadsheet")) {
+    return "Apps Script permission/auth issue. Re-authorize the deployment and confirm the script account can access the RegenOS spreadsheet.";
+  }
+
+  return `Health Check failed: ${message}`;
 }
 
 function SummaryCard({ title, value, status }) {

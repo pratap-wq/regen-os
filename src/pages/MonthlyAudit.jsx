@@ -166,6 +166,8 @@ export default function MonthlyAudit() {
   const rmStockLine = materialLines.find((line) => line.key === "FLOW|RM");
   const virginStockLine = materialLines.find((line) => line.key === "FLOW|VIRGIN_POLYMER");
   const batteryStockLine = materialLines.find((line) => line.key === "FLOW|BATTERY_MATERIAL");
+  const wipStockLine = materialLines.find((line) => line.key === "FLOW|WIP");
+  const wasteReworkStockLine = materialLines.find((line) => line.key === "FLOW|WASTE_REWORK");
   const openingDebug = getOpeningDebug(rows.closeRows, month);
   const rmReceivedProofKg =
     num(close.rm.totalReceivedKg) -
@@ -507,9 +509,9 @@ export default function MonthlyAudit() {
                 {[
                   "Stock Type",
                   "Opening",
-                  "In",
-                  "Out",
-                  "System Stock",
+                  "Received / Added",
+                  "Used / Moved Out",
+                  "System Closing",
                   "Actual Stock",
                   "Difference",
                   "Reason",
@@ -540,7 +542,10 @@ export default function MonthlyAudit() {
                     )}
                   </td>
                   <td style={td}>{formatKg(line.flowIn)}</td>
-                  <td style={td}>{formatKg(line.flowOut)}</td>
+                  <td style={td} title={movementOutTitle(line)}>
+                    <div>{formatKg(line.flowOut)}</div>
+                    {line.flowOutNote && <div style={tinyMuted}>{line.flowOutNote}</div>}
+                  </td>
                   <td style={td}>{formatKg(line.systemClosing)}</td>
                   <td style={td}>
                     <input
@@ -627,6 +632,23 @@ export default function MonthlyAudit() {
                 ["Battery Opening", batteryStockLine?.opening || 0],
                 ["RM Out", rmStockLine?.flowOut || 0],
                 ["RM System Stock", rmStockLine?.systemClosing || 0],
+              ]}
+            />
+          </Section>
+          <Section title="WIP / Waste Movement Check">
+            <div style={muted}>Debug-only proof that Waste / Rework reduces WIP once and is not subtracted again from RM Stock.</div>
+            <ReconTable
+              rows={[
+                ["WIP Opening", wipStockLine?.opening || 0],
+                ["WIP In = RM Used", close.rm.consumedKg],
+                ["WIP Out to FG = FG Produced", close.production.fgProducedKg],
+                ["WIP Out to Waste/Rework = Waste/Rework Generated", getWasteReworkGenerated(close)],
+                ["WIP Closing = Opening + RM Used - FG - Waste/Rework", wipStockLine?.systemClosing || 0],
+                ["RM Stock Out = RM Used only", rmStockLine?.flowOut || 0],
+                ["Waste/Rework Opening", wasteReworkStockLine?.opening || 0],
+                ["Waste/Rework Generated", wasteReworkStockLine?.flowIn || 0],
+                ["Waste/Rework Disposed/Reused", wasteReworkStockLine?.flowOut || 0],
+                ["Waste/Rework Closing", wasteReworkStockLine?.systemClosing || 0],
               ]}
             />
           </Section>
@@ -804,6 +826,11 @@ function buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }
       group: "WIP",
       flowIn: close.rm.consumedKg,
       flowOut: close.production.fgProducedKg + wasteReworkGenerated,
+      flowOutNote: "FG Produced + Waste/Rework Generated",
+      flowOutBreakdown: [
+        ["FG Produced", close.production.fgProducedKg],
+        ["Waste/Rework Generated", wasteReworkGenerated],
+      ],
       openingContext,
       physicalMaterialLines,
       month,
@@ -826,6 +853,7 @@ function buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }
       group: "WASTE",
       flowIn: wasteReworkGenerated,
       flowOut: 0,
+      flowOutNote: "Disposed/reused not recorded separately",
       openingContext,
       physicalMaterialLines,
       month,
@@ -845,7 +873,7 @@ function buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }
   ];
 }
 
-function createFlowStockLine({ key, materialName, group, flowIn, flowOut, adjustmentItemName, adjustmentItemType, openingContext, physicalMaterialLines, month, adjustments }) {
+function createFlowStockLine({ key, materialName, group, flowIn, flowOut, flowOutNote, flowOutBreakdown = [], adjustmentItemName, adjustmentItemType, openingContext, physicalMaterialLines, month, adjustments }) {
   const previousClose = openingContext?.previousClose || null;
   const openingEditable = false;
   const openingBlocked = openingContext?.mode === "PREVIOUS_CLOSE_REQUIRED";
@@ -918,6 +946,8 @@ function createFlowStockLine({ key, materialName, group, flowIn, flowOut, adjust
         : "First system month",
     flowIn: num(flowIn),
     flowOut: num(flowOut),
+    flowOutNote,
+    flowOutBreakdown,
     inward: group === "RM" || group === "STORE" ? num(flowIn) : 0,
     produced: group === "WIP" || group === "FG" || group === "WASTE" ? num(flowIn) : 0,
     consumed: group === "RM" || group === "WIP" ? num(flowOut) : 0,
@@ -1134,6 +1164,13 @@ function movementSummary(line) {
     line.issued ? `Stores ${formatKg(line.issued)}` : "",
     `Adj ${formatKg(line.approvedAdjustments)}`,
   ].filter(Boolean).join(" | ");
+}
+
+function movementOutTitle(line) {
+  if (!line?.flowOutBreakdown?.length) return line?.flowOutNote || "";
+  return line.flowOutBreakdown
+    .map(([label, value]) => `${label}: ${formatKg(value)}`)
+    .join(" + ");
 }
 
 function formatQtyCount(value) {

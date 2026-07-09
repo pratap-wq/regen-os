@@ -15,13 +15,8 @@ function doGet(e) {
       });
     }
 
-    if (p.fn === "health") {
-      return output({
-        ok: true,
-        message: "Regen OS API running",
-        timestamp: new Date(),
-      });
-    }
+    if (p.fn === "health") return output(buildHealthCheck_(p));
+    if (p.fn === "health.check") return output(buildHealthCheck_(p));
     if (p.fn === "debug.routes") return output(debugRoutes());
 
     // Masters
@@ -482,6 +477,7 @@ function updateFactoryCostMaster(data = {}) {
     if (p.fn === "inventoryLedger.audit") return auditInventoryLedger(p);
     if (p.fn === "inventoryLedger.rebuild") return rebuildInventoryLedger(p);
     if (p.fn === "materialNormalization.preview") return output(previewSpreadsheetMaterialNormalization(p));
+    if (p.fn === "health.check") return output(buildHealthCheck_(p));
     if (p.fn === "systemHealth.connectivity") return output(systemHealthConnectivity(p));
     if (p.fn === "materialFlow.auditJune2026") return auditJuneMaterialFlowV1(p);
     if (p.fn === "materialFlow.migrationPlanJune2026") return output(materialFlowMigrationPlanJune2026(p));
@@ -573,6 +569,7 @@ function debugRoutes() {
     mode: "READ_ONLY",
     routes: [
       "health",
+      "health.check",
       "debug.routes",
       "machines.list",
       "categories.list",
@@ -666,6 +663,94 @@ function debugRoutes() {
       "db.repairHeaders",
     ],
   };
+}
+
+function buildHealthCheck_(data) {
+  const timestamp = new Date().toISOString();
+  const base = {
+    ok: true,
+    timestamp,
+    generatedAt: timestamp,
+    app: "RegenOS",
+    backend: "Apps Script",
+    mode: "READ_ONLY",
+    sheetsReachable: false,
+    checks: [],
+  };
+
+  try {
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const requiredSheets = ["RM_Inward", "Inventory_Ledger", "Month_Close"];
+    const missingSheets = requiredSheets.filter(function (name) {
+      return !ss.getSheetByName(name);
+    });
+
+    base.sheetsReachable = missingSheets.length === 0;
+    base.checks.push(healthCard_(
+      "apps-script-reachability",
+      "Apps Script / Sheets Reachability",
+      "Backend",
+      missingSheets.length ? "red" : "green",
+      missingSheets.length,
+      missingSheets.map(function (name) { return { sheetName: name }; }),
+      missingSheets.length
+        ? "Apps Script can run, but required sheets are missing or inaccessible. Check spreadsheet permissions and sheet names."
+        : "Apps Script can reach the RegenOS spreadsheet and required sheets."
+    ));
+
+    if (!missingSheets.length) {
+      try {
+        const detailed = systemHealthConnectivity(data || {});
+        base.route = "health.check";
+        base.detailedRoute = detailed.route || "systemHealth.connectivity";
+        base.checks = base.checks.concat(detailed.checks || []);
+        base.summary = summarizeHealthChecks_(base.checks);
+        base.overallStatus = overallHealthStatus_(base.summary);
+        return base;
+      } catch (err) {
+        base.checks.push(healthCard_(
+          "detailed-health-error",
+          "Detailed Health Check",
+          "System Health",
+          "red",
+          1,
+          [{ error: String(err), stack: err && err.stack ? String(err.stack).slice(0, 500) : "" }],
+          "Apps Script route is reachable, but detailed health checks failed. Review Apps Script permissions, sheet headers, or recent route changes."
+        ));
+      }
+    }
+  } catch (err) {
+    base.checks.push(healthCard_(
+      "backend-permission-or-sheet-error",
+      "Apps Script Permission / Sheet Access",
+      "Backend",
+      "red",
+      1,
+      [{ error: String(err), stack: err && err.stack ? String(err.stack).slice(0, 500) : "" }],
+      "Apps Script could not open the RegenOS spreadsheet. Re-authorize the deployment or verify the script account has spreadsheet access."
+    ));
+  }
+
+  base.route = "health.check";
+  base.summary = summarizeHealthChecks_(base.checks);
+  base.overallStatus = overallHealthStatus_(base.summary);
+  return base;
+}
+
+function summarizeHealthChecks_(checks) {
+  return (checks || []).reduce(function (summary, check) {
+    const status = String(check.status || "yellow").toLowerCase();
+    if (status === "red") summary.red += 1;
+    else if (status === "green") summary.green += 1;
+    else summary.yellow += 1;
+    return summary;
+  }, { red: 0, yellow: 0, green: 0 });
+}
+
+function overallHealthStatus_(summary) {
+  if (num(summary && summary.red) > 0) return "red";
+  if (num(summary && summary.yellow) > 0) return "yellow";
+  return "green";
 }
 
 // ============================================================

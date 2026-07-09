@@ -594,9 +594,13 @@ export default function MonthlyAudit() {
         <Section title="Production Summary">
           <ReconTable
             rows={[
-              ["RM Received", close.rm.purchasedKg],
+              ["RM Received (Recycled RM)", close.rm.purchasedKg],
+              ["Virgin Added", close.production.virginAddedKg],
+              ["Battery Material", close.production.batteryMaterialKg],
+              ["Additives", close.production.additivesKg],
+              ["Total Extruder Feed", close.production.totalExtruderFeedKg],
               ["RM Used", close.rm.consumedKg],
-              ["FG Made", close.production.fgProducedKg],
+              ["FG Produced", close.production.fgProducedKg],
               ["Dispatched", close.production.dispatchKg],
               ["Waste / Rework", close.materialFlow.wasteSaleKg + close.materialFlow.trueLossKg + close.materialFlow.recoveryReuseKg],
               ["Recovery %", close.production.overallRecovery, "percent"],

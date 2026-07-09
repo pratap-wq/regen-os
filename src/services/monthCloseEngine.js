@@ -41,12 +41,9 @@ export function calculateMonthClose({
   const factoryExpenses = rowsInMonth(factoryExpenseRows);
   const factoryCostMaster = rowsInMonth(factoryCostMasterRows);
 
-  const rmPurchasedKg = sum(rm, "netWeight");
-  const rmValue = rm.reduce(
-    (s, r) => s + num(r.netWeight) * num(r.ratePerKg),
-    0
-  );
-
+  const rmFeed = classifyRmReceivedFeed(rm);
+  const rmPurchasedKg = rmFeed.recycledRmKg;
+  const rmValue = rmFeed.recycledRmValue;
   const washInputKg = sum(wash, "inputWeightKg");
   const washedOutputKg = sum(wash, "washedOutputKg");
 
@@ -66,7 +63,12 @@ export function calculateMonthClose({
     (s, r) => s + num(r.inputWeightKg || r.totalInputKg),
     0
   );
-
+  const extrusionFeed = classifyExtrusionFeed(extrusion);
+  const totalExtruderFeedKg =
+    rmPurchasedKg +
+    extrusionFeed.virginAddedKg +
+    extrusionFeed.batteryMaterialKg +
+    extrusionFeed.additivesKg;
   const fgProducedKg = sum(extrusion, "fgOutputKg");
   const dispatchKg = sum(dispatch, "quantityKg");
 
@@ -184,7 +186,11 @@ export function calculateMonthClose({
       washRecovery: pct(washedOutputKg, washInputKg),
       sortingRecovery: pct(sortingAcceptedKg, sortingInputKg),
       extrusionRecovery: pct(fgProducedKg, extrusionInputKg),
-      overallRecovery: pct(fgProducedKg, washInputKg),
+      overallRecovery: pct(fgProducedKg, totalExtruderFeedKg),
+      totalExtruderFeedKg,
+      virginAddedKg: extrusionFeed.virginAddedKg,
+      batteryMaterialKg: extrusionFeed.batteryMaterialKg,
+      additivesKg: extrusionFeed.additivesKg,
     },
 
     inventory: {
@@ -196,6 +202,7 @@ export function calculateMonthClose({
 
     materialFlow: {
       rmInputKg: washInputKg,
+      totalExtruderFeedKg,
       fgKg: fgProducedKg,
       recoveryReuseKg,
       wasteSaleKg,
@@ -234,6 +241,81 @@ export function calculateMonthClose({
   };
 }
 
+function classifyRmReceivedFeed(rows) {
+  return rows.reduce(
+    (acc, row) => {
+      const lines = parseMaterialLines(row.materialLinesJson || row.materialsJson || row.materialBreakupJson);
+      if (lines.length) {
+        lines.forEach((line) => {
+          const qty = num(line.quantityKg || line.qtyKg || line.quantity || line.netWeight);
+          const value = qty * num(line.rate || line.ratePerKg || row.ratePerKg);
+          addRmFeedQty(acc, materialLabel(line.material || line.materialName || row.material || row.materialType), qty, value);
+        });
+        return acc;
+      }
+
+      const qty = num(row.netWeight || row.quantityKg || row.qtyKg || row.quantity);
+      const value = qty * num(row.ratePerKg || row.rate || row.purchaseRate);
+      addRmFeedQty(acc, materialLabel(row.material || row.materialName || row.materialType || row.itemName), qty, value);
+      return acc;
+    },
+    { recycledRmKg: 0, recycledRmValue: 0 }
+  );
+}
+
+function addRmFeedQty(acc, label, qty, value) {
+  if (!qty) return;
+  if (isExcludedFromRecycledRm(label)) return;
+  acc.recycledRmKg += qty;
+  acc.recycledRmValue += value;
+}
+
+function classifyExtrusionFeed(rows) {
+  return rows.reduce(
+    (acc, row) => {
+      acc.virginAddedKg += sumKeys(row, ["virginMaterialKg", "virginPpcpKg", "virginPpKg", "virginKg"]);
+      acc.batteryMaterialKg += sumKeys(row, ["batteryFlakesKg", "batteryPpcpKg", "batteryRegrindKg", "batteryKg"]);
+      acc.additivesKg += sumKeys(row, [
+        "masterBatchKg",
+        "masterbatchKg",
+        "antiOxidantKg",
+        "antioxidantKg",
+        "mfiModifierKg",
+        "mfiKg",
+        "tio2Kg",
+        "tiO2Kg",
+        "additiveKg",
+        "additivesKg",
+      ]);
+      return acc;
+    },
+    { virginAddedKg: 0, batteryMaterialKg: 0, additivesKg: 0 }
+  );
+}
+
+function isExcludedFromRecycledRm(label) {
+  const text = String(label || "").toUpperCase();
+  return /VIRGIN\s*PP|VIRGIN\s*PPCP|BATTERY\s*PPCP|BATTERY\s*REGRIND|BATTERY\s*SCRAP|BATTERY\s*FLAKES|MASTER\s*BATCH|MASTERBATCH|ANTIOXIDANT|ANTI\s*OXIDANT|MFI\s*MODIFIER|TIO2|TI\s*O2|ADDITIVE/.test(text);
+}
+
+function materialLabel(value) {
+  return String(value || "").trim();
+}
+
+function parseMaterialLines(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function sumKeys(row, keys) {
+  return keys.reduce((total, key) => total + num(row[key]), 0);
+}
 function getStoreRate(itemName, storesMasterRows) {
   const master = storesMasterRows.find(
     (x) => String(x.itemName) === String(itemName)

@@ -2459,12 +2459,7 @@ function materialMasterRowsForProductionDropdown_() {
     .map(function(row, index) {
       const category = normalizeMaterialCategoryForDropdown_(row.category);
       const code = materialCode_(row.materialCode || row.materialName);
-      const rm = materialMasterFlag_(row, ["appearsInRmInward", "appearsInRMInward"]) === "YES";
-      const production = materialMasterFlag_(row, ["appearsInProduction"]) === "YES" || materialHasAnyProductionDropdownFlag_(row);
-      const dispatch = materialMasterFlag_(row, ["appearsInDispatch"]) === "YES";
-      const monthClose = materialMasterFlag_(row, ["appearsInMonthClose"]) === "YES";
-      const inventoryAdjustments = materialMasterFlag_(row, ["appearsInInventoryAdjustments"]) === "YES";
-      const rules = materialMasterDropdownRules_(category, rm, production, dispatch, monthClose, inventoryAdjustments);
+      const rules = materialMasterDropdownRulesFromFlags_(row, category);
       return {
         ...row,
         materialId: row.materialId || row.materialCode || ("MAT-DROPDOWN-" + index),
@@ -2587,6 +2582,62 @@ function materialMasterDropdownRules_(category, rm, production, dispatch, monthC
   if (inventoryAdjustments) {
     stages.push("INVENTORY_ADJUSTMENTS");
     directions.push("INPUT");
+  }
+
+  return {
+    stageAllowed: uniqueCsv_(stages),
+    directionAllowed: uniqueCsv_(directions),
+  };
+}
+
+function materialMasterDropdownRulesFromFlags_(row, category) {
+  const stages = [];
+  const directions = [];
+
+  function add(flag, stage, direction) {
+    if (materialMasterFlag_(row, [flag]) !== "YES") return;
+    stages.push(stage);
+    directions.push(direction);
+  }
+
+  if (materialMasterFlag_(row, ["appearsInRMInward", "appearsInRmInward"]) === "YES") {
+    stages.push("RM_INWARD");
+    directions.push("INPUT");
+  }
+
+  add("appearsInGrinderInput", "GRINDER", "INPUT");
+  add("appearsInGrinderOutput", "GRINDER", "OUTPUT");
+  add("appearsInWashInput", "WASH", "INPUT");
+  add("appearsInWashOutput", "WASH", "OUTPUT");
+  add("appearsInSorterInput", "SORTING", "INPUT");
+  add("appearsInSorterOutput", "SORTING", "OUTPUT");
+  add("appearsInExtrusionInput", "EXTRUSION", "INPUT");
+  add("appearsInExtrusionOutput", "EXTRUSION", "OUTPUT");
+
+  if (materialMasterFlag_(row, ["appearsInDispatch"]) === "YES") {
+    stages.push("DISPATCH");
+    directions.push("INPUT");
+  }
+
+  if (materialMasterFlag_(row, ["appearsInMonthClose"]) === "YES") {
+    stages.push("MONTH_CLOSE");
+    directions.push("INPUT");
+  }
+
+  if (materialMasterFlag_(row, ["appearsInInventoryAdjustments"]) === "YES") {
+    stages.push("INVENTORY_ADJUSTMENTS");
+    directions.push("INPUT");
+  }
+
+  if (!stages.length && !directions.length) {
+    return materialMasterDropdownRules_(
+      category,
+      false,
+      materialMasterFlag_(row, ["appearsInProduction"]) === "YES",
+      false,
+      false,
+      false
+    );
   }
 
   return {
@@ -3734,11 +3785,11 @@ function seedMaterialMasterV1Clean(data = {}) {
 
   approvedRows.forEach(function(row) {
     const existing = rowByCode[materialCode_(row.materialCode)];
-    const payload = {
+    const payload = enforceRequiredMaterialMasterFlags_({
       ...row,
       updatedBy: data.createdBy || "seedMaterialMasterV1Clean",
       updatedAt: new Date(),
-    };
+    });
     if (existing) {
       if (!dryRun) {
         Object.keys(payload).forEach(function(key) {

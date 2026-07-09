@@ -3124,7 +3124,18 @@ function updateMaterialMaster(data = {}) {
   const materialName = String(data.materialName || data.name || "").trim();
   if (!materialName) throw new Error("Material name is required");
 
-  return updateById("Material_Master", "materialId", data.materialId, {
+  const patch = materialMasterPatchFromPayload_(data, materialName);
+  const materialId = String(data.materialId || "");
+
+  if (materialId.indexOf("DEFAULT-") === 0) {
+    return materializeDefaultMaterialMaster_(data, patch);
+  }
+
+  return updateById("Material_Master", "materialId", data.materialId, patch);
+}
+
+function materialMasterPatchFromPayload_(data, materialName) {
+  return {
     materialCode: materialCode_(data.materialCode || materialName),
     materialName,
     category: normalizeMaterialCategory_(data.category || data.materialType),
@@ -3148,6 +3159,40 @@ function updateMaterialMaster(data = {}) {
     appearsInInventoryAdjustments: yesNo_(data.appearsInInventoryAdjustments),
     remarks: data.remarks || "",
     updatedAt: new Date(),
+  };
+}
+
+function materializeDefaultMaterialMaster_(data, patch) {
+  const sh = getSheet("Material_Master");
+  const materialCode = materialCode_(patch.materialCode || patch.materialName);
+  const existing = getRowsAsObjects("Material_Master").find(function(row) {
+    return !isDeleted_(row) && materialCode_(row.materialCode || row.materialName) === materialCode;
+  });
+
+  if (existing && existing.materialId) {
+    return updateById("Material_Master", "materialId", existing.materialId, {
+      ...patch,
+      remarks: patch.remarks || existing.remarks || "Materialized from default row",
+    });
+  }
+
+  const materialId = data.newMaterialId || generateBatchId("MAT");
+  appendObjectRow(sh, {
+    materialId,
+    ...patch,
+    materialCode,
+    status: patch.status || "ACTIVE",
+    remarks: patch.remarks || "Materialized from default row",
+    createdBy: data.createdBy || data.updatedBy || "System",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  return output({
+    ok: true,
+    materialized: true,
+    materialId,
+    materialCode,
   });
 }
 

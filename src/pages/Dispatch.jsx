@@ -36,13 +36,14 @@ export default function Dispatch() {
     productionDate: "",
     productionShift: "",
 
-    customerName: "Mold-Tek",
+    customerName: "",
     customerUnit: "",
     invoiceNo: "",
     vehicleNo: "",
     driverName: "",
     dispatchStatus: "DISPATCHED",
     ratePerKg: "",
+    rateSource: "",
     noOfBags: "",
     truckCapacityKg: "",
     dispatchLocation: "",
@@ -60,6 +61,8 @@ export default function Dispatch() {
   const [extrusionRows, setExtrusionRows] = useState([]);
   const [ledgerBalanceRows, setLedgerBalanceRows] = useState([]);
   const [customerRows, setCustomerRows] = useState([]);
+  const [customerUnitRows, setCustomerUnitRows] = useState([]);
+  const [fgRateRows, setFgRateRows] = useState([]);
   const [status, setStatus] = useState("");
   const [editingRow, setEditingRow] = useState(null);
   const [form, setForm] = useState(blankForm);
@@ -71,17 +74,21 @@ export default function Dispatch() {
 
   async function loadData() {
     try {
-      const [dispatch, extrusion, ledgerBalance, customers] = await Promise.all([
+      const [dispatch, extrusion, ledgerBalance, customers, customerUnits, fgRates] = await Promise.all([
         apiCall({ fn: "dispatch.list" }),
         apiCall({ fn: "extrusion.list" }),
         apiCall({ fn: "inventoryLedger.balance" }),
         apiCall({ fn: "factoryMaster.list", masterType: "customer" }),
+        apiCall({ fn: "factoryMaster.list", masterType: "customerUnit" }),
+        apiCall({ fn: "fgRates.list" }),
       ]);
 
       setRows(dispatch.rows || []);
       setExtrusionRows(extrusion.rows || []);
       setLedgerBalanceRows(ledgerBalance.rows || []);
       setCustomerRows(customers.rows || []);
+      setCustomerUnitRows(customerUnits.rows || []);
+      setFgRateRows(fgRates.rows || []);
     } catch (err) {
       console.log(err);
       setStatus(err.message);
@@ -297,6 +304,46 @@ export default function Dispatch() {
     return updated;
   }
 
+  function lookupFgRate(material, customerName, dateValue) {
+    const gradeKey = normalizeFgGrade(material);
+    const customerKey = String(customerName || "").trim().toUpperCase();
+    const targetTime = new Date(dateValue || today).getTime();
+
+    const matches = fgRateRows
+      .filter((row) => String(row.status || "ACTIVE").toUpperCase() !== "DELETED")
+      .filter((row) => normalizeFgGrade(row.grade) === gradeKey)
+      .filter((row) => {
+        const rowCustomer = String(row.customerName || "").trim().toUpperCase();
+        return !rowCustomer || !customerKey || rowCustomer === customerKey;
+      })
+      .map((row) => {
+        const rowTime = new Date(dateForInput(row.date) || today).getTime();
+        return {
+          row,
+          rowTime: Number.isNaN(rowTime) ? 0 : rowTime,
+          customerExact: String(row.customerName || "").trim().toUpperCase() === customerKey,
+        };
+      })
+      .filter((item) => !targetTime || item.rowTime <= targetTime || item.rowTime === 0)
+      .sort((a, b) => {
+        if (a.customerExact !== b.customerExact) return a.customerExact ? -1 : 1;
+        return b.rowTime - a.rowTime;
+      });
+
+    return matches[0]?.row || null;
+  }
+
+  function applyAutoRate(updated) {
+    if (!updated.material || Number(updated.ratePerKg || 0) > 0) return updated;
+    const rateRow = lookupFgRate(updated.material, updated.customerName, updated.date);
+    if (!rateRow) return updated;
+    return {
+      ...updated,
+      ratePerKg: rateRow.ratePerKg || "",
+      rateSource: rateRow.customerName ? "FG Rates customer match" : "FG Rates grade default",
+    };
+  }
+
   function onChange(e) {
     let updated = {
       ...form,
@@ -312,7 +359,14 @@ export default function Dispatch() {
       updated.grade = updated.material;
       updated.lotNo = "";
       updated.sourceExtrusionBatchId = "";
+      updated.ratePerKg = "";
+      updated.rateSource = "";
       setDispatchLines([{ ...blankLine, grade: updated.material, material: updated.material }]);
+    }
+
+    if (["customerName", "date"].includes(e.target.name) && String(updated.rateSource || "").startsWith("FG Rates")) {
+      updated.ratePerKg = "";
+      updated.rateSource = "";
     }
 
     if (e.target.name === "quantityKg") {
@@ -321,17 +375,26 @@ export default function Dispatch() {
       updated = autoCalculate(updated, dispatchLines);
     }
 
+    if (["material", "customerName", "date"].includes(e.target.name)) {
+      updated = applyAutoRate(updated);
+    }
+
     setForm(updated);
   }
 
   const customerUnitOptions = useMemo(() => {
     const selectedCustomer = String(form.customerName || "").trim().toUpperCase();
-    const values = customerRows
+    const unitValues = customerUnitRows
+      .filter((row) => !["DISABLED", "INACTIVE", "DELETED", "ARCHIVED", "MERGED"].includes(String(row.status || "ACTIVE").toUpperCase()))
+      .filter((row) => !selectedCustomer || String(row.customerName || row.customer || "").trim().toUpperCase() === selectedCustomer)
+      .map((row) => row.unitName || row.name || row.customerUnit || "");
+    const legacyValues = customerRows
       .filter((row) => !selectedCustomer || String(row.customerName || row.name || "").trim().toUpperCase() === selectedCustomer)
-      .map((row) => row.customerUnit || row.unit || "")
+      .map((row) => row.customerUnit || row.unit || "");
+    const values = [...unitValues, ...legacyValues]
       .filter(Boolean);
     return [...new Set(values)].sort();
-  }, [customerRows, form.customerName]);
+  }, [customerRows, customerUnitRows, form.customerName]);
 
   function buildGradeDispatchLines(material, quantityKg) {
     const grade = normalizeFgGrade(material);
@@ -506,7 +569,7 @@ export default function Dispatch() {
 
   const totalSales = activeRows.reduce(
     (sum, r) =>
-      sum + Number(r.quantityKg || 0) * Number(r.ratePerKg || 0),
+      sum + Number(r.dispatchValue || Number(r.quantityKg || 0) * Number(r.ratePerKg || 0)),
     0
   );
 
@@ -543,7 +606,7 @@ export default function Dispatch() {
 
       map[customer].qty += Number(r.quantityKg || 0);
       map[customer].value +=
-        Number(r.quantityKg || 0) * Number(r.ratePerKg || 0);
+        Number(r.dispatchValue || Number(r.quantityKg || 0) * Number(r.ratePerKg || 0));
     });
 
     return Object.values(map)
@@ -656,19 +719,26 @@ export default function Dispatch() {
           </Field>
 
           <Field label="Customer Unit / Destination">
-            <input
-              list="dispatch-customer-units"
+            <select
               name="customerUnit"
               value={form.customerUnit}
               onChange={onChange}
               style={inputStyle}
-              placeholder="Select or type destination"
-            />
-            <datalist id="dispatch-customer-units">
+            >
+              <option value="">Select Unit</option>
               {customerUnitOptions.map((unit) => (
-                <option key={unit} value={unit} />
+                <option key={unit} value={unit}>{unit}</option>
               ))}
-            </datalist>
+            </select>
+            <button
+              type="button"
+              onClick={() => {
+                window.location.href = "/factory-masters?master=customerUnit";
+              }}
+              style={smallLinkButton}
+            >
+              Manage Units
+            </button>
           </Field>
 
           <Field label="Invoice">
@@ -703,7 +773,7 @@ export default function Dispatch() {
               name="dispatchLocation"
               value={form.dispatchLocation}
               onChange={onChange}
-              placeholder="Example: Mold-Tek Unit 5"
+              placeholder="Dispatch location"
               style={inputStyle}
             />
           </Field>
@@ -767,6 +837,7 @@ export default function Dispatch() {
               onChange={onChange}
               style={inputStyle}
             />
+            {form.rateSource && <div style={hintText}>{form.rateSource}</div>}
           </Field>
 
           <Field label="Sales Value">
@@ -871,6 +942,7 @@ export default function Dispatch() {
           { key: "grade", label: "Material" },
           { key: "quantityKg", label: "Qty Kg" },
           { key: "ratePerKg", label: "Rate" },
+          { key: "dispatchValue", label: "Value" },
           { key: "dispatchStatus", label: "Status" },
         ]}
         onEdit={editRow}
@@ -1037,6 +1109,17 @@ const clearButton = {
   borderRadius: 8,
   cursor: "pointer",
   fontWeight: 600,
+};
+
+const smallLinkButton = {
+  marginTop: 6,
+  background: "transparent",
+  color: "#0f766e",
+  border: "none",
+  padding: 0,
+  cursor: "pointer",
+  fontWeight: 700,
+  fontSize: 12,
 };
 
 const stickyBar = {

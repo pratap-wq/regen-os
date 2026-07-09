@@ -10,6 +10,7 @@ const typeDefaults = {
   material: { category: "RM", unit: "Kg" },
   supplier: { supplierType: "RAW_MATERIAL" },
   customer: {},
+  customerUnit: {},
   machine: {},
   recipe: { processType: "EXTRUSION" },
   storeItem: { unit: "Nos" },
@@ -221,6 +222,19 @@ export default function FactoryMasterModal({
               <label style={field}>
                 <span style={label}>Customer Unit</span>
                 <input name="customerUnit" value={form.customerUnit || ""} onChange={onChange} style={input} />
+              </label>
+            </>
+          )}
+
+          {masterType === "customerUnit" && (
+            <>
+              <label style={field}>
+                <span style={label}>Customer Name</span>
+                <input name="customerName" value={form.customerName || ""} onChange={onChange} style={input} />
+              </label>
+              <label style={field}>
+                <span style={label}>Unit Code</span>
+                <input name="unitCode" value={form.unitCode || ""} onChange={onChange} style={input} />
               </label>
             </>
           )}

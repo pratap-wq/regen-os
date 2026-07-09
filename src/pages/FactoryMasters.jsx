@@ -33,6 +33,12 @@ const MASTER_CONFIGS = [
     columns: ["code", "name", "customerUnit", "status"],
   },
   {
+    key: "customerUnit",
+    label: "Customer Units",
+    sheet: "Customer_Units",
+    columns: ["customerName", "code", "name", "status"],
+  },
+  {
     key: "storeItem",
     label: "Store Items",
     sheet: "Stores_Master",

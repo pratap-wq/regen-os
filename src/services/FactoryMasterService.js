@@ -144,6 +144,15 @@ function normalizeMasterRows(masterType, rows = []) {
       };
     }
 
+    if (type === "customerunit") {
+      return {
+        ...row,
+        id: row.id || row.unitId || row.unitCode || row.unitName || "",
+        code: row.code || row.unitCode || "",
+        name: row.name || row.unitName || row.unitCode || "",
+      };
+    }
+
     if (type === "productgrade") {
       return {
         ...row,

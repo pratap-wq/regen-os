@@ -1004,6 +1004,24 @@ const REGEN_DB_SCHEMA = {
     "mergedAt",
     "favorite",
   ],
+  Customer_Units: [
+    "unitId",
+    "customerName",
+    "customerCode",
+    "unitName",
+    "unitCode",
+    "status",
+    "createdBy",
+    "createdAt",
+    "updatedBy",
+    "updatedAt",
+    "disabledBy",
+    "disabledAt",
+    "mergedIntoId",
+    "mergedBy",
+    "mergedAt",
+    "favorite",
+  ],
   Quality_Test_Master: [
     "testId",
     "testName",
@@ -1376,6 +1394,10 @@ const REGEN_DB_SCHEMA = {
     "quantityKg",
     "noOfBags",
     "ratePerKg",
+    "dispatchValue",
+    "freightPerKg",
+    "freightAmount",
+    "rateSource",
     "dispatchLocation",
     "remarks",
     "createdBy",
@@ -3998,6 +4020,15 @@ function factoryMasterConfigs_() {
       headers: REGEN_DB_SCHEMA.Customers,
       defaults: {},
     },
+    customerUnit: {
+      sheet: "Customer_Units",
+      idField: "unitId",
+      nameField: "unitName",
+      codeField: "unitCode",
+      idPrefix: "CU",
+      headers: REGEN_DB_SCHEMA.Customer_Units,
+      defaults: {},
+    },
     machine: {
       sheet: "Machine_Master",
       idField: "machineId",
@@ -4132,7 +4163,12 @@ function addFactoryMaster(data = {}) {
 
   const duplicate = getRowsAsObjects(config.sheet)
     .filter((row) => !isDeleted_(row))
-    .find((row) => String(row[config.nameField] || row.name || "").trim().toUpperCase() === name.toUpperCase());
+    .find((row) => {
+      const sameName = String(row[config.nameField] || row.name || "").trim().toUpperCase() === name.toUpperCase();
+      if (!sameName) return false;
+      if (config.sheet !== "Customer_Units") return true;
+      return String(row.customerName || "").trim().toUpperCase() === String(data.customerName || "").trim().toUpperCase();
+    });
 
   if (duplicate) {
     return output({ ok: true, alreadyExists: true, row: normalizeFactoryMasterRow_(duplicate, config) });
@@ -8274,6 +8310,7 @@ function updateExtrusionBatch(data = {}) {
 // DISPATCH
 
 function ensureDispatchHeaders_() {
+  createSheetIfMissing_("Dispatches", REGEN_DB_SCHEMA.Dispatches);
   ensureHeaders_("Dispatches", [
     "dispatchId",
     "sourceExtrusionBatchId",
@@ -8290,6 +8327,10 @@ function ensureDispatchHeaders_() {
     "quantityKg",
     "noOfBags",
     "ratePerKg",
+    "dispatchValue",
+    "freightPerKg",
+    "freightAmount",
+    "rateSource",
     "dispatchLocation",
     "remarks",
     "dispatchStatus",
@@ -8304,6 +8345,60 @@ function ensureDispatchHeaders_() {
     "createdAt",
     "updatedAt"
   ]);
+}
+
+function lookupFgRateForDispatch_(grade, customerName, dateValue) {
+  createSheetIfMissing_("FG_Rates", REGEN_DB_SCHEMA.FG_Rates);
+  ensureHeaders_("FG_Rates", REGEN_DB_SCHEMA.FG_Rates);
+  const gradeKey = materialCode_(grade);
+  const customerKey = String(customerName || "").trim().toUpperCase();
+  const targetDate = new Date(normalizeDateOnly_(dateValue || todayYmd())).getTime();
+  const candidates = getRowsAsObjects("FG_Rates")
+    .filter(function(row) { return !isDeleted_(row); })
+    .filter(function(row) { return materialCode_(row.grade) === gradeKey; })
+    .filter(function(row) {
+      const rowCustomer = String(row.customerName || "").trim().toUpperCase();
+      return !rowCustomer || !customerKey || rowCustomer === customerKey;
+    })
+    .map(function(row) {
+      const rowTime = new Date(normalizeDateOnly_(row.date || todayYmd())).getTime();
+      return {
+        row,
+        rowTime: isNaN(rowTime) ? 0 : rowTime,
+        customerExact: String(row.customerName || "").trim().toUpperCase() === customerKey,
+      };
+    })
+    .filter(function(item) { return !targetDate || item.rowTime <= targetDate || item.rowTime === 0; })
+    .sort(function(a, b) {
+      if (a.customerExact !== b.customerExact) return a.customerExact ? -1 : 1;
+      return b.rowTime - a.rowTime;
+    });
+
+  const match = candidates[0];
+  if (!match) return { ratePerKg: 0, freightPerKg: 0, source: "Manual / Missing FG_Rates" };
+  return {
+    ratePerKg: num(match.row.ratePerKg),
+    freightPerKg: num(match.row.freightPerKg),
+    source: match.customerExact ? "FG_Rates customer match" : "FG_Rates grade default",
+  };
+}
+
+function dispatchFinancials_(data, lineRows, date) {
+  const firstGrade = lineRows.map(function(line) { return dispatchLineGrade_(line, data.grade || data.material); }).filter(Boolean)[0] ||
+    normalizeDispatchFgGrade_(data.grade || data.material);
+  const rateLookup = lookupFgRateForDispatch_(firstGrade, data.customerName, date);
+  const ratePerKg = num(data.ratePerKg) || rateLookup.ratePerKg;
+  const freightPerKg = num(data.freightPerKg) || rateLookup.freightPerKg;
+  const quantityKg = num(data.quantityKg) || lineRows.reduce(function(sum, line) {
+    return sum + dispatchLineQty_(line, data.quantityKg);
+  }, 0);
+  return {
+    ratePerKg,
+    freightPerKg,
+    dispatchValue: round2(quantityKg * ratePerKg),
+    freightAmount: round2(quantityKg * freightPerKg),
+    rateSource: num(data.ratePerKg) ? "Manual" : rateLookup.source,
+  };
 }
 
 function normalizeDispatchLines_(data = {}) {
@@ -8480,8 +8575,8 @@ function validateDispatchAvailability_(data = {}) {
 }
 
 function addDispatch(data = {}) {
-  const sh = getSheet("Dispatches");
   ensureDispatchHeaders_();
+  const sh = getSheet("Dispatches");
 
   const dispatchId = data.dispatchId || generateBatchId("DIS");
   const duplicate = assertNoDuplicateCreate_("Dispatches", "dispatchId", dispatchId);
@@ -8492,6 +8587,7 @@ function addDispatch(data = {}) {
   const dispatchLines = normalizeDispatchLines_(data);
   const lineRows = parseDispatchLines_(dispatchLines);
   const headerGrade = lineRows.map(function(line) { return dispatchLineGrade_(line, data.grade || data.material); }).filter(Boolean).join(" | ");
+  const financials = dispatchFinancials_(data, lineRows, date);
   validateOperationalWrite_({ ...data, date });
   validateDispatchAvailability_({ ...data, dispatchId });
 
@@ -8520,7 +8616,11 @@ function addDispatch(data = {}) {
     lotNo: data.lotNo || headerGrade,
     quantityKg: num(data.quantityKg),
     noOfBags: num(data.noOfBags),
-    ratePerKg: num(data.ratePerKg),
+    ratePerKg: financials.ratePerKg,
+    dispatchValue: financials.dispatchValue,
+    freightPerKg: financials.freightPerKg,
+    freightAmount: financials.freightAmount,
+    rateSource: financials.rateSource,
     dispatchLocation: data.dispatchLocation || "",
     remarks: data.remarks || "",
     dispatchStatus: data.dispatchStatus || "DISPATCHED",
@@ -8570,6 +8670,7 @@ function updateDispatch(data = {}) {
   const dispatchLines = normalizeDispatchLines_(data);
   const lineRows = parseDispatchLines_(dispatchLines);
   const headerGrade = lineRows.map(function(line) { return dispatchLineGrade_(line, data.grade || data.material); }).filter(Boolean).join(" | ");
+  const financials = dispatchFinancials_(data, lineRows, date);
   const isDeleted =
     String(data.status || "").toUpperCase() === "DELETED" ||
     String(data.dispatchStatus || "").toUpperCase() === "DELETED";
@@ -8596,7 +8697,11 @@ function updateDispatch(data = {}) {
     lotNo: data.lotNo || sourceId,
     quantityKg: num(data.quantityKg),
     noOfBags: num(data.noOfBags),
-    ratePerKg: num(data.ratePerKg),
+    ratePerKg: financials.ratePerKg,
+    dispatchValue: financials.dispatchValue,
+    freightPerKg: financials.freightPerKg,
+    freightAmount: financials.freightAmount,
+    rateSource: financials.rateSource,
     dispatchLocation: data.dispatchLocation || "",
     remarks: data.remarks || "",
     dispatchStatus: isDeleted ? "DELETED" : data.dispatchStatus || "DISPATCHED",

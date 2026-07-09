@@ -9,6 +9,18 @@ export const PRODUCTION_MATERIAL_ALIASES = {
   "MIXED PPCP BUCKETS": "White Buckets",
   "MIXED_PPCP_BUCKETS": "White Buckets",
   "MIXED_BUCKETS": "White Buckets",
+  "FLAKES": "White Regrind (Unwashed)",
+  "FLAKES UNWASHED": "White Regrind (Unwashed)",
+  "FLAKES - UNWASHED": "White Regrind (Unwashed)",
+  "FLAKES SEMI WASHED": "White Regrind (Washed)",
+  "FLAKES - SEMI WASHED": "White Regrind (Washed)",
+  "FLAKES SEMI-WASHED": "White Regrind (Washed)",
+  "FLAKES - SEMI-WASHED": "White Regrind (Washed)",
+  "FLAKES DOMINANT COLOUR": "Colour Reject",
+  "FLAKES - DOMINANT COLOUR": "Colour Reject",
+  "FLAKES DOMINANT COLOR": "Colour Reject",
+  "FLAKES - DOMINANT COLOR": "Colour Reject",
+  "MIXED REGRIND": "White Regrind (Unwashed)",
   "UNWASHED WHITE FLAKES": "White Regrind (Unwashed)",
   "WHITE FLAKES (UNWASHED)": "White Regrind (Unwashed)",
   "GRINDER FLAKES": "White Regrind (Unwashed)",
@@ -76,7 +88,21 @@ export function productionMaterialAllowed(row, stage, direction) {
   const stages = String(row.stageAllowed || "").toUpperCase().split(",").map((x) => x.trim());
   const directions = String(row.directionAllowed || "").toUpperCase().split(",").map((x) => x.trim());
 
-  return stages.includes(expectedStage) && directions.includes(expectedDirection);
+  if (stages.includes(expectedStage) && directions.includes(expectedDirection)) return true;
+  return materialEligibleForContext(row, expectedStage, expectedDirection);
+}
+
+function materialEligibleForContext(row, stage, direction) {
+  const category = String(row.category || row.materialType || "").toUpperCase();
+  const productionInputStages = ["GRINDER", "WASH", "SORTING", "EXTRUSION"];
+
+  if (direction !== "INPUT") return false;
+  if (stage === "DISPATCH") return category === "FG";
+  if (stage === "RM_INWARD") return category === "RM" || category === "WIP";
+  if (productionInputStages.includes(stage)) {
+    return ["RM", "WIP", "REWORK", "ADDITIVE"].includes(category);
+  }
+  return false;
 }
 
 export async function listProductionMaterialMaster({ stage = "", direction = "" } = {}) {

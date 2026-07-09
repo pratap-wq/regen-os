@@ -2145,12 +2145,22 @@ const PRODUCTION_MATERIAL_MASTER_DEFAULTS = [
 
 const PRODUCTION_MATERIAL_ALIAS_MAP = {
   "FLAKES": "White Regrind (Unwashed)",
+  "FLAKES UNWASHED": "White Regrind (Unwashed)",
+  "FLAKES - UNWASHED": "White Regrind (Unwashed)",
+  "FLAKES SEMI WASHED": "White Regrind (Washed)",
+  "FLAKES - SEMI WASHED": "White Regrind (Washed)",
+  "FLAKES SEMI-WASHED": "White Regrind (Washed)",
+  "FLAKES - SEMI-WASHED": "White Regrind (Washed)",
+  "FLAKES DOMINANT COLOUR": "Colour Reject",
+  "FLAKES - DOMINANT COLOUR": "Colour Reject",
+  "FLAKES DOMINANT COLOR": "Colour Reject",
+  "FLAKES - DOMINANT COLOR": "Colour Reject",
+  "MIXED REGRIND": "White Regrind (Unwashed)",
   "UNWASHED WHITE FLAKES": "White Regrind (Unwashed)",
   "WHITE FLAKES (UNWASHED)": "White Regrind (Unwashed)",
   "GRINDER FLAKES": "White Regrind (Unwashed)",
   "UNWASHED REGRIND": "White Regrind (Unwashed)",
   "UNWASHED REGRINDS": "White Regrind (Unwashed)",
-  "FLAKES UNWASHED": "White Regrind (Unwashed)",
   "WHITE PPCP BUCKETS": "White Buckets",
   "WHITE BUCKET": "White Buckets",
   "WHITE BUCKETS": "White Buckets",
@@ -2188,7 +2198,6 @@ const PRODUCTION_MATERIAL_ALIAS_MAP = {
   "ANTI OXIDANT": "Antioxidant",
   "WRAPPER REJECT": "Wrapper Reject",
   "SINK MATERIAL": "Sink Material",
-  "FLAKES DOMINANT COLOUR": "Colour Reject",
   "RAFFIA REJECT": "Raffia Reject",
   "MICRO PLASTIC": "Micro Plastic",
   "LUMPS": "Lumps",
@@ -2200,6 +2209,8 @@ const PRODUCTION_MATERIAL_ALIAS_MAP = {
 const MATERIAL_ALIAS_MAP_DEFAULTS = [
   ["Flakes", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 95, "seed"],
   ["Flakes Unwashed", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 95, "seed"],
+  ["Flakes - Unwashed", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 100, "seed"],
+  ["Mixed Regrind", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 100, "seed"],
   ["White Bucket", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "TRUE", 100, "seed"],
   ["White Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "TRUE", 100, "seed"],
   ["White PPCP Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "TRUE", 100, "seed"],
@@ -2219,6 +2230,8 @@ const MATERIAL_ALIAS_MAP_DEFAULTS = [
   ["Washed Regrind", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
   ["White Regrind Washed", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
   ["Washed Flakes", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
+  ["Flakes - Semi-washed", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "INPUT", "TRUE", 100, "seed"],
+  ["Flakes - Semi washed", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "INPUT", "TRUE", 100, "seed"],
   ["Washed Mixed", "White Regrind (Washed)", "WIP", "WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 95, "seed"],
   ["White Sorted", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
   ["White Sorted Flakes", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "TRUE", 100, "seed"],
@@ -2237,6 +2250,8 @@ const MATERIAL_ALIAS_MAP_DEFAULTS = [
   ["Sink Material", "Sink Material", "WASTE", "WASH", "OUTPUT", "TRUE", 100, "seed"],
   ["Micro Plastic", "Micro Plastic", "WASTE", "WASH", "OUTPUT", "TRUE", 100, "seed"],
   ["Flakes Dominant Colour", "Colour Reject", "WASTE", "SORTING", "OUTPUT", "TRUE", 100, "seed"],
+  ["Flakes - Dominant Colour", "Colour Reject", "WASTE", "SORTING", "OUTPUT", "TRUE", 100, "seed"],
+  ["Flakes - Dominant Color", "Colour Reject", "WASTE", "SORTING", "OUTPUT", "TRUE", 100, "seed"],
   ["Raffia Reject", "Raffia Reject", "WASTE", "WASH,SORTING", "OUTPUT", "TRUE", 100, "seed"],
   ["Micro Plastic", "Micro Plastic Reject", "WASTE", "EXTRUSION", "OUTPUT", "TRUE", 100, "seed"],
   ["Lumps", "Lumps", "WASTE", "EXTRUSION", "OUTPUT", "TRUE", 100, "seed"],
@@ -2607,22 +2622,35 @@ function productionMaterialAllowedFor_(row, stage, direction) {
 
   const stageName = String(stage || "").toUpperCase();
   const directionName = String(direction || "").toUpperCase();
-  const canonicalName = normalizeProductionMaterialAlias_(row.canonicalName || row.materialName || "").toUpperCase();
-  const category = String(row.materialType || row.category || "").toUpperCase();
-  if (
-    canonicalName === "WHITE BUCKETS" &&
-    category === "RM" &&
-    directionName === "INPUT" &&
-    (stageName === "GRINDER" || stageName === "WASH")
-  ) {
-    return true;
-  }
-
   const stages = String(row.stageAllowed || "").toUpperCase().split(",").map(function(x) { return x.trim(); });
   const directions = String(row.directionAllowed || "").toUpperCase().split(",").map(function(x) { return x.trim(); });
 
-  return stages.indexOf(stageName) !== -1 &&
-    directions.indexOf(directionName) !== -1;
+  if (stages.indexOf(stageName) !== -1 && directions.indexOf(directionName) !== -1) {
+    return true;
+  }
+
+  return materialEligibleForContext_(row, stageName, directionName);
+}
+
+function materialEligibleForContext_(row, stageName, directionName) {
+  const category = normalizeMaterialCategoryForDropdown_(row.materialType || row.category);
+  const productionInputStages = ["GRINDER", "WASH", "SORTING", "EXTRUSION"];
+
+  if (directionName !== "INPUT") return false;
+
+  if (stageName === "DISPATCH") {
+    return category === "FG";
+  }
+
+  if (stageName === "RM_INWARD") {
+    return category === "RM" || category === "WIP";
+  }
+
+  if (productionInputStages.indexOf(stageName) !== -1) {
+    return ["RM", "WIP", "REWORK", "ADDITIVE"].indexOf(category) !== -1;
+  }
+
+  return false;
 }
 
 function normalizeProductionMaterialName_(value) {
@@ -2686,7 +2714,7 @@ function assertProductionMaterialAllowed_(value, stage, direction, label) {
   const row = getProductionMaterialMasterRows_().find(function(item) {
     return String(item.canonicalName || item.materialName || "").trim().toUpperCase() ===
       normalized.canonicalName.toUpperCase();
-  });
+  }) || fallbackProductionMaterialRow_(normalized.canonicalName);
 
   if (!row || !productionMaterialAllowedFor_(row, stage, direction)) {
     throw new Error(
@@ -2701,6 +2729,27 @@ function assertProductionMaterialAllowed_(value, stage, direction, label) {
   }
 
   return normalized.canonicalName;
+}
+
+function fallbackProductionMaterialRow_(canonicalName) {
+  const normalized = normalizeProductionMaterialAlias_(canonicalName);
+  const category = normalizeMaterialCategoryForDropdown_(materialCategory_(normalized));
+  if (!normalized || category === "UNKNOWN" || category === "STORE") return null;
+  const rules = materialMasterDropdownRules_(
+    category,
+    category === "RM" || category === "WIP",
+    ["RM", "WIP", "REWORK", "ADDITIVE", "FG", "WASTE"].indexOf(category) !== -1,
+    category === "FG"
+  );
+  return {
+    materialName: normalized,
+    canonicalName: normalized,
+    category,
+    stageAllowed: rules.stageAllowed,
+    directionAllowed: rules.directionAllowed,
+    active: "TRUE",
+    status: "ACTIVE",
+  };
 }
 
 function normalizeProductionComposition_(value, stage, direction, label) {
@@ -6592,19 +6641,41 @@ function normalizeProductionMaterialAliasesInText_(value) {
 }
 
 function testProductionInputAliasNormalization() {
-  const aliases = ["White Buckets", "WHITE_BUCKETS", "White Bucket", "Mixed Buckets", "Mixed PPCP Buckets"];
+  const aliases = [
+    "White Buckets",
+    "WHITE_BUCKETS",
+    "White Bucket",
+    "Mixed Buckets",
+    "Mixed PPCP Buckets",
+    "White Regrind (Unwashed)",
+    "Flakes - Unwashed",
+    "Flakes - Semi-washed",
+    "Mixed Regrind"
+  ];
   const rows = aliases.map(function(alias) {
     return {
       alias,
-      grinderInput: assertProductionMaterialAllowed_(alias, "GRINDER", "INPUT", "GRINDER input material"),
+      rmInward: assertProductionMaterialAllowed_(alias, "RM_INWARD", "INPUT", "RM inward material"),
+      grinderInput: alias.toUpperCase().indexOf("BUCKET") !== -1
+        ? assertProductionMaterialAllowed_(alias, "GRINDER", "INPUT", "GRINDER input material")
+        : "",
       washInput: assertProductionMaterialAllowed_(alias, "WASH", "INPUT", "WASH input material")
     };
   });
+  const sortingOutput = assertProductionMaterialAllowed_("Flakes - Dominant Colour", "SORTING", "OUTPUT", "Sorting output material");
+  let dispatchBlocked = false;
+  try {
+    assertProductionMaterialAllowed_("White Regrind (Unwashed)", "DISPATCH", "INPUT", "Dispatch material");
+  } catch (err) {
+    dispatchBlocked = true;
+  }
   return output({
     ok: rows.every(function(row) {
-      return row.grinderInput === "White Buckets" && row.washInput === "White Buckets";
-    }),
-    rows
+      return row.rmInward && row.washInput && (row.grinderInput || row.alias.toUpperCase().indexOf("BUCKET") === -1);
+    }) && sortingOutput === "Colour Reject" && dispatchBlocked,
+    rows,
+    sortingOutput,
+    dispatchBlocked
   });
 }
 

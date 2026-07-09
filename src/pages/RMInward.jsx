@@ -148,7 +148,7 @@ export default function RMInward() {
   }
 
   function inferRmMaterial(quantityKg) {
-    return n(quantityKg) < 5000 ? "White PPCP Buckets" : "White Regrind (Unwashed)";
+    return n(quantityKg) < 5000 ? "White Buckets" : "White Regrind (Unwashed)";
   }
 
   function parseMaterialLines(value, fallbackMaterial, fallbackQty, fallbackRate = 0) {

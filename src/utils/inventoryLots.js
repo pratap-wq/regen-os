@@ -18,9 +18,9 @@ export function buildInventoryLots({
     const text = raw.toUpperCase();
     if (!text) return "";
 
-    if (text.includes("MIXED") && text.includes("BUCKET")) return "White PPCP Buckets";
-    if (text.includes("WHITE") && text.includes("BUCKET")) return "White PPCP Buckets";
-    if (text === "BUCKETS" || text === "BUCKET") return "White PPCP Buckets";
+    if (text.includes("MIXED") && text.includes("BUCKET")) return "White Buckets";
+    if (text.includes("WHITE") && text.includes("BUCKET")) return "White Buckets";
+    if (text === "BUCKETS" || text === "BUCKET") return "White Buckets";
 
     if (
       text === "UNWASHED WHITE FLAKES" ||

@@ -2076,7 +2076,7 @@ function seedProductionMaterials() {
   }
 
   const defaults = [
-    ["White PPCP Buckets", "RM", "Kg"],
+    ["White Buckets", "RM", "Kg"],
     ["Battery Scrap", "RM", "Kg"],
     ["Imported Flakes", "RM", "Kg"],
     ["Washed Flakes", "WASHED", "Kg"],
@@ -2114,7 +2114,7 @@ function seedProductionMaterials() {
 }
 
 const PRODUCTION_MATERIAL_MASTER_DEFAULTS = [
-  ["White PPCP Buckets", "White PPCP Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "White Bucket|White Buckets|Mixed Bucket|Mixed Buckets|Mixed PPCP Buckets"],
+  ["White Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "White PPCP Buckets|White Bucket|Mixed Bucket|Mixed Buckets|Mixed PPCP Buckets|MIXED_PPCP_BUCKETS|MIXED_BUCKETS"],
   ["White Regrind (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "OUTPUT,INPUT", "Flakes|Flakes Unwashed|Unwashed White Flakes|White Flakes (Unwashed)|Grinder Flakes|Unwashed Regrind|Unwashed Regrinds|White Regrind|White Regrind Unwashed|Regrinds"],
   ["White Regrind (Washed)", "White Regrind (Washed)", "WIP", "RM_INWARD,WASH,SORTING,EXTRUSION", "OUTPUT,INPUT", "Washed Flakes|Washed White Flakes|White Washed Flakes|Washed Regrind|White Regrind Washed|Washed Mixed"],
   ["White Sorted Regrind", "White Sorted Regrind", "WIP", "SORTING,EXTRUSION", "OUTPUT,INPUT", "White Sorted Flakes|White Sorted|Sorted White|Sorted Material"],
@@ -2151,12 +2151,14 @@ const PRODUCTION_MATERIAL_ALIAS_MAP = {
   "UNWASHED REGRIND": "White Regrind (Unwashed)",
   "UNWASHED REGRINDS": "White Regrind (Unwashed)",
   "FLAKES UNWASHED": "White Regrind (Unwashed)",
-  "WHITE PPCP BUCKETS": "White PPCP Buckets",
-  "WHITE BUCKET": "White PPCP Buckets",
-  "WHITE BUCKETS": "White PPCP Buckets",
-  "MIXED BUCKET": "White PPCP Buckets",
-  "MIXED BUCKETS": "White PPCP Buckets",
-  "MIXED PPCP BUCKETS": "White PPCP Buckets",
+  "WHITE PPCP BUCKETS": "White Buckets",
+  "WHITE BUCKET": "White Buckets",
+  "WHITE BUCKETS": "White Buckets",
+  "MIXED BUCKET": "White Buckets",
+  "MIXED BUCKETS": "White Buckets",
+  "MIXED PPCP BUCKETS": "White Buckets",
+  "MIXED_PPCP_BUCKETS": "White Buckets",
+  "MIXED_BUCKETS": "White Buckets",
   "WHITE REGRIND": "White Regrind (Unwashed)",
   "WHITE REGRIND UNWASHED": "White Regrind (Unwashed)",
   "REGRINDS": "White Regrind (Unwashed)",
@@ -2197,12 +2199,12 @@ const PRODUCTION_MATERIAL_ALIAS_MAP = {
 const MATERIAL_ALIAS_MAP_DEFAULTS = [
   ["Flakes", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 95, "seed"],
   ["Flakes Unwashed", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 95, "seed"],
-  ["White Bucket", "White PPCP Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "TRUE", 100, "seed"],
-  ["White Buckets", "White PPCP Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "TRUE", 100, "seed"],
-  ["White PPCP Buckets", "White PPCP Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "TRUE", 100, "seed"],
-  ["Mixed Bucket", "White PPCP Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "TRUE", 100, "seed"],
-  ["Mixed Buckets", "White PPCP Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "TRUE", 100, "seed"],
-  ["Mixed PPCP Buckets", "White PPCP Buckets", "RM", "RM_INWARD,GRINDER", "INPUT", "TRUE", 100, "seed"],
+  ["White Bucket", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "TRUE", 100, "seed"],
+  ["White Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "TRUE", 100, "seed"],
+  ["White PPCP Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "TRUE", 100, "seed"],
+  ["Mixed Bucket", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "TRUE", 100, "seed"],
+  ["Mixed Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "TRUE", 100, "seed"],
+  ["Mixed PPCP Buckets", "White Buckets", "RM", "RM_INWARD,GRINDER,WASH", "INPUT", "TRUE", 100, "seed"],
   ["Unwashed White Flakes", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 100, "seed"],
   ["White Flakes (Unwashed)", "White Regrind (Unwashed)", "WIP", "RM_INWARD,WASH", "INPUT", "TRUE", 100, "seed"],
   ["Unwashed Regrind", "White Regrind (Unwashed)", "WIP", "RM_INWARD,GRINDER,WASH", "INPUT,OUTPUT", "TRUE", 100, "seed"],
@@ -2596,7 +2598,7 @@ function productionMaterialAllowedFor_(row, stage, direction) {
   const canonicalName = normalizeProductionMaterialAlias_(row.canonicalName || row.materialName || "").toUpperCase();
   const category = String(row.materialType || row.category || "").toUpperCase();
   if (
-    canonicalName === "WHITE PPCP BUCKETS" &&
+    canonicalName === "WHITE BUCKETS" &&
     category === "RM" &&
     directionName === "INPUT" &&
     (stageName === "GRINDER" || stageName === "WASH")
@@ -3724,8 +3726,8 @@ function mergeFactoryMaster(data = {}) {
 }
 
 const WHITE_PPCP_BUCKET_MERGE = {
-  targetCode: "WHITE_PPCP_BUCKETS",
-  targetName: "White PPCP Buckets",
+  targetCode: "WHITE_BUCKETS",
+  targetName: "White Buckets",
   sourceNames: [
     "Mixed PPCP Buckets",
     "Mixed Bucket",
@@ -3733,6 +3735,8 @@ const WHITE_PPCP_BUCKET_MERGE = {
     "MIXED_PPCP_BUCKETS",
     "MIXED_BUCKETS",
     "White Bucket",
+    "White PPCP Buckets",
+    "WHITE_PPCP_BUCKETS",
     "White Buckets",
     "WHITE_BUCKETS",
   ],
@@ -3743,10 +3747,11 @@ function previewWhitePpcpBucketMerge(data = {}) {
 }
 
 function runWhitePpcpBucketMerge(data = {}) {
-  if (String(data.confirm || "").toUpperCase() !== "MERGE_WHITE_PPCP_BUCKETS") {
+  const confirm = String(data.confirm || "").toUpperCase();
+  if (confirm !== "MERGE_WHITE_BUCKETS" && confirm !== "MERGE_WHITE_PPCP_BUCKETS") {
     return {
       ok: false,
-      error: "Run merge requires confirm: MERGE_WHITE_PPCP_BUCKETS",
+      error: "Run merge requires confirm: MERGE_WHITE_BUCKETS",
       preview: whitePpcpBucketMerge_(data, true),
     };
   }
@@ -3755,7 +3760,7 @@ function runWhitePpcpBucketMerge(data = {}) {
 
 function whitePpcpBucketMerge_(data, previewOnly) {
   const runId = data.runId || generateBatchId(previewOnly ? "MBMP" : "MBMR");
-  const note = "Merged Mixed/White bucket variants into White PPCP Buckets (" + runId + ")";
+  const note = "Merged Mixed/White bucket variants into White Buckets (" + runId + ")";
   const operations = [
     { sheetName: "RM_Inward", textFields: ["material"], jsonFields: ["materialLines"], summaryFields: ["materialSummary"], idField: "inwardId" },
     { sheetName: "Wash_Batches", textFields: ["inputMaterial"], jsonFields: ["feedComposition"], idField: "washBatchId" },
@@ -3956,7 +3961,7 @@ function mergeProductionMaterialMasterSheet_(previewOnly, note) {
         setCellByHeader_(sh, headers, r + 1, "canonicalName", WHITE_PPCP_BUCKET_MERGE.targetName);
         setCellByHeader_(sh, headers, r + 1, "active", "TRUE");
         setCellByHeader_(sh, headers, r + 1, "status", "ACTIVE");
-        setCellByHeader_(sh, headers, r + 1, "aliases", "White Bucket|White Buckets|Mixed Bucket|Mixed Buckets|Mixed PPCP Buckets");
+        setCellByHeader_(sh, headers, r + 1, "aliases", "White PPCP Buckets|White Bucket|Mixed Bucket|Mixed Buckets|Mixed PPCP Buckets|MIXED_PPCP_BUCKETS|MIXED_BUCKETS");
         appendMergeNoteToRow_(sh, headers, r + 1, note);
       }
     } else if (isMerge) {
@@ -3983,7 +3988,7 @@ function mergeProductionMaterialMasterSheet_(previewOnly, note) {
         stageAllowed: "RM_INWARD,GRINDER",
         directionAllowed: "INPUT",
         active: "TRUE",
-        aliases: "White Bucket|White Buckets|Mixed Bucket|Mixed Buckets|Mixed PPCP Buckets",
+        aliases: "White PPCP Buckets|White Bucket|Mixed Bucket|Mixed Buckets|Mixed PPCP Buckets|MIXED_PPCP_BUCKETS|MIXED_BUCKETS",
         sortOrder: 1,
         remarks: note,
         createdBy: "System",
@@ -4006,7 +4011,7 @@ function ensureWhitePpcpBucketAliases_(previewOnly) {
   const existing = getRowsAsObjects("Material_Alias_Map").map(function(row) {
     return materialAliasKey_(row.aliasName || "");
   });
-  const aliases = ["White Bucket", "White Buckets", "Mixed Bucket", "Mixed Buckets", "Mixed PPCP Buckets", "MIXED_BUCKETS", "MIXED_PPCP_BUCKETS"];
+  const aliases = ["White PPCP Buckets", "White Bucket", "Mixed Bucket", "Mixed Buckets", "Mixed PPCP Buckets", "MIXED_BUCKETS", "MIXED_PPCP_BUCKETS"];
   const changes = [];
   aliases.forEach(function(alias) {
     if (existing.indexOf(materialAliasKey_(alias)) !== -1) return;
@@ -4077,7 +4082,7 @@ function mergeBucketMaterialObject_(value) {
 
 function mergeBucketMaterialText_(value) {
   let next = String(value || "");
-  WHITE_PPCP_BUCKET_MERGE.sourceNames.concat(["White PPCP Buckets"]).sort(function(a, b) {
+  WHITE_PPCP_BUCKET_MERGE.sourceNames.concat(["White Buckets"]).sort(function(a, b) {
     return String(b).length - String(a).length;
   }).forEach(function(name) {
     if (!bucketMaterialShouldMerge_(name) && bucketMaterialKey_(name) !== WHITE_PPCP_BUCKET_MERGE.targetCode) return;
@@ -4592,7 +4597,7 @@ function seedStandardMaterialBuckets() {
 
   const standardBuckets = [
     ["White Flakes", "RM", "PP", "RECEIVING", "WASH"],
-    ["White PPCP Buckets", "RM", "PP", "RECEIVING", "WASH"],
+    ["White Buckets", "RM", "PP", "RECEIVING", "WASH"],
     ["Battery Scrap", "RM", "PP", "RECEIVING", "WASH"],
     ["Jars", "RM", "PP", "RECEIVING", "WASH"],
     ["Lids", "RM", "PP", "RECEIVING", "WASH"],
@@ -5710,7 +5715,7 @@ function normalizeRmMaterialForReceiving_(value, strict) {
 function materialMasterDefaultRows_() {
   return [
     ["WHITE_FLAKES", "White Flakes", "RM"],
-    ["WHITE_PPCP_BUCKETS", "White PPCP Buckets", "RM"],
+    ["WHITE_BUCKETS", "White Buckets", "RM"],
     ["BATTERY_SCRAP", "Battery Scrap", "RM"],
     ["BATTERY_REGRIND", "Battery Regrind", "RM"],
     ["JARS", "Jars", "RM"],
@@ -6546,16 +6551,20 @@ function normalizeProductionMaterialAlias_(value) {
     key === "WHITE PPCP BUCKET" ||
     key === "WHITE PPCP BUCKETS"
   ) {
-    return "White PPCP Buckets";
+    return "White Buckets";
   }
   return text;
 }
 
 function normalizeProductionMaterialAliasesInText_(value) {
   return String(value || "")
-    .replace(/\bWhite\s+Buckets?\b/gi, "White PPCP Buckets")
-    .replace(/\bMixed\s+Buckets?\b/gi, "White PPCP Buckets")
-    .replace(/\bMixed\s+PPCP\s+Buckets?\b/gi, "White PPCP Buckets");
+    .replace(/\bWhite\s+PPCP\s+Buckets?\b/gi, "White Buckets")
+    .replace(/\bWhite\s+Buckets?\b/gi, "White Buckets")
+    .replace(/\bMixed\s+Buckets?\b/gi, "White Buckets")
+    .replace(/\bMixed\s+PPCP\s+Buckets?\b/gi, "White Buckets")
+    .replace(/\bMIXED_PPCP_BUCKETS\b/g, "White Buckets")
+    .replace(/\bMIXED_BUCKETS\b/g, "White Buckets")
+    .replace(/\bWHITE_PPCP_BUCKETS\b/g, "White Buckets");
 }
 
 function testProductionInputAliasNormalization() {
@@ -6569,7 +6578,7 @@ function testProductionInputAliasNormalization() {
   });
   return output({
     ok: rows.every(function(row) {
-      return row.grinderInput === "White PPCP Buckets" && row.washInput === "White PPCP Buckets";
+      return row.grinderInput === "White Buckets" && row.washInput === "White Buckets";
     }),
     rows
   });
@@ -8975,10 +8984,10 @@ function rebuildFromGrinderBatches_(ctx) {
 
     const inputs = inputLines.length
       ? inputLines
-      : [{ material: materialName_(row.inputMaterial, "White PPCP Buckets"), qtyKg: num(row.inputWeightKg) }];
+      : [{ material: materialName_(row.inputMaterial, "White Buckets"), qtyKg: num(row.inputWeightKg) }];
 
     inputs.forEach(function(input) {
-      const inputMaterial = materialName_(input.material, "White PPCP Buckets");
+      const inputMaterial = materialName_(input.material, "White Buckets");
       pushRebuiltLedgerRow_(ctx, "Grinder_Batches", sourceId, {
         date: row.date,
         module: "GRINDER",
@@ -10834,12 +10843,14 @@ function materialFlowNormalizeMaterial_(name, category) {
     };
   }
   const map = {
-    "WHITE BUCKET": ["White PPCP Buckets", "RM", "White PPCP Buckets"],
-    "WHITE BUCKETS": ["White PPCP Buckets", "RM", "White PPCP Buckets"],
-    "WHITE PPCP BUCKETS": ["White PPCP Buckets", "RM", "White PPCP Buckets"],
-    "MIXED BUCKET": ["White PPCP Buckets", "RM", "White PPCP Buckets"],
-    "MIXED BUCKETS": ["White PPCP Buckets", "RM", "White PPCP Buckets"],
-    "MIXED PPCP BUCKETS": ["White PPCP Buckets", "RM", "White PPCP Buckets"],
+    "WHITE BUCKET": ["White Buckets", "RM", "White Buckets"],
+    "WHITE BUCKETS": ["White Buckets", "RM", "White Buckets"],
+    "WHITE PPCP BUCKETS": ["White Buckets", "RM", "White Buckets"],
+    "MIXED BUCKET": ["White Buckets", "RM", "White Buckets"],
+    "MIXED BUCKETS": ["White Buckets", "RM", "White Buckets"],
+    "MIXED PPCP BUCKETS": ["White Buckets", "RM", "White Buckets"],
+    "MIXED_PPCP_BUCKETS": ["White Buckets", "RM", "White Buckets"],
+    "MIXED_BUCKETS": ["White Buckets", "RM", "White Buckets"],
     "WASHED MATERIAL": ["White Regrind (Washed)", "WIP", "White Regrind (Washed)"],
     "WASHED FLAKES": ["White Regrind (Washed)", "WIP", "White Regrind (Washed)"],
     "WASHED WHITE FLAKES": ["White Regrind (Washed)", "WIP", "White Regrind (Washed)"],

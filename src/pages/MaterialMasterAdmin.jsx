@@ -135,10 +135,10 @@ export default function MaterialMasterAdmin() {
 
       <form onSubmit={submit} style={formGrid}>
         <Field label="Material Code">
-          <input name="materialCode" value={form.materialCode} onChange={onChange} style={input} placeholder="WHITE_PPCP_BUCKETS" />
+          <input name="materialCode" value={form.materialCode} onChange={onChange} style={input} placeholder="WHITE_BUCKETS" />
         </Field>
         <Field label="Material Name">
-          <input name="materialName" value={form.materialName} onChange={onChange} style={input} placeholder="White PPCP Buckets" />
+          <input name="materialName" value={form.materialName} onChange={onChange} style={input} placeholder="White Buckets" />
         </Field>
         <Field label="Category">
           <select name="category" value={form.category} onChange={onChange} style={input}>

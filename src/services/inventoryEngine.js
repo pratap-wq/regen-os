@@ -169,11 +169,13 @@ export function normalizeInventoryMaterial(value) {
     upper === "WHITE BUCKET" ||
     upper === "WHITE BUCKETS" ||
     upper === "WHITE PPCP BUCKETS" ||
+    upper === "WHITE PPCP BUCKET" ||
     upper === "MIXED BUCKET" ||
     upper === "MIXED BUCKETS" ||
-    upper === "MIXED PPCP BUCKETS"
+    upper === "MIXED PPCP BUCKETS" ||
+    upper === "MIXED PPCP BUCKET"
   ) {
-    return "White PPCP Buckets";
+    return "White Buckets";
   }
   const fgMatch = text.toUpperCase().match(/\bE[1-5]\b/);
   return fgMatch ? fgMatch[0] : text;

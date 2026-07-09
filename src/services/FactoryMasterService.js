@@ -272,20 +272,20 @@ function collapseBucketMaterialRows(rows = []) {
   const map = new Map();
   rows.forEach((row) => {
     const name = canonicalBucketMaterialName(row.name || row.materialName || row.code || row.materialCode);
-    if (name !== "White PPCP Buckets") {
+    if (name !== "White Buckets") {
       const key = String(row.name || row.materialName || row.code || "").trim().toUpperCase();
       if (key && !map.has(key)) map.set(key, row);
       return;
     }
-    const current = map.get("WHITE_PPCP_BUCKETS") || {};
-    map.set("WHITE_PPCP_BUCKETS", {
+    const current = map.get("WHITE_BUCKETS") || {};
+    map.set("WHITE_BUCKETS", {
       ...current,
       ...row,
-      id: "WHITE_PPCP_BUCKETS",
-      code: "WHITE_PPCP_BUCKETS",
+      id: "WHITE_BUCKETS",
+      code: "WHITE_BUCKETS",
       name,
       materialName: name,
-      materialCode: "WHITE_PPCP_BUCKETS",
+      materialCode: "WHITE_BUCKETS",
       category: "RM",
       materialType: "RM",
       status: "ACTIVE",
@@ -300,11 +300,13 @@ function canonicalBucketMaterialName(value) {
     text === "WHITE BUCKET" ||
     text === "WHITE BUCKETS" ||
     text === "WHITE PPCP BUCKETS" ||
+    text === "WHITE PPCP BUCKET" ||
     text === "MIXED BUCKET" ||
     text === "MIXED BUCKETS" ||
-    text === "MIXED PPCP BUCKETS"
+    text === "MIXED PPCP BUCKETS" ||
+    text === "MIXED PPCP BUCKET"
   ) {
-    return "White PPCP Buckets";
+    return "White Buckets";
   }
   return String(value || "").trim();
 }

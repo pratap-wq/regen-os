@@ -2591,22 +2591,36 @@ function productionMaterialAllowedFor_(row, stage, direction) {
   const active = String(row.active || row.isActive || row.status || "TRUE").toUpperCase();
   if (active === "FALSE" || active === "INACTIVE" || active === "DELETED" || active === "DISABLED") return false;
 
+  const stageName = String(stage || "").toUpperCase();
+  const directionName = String(direction || "").toUpperCase();
+  const canonicalName = normalizeProductionMaterialAlias_(row.canonicalName || row.materialName || "").toUpperCase();
+  const category = String(row.materialType || row.category || "").toUpperCase();
+  if (
+    canonicalName === "WHITE PPCP BUCKETS" &&
+    category === "RM" &&
+    directionName === "INPUT" &&
+    (stageName === "GRINDER" || stageName === "WASH")
+  ) {
+    return true;
+  }
+
   const stages = String(row.stageAllowed || "").toUpperCase().split(",").map(function(x) { return x.trim(); });
   const directions = String(row.directionAllowed || "").toUpperCase().split(",").map(function(x) { return x.trim(); });
 
-  return stages.indexOf(String(stage || "").toUpperCase()) !== -1 &&
-    directions.indexOf(String(direction || "").toUpperCase()) !== -1;
+  return stages.indexOf(stageName) !== -1 &&
+    directions.indexOf(directionName) !== -1;
 }
 
 function normalizeProductionMaterialName_(value) {
-  const clean = String(value || "").trim().replace(/\s+/g, " ");
+  const clean = normalizeProductionMaterialAlias_(value);
   if (!clean) return { canonicalName: "", known: false, originalName: "" };
 
   const upper = clean.toUpperCase();
   const aliasRow = materialAliasLookup_(clean);
-  const alias = aliasRow && aliasRow.canonicalName
+  const rawAlias = aliasRow && aliasRow.canonicalName
     ? aliasRow.canonicalName
     : PRODUCTION_MATERIAL_ALIAS_MAP[upper];
+  const alias = normalizeProductionMaterialAlias_(rawAlias);
   if (alias) {
     return {
       canonicalName: alias,
@@ -6519,17 +6533,46 @@ function assertLedgerPosted_(ledger, label) {
 }
 
 function normalizeProductionMaterialAlias_(value) {
-  const text = String(value || "").trim();
+  const text = String(value || "").trim().replace(/\s+/g, " ");
   if (!text) return "";
   const key = text.toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim().replace(/\s+/g, " ");
-  if (key === "MIXED PPCP BUCKET" || key === "MIXED PPCP BUCKETS") {
+  if (
+    key === "WHITE BUCKET" ||
+    key === "WHITE BUCKETS" ||
+    key === "MIXED BUCKET" ||
+    key === "MIXED BUCKETS" ||
+    key === "MIXED PPCP BUCKET" ||
+    key === "MIXED PPCP BUCKETS" ||
+    key === "WHITE PPCP BUCKET" ||
+    key === "WHITE PPCP BUCKETS"
+  ) {
     return "White PPCP Buckets";
   }
   return text;
 }
 
 function normalizeProductionMaterialAliasesInText_(value) {
-  return String(value || "").replace(/\bMixed\s+PPCP\s+Buckets?\b/gi, "White PPCP Buckets");
+  return String(value || "")
+    .replace(/\bWhite\s+Buckets?\b/gi, "White PPCP Buckets")
+    .replace(/\bMixed\s+Buckets?\b/gi, "White PPCP Buckets")
+    .replace(/\bMixed\s+PPCP\s+Buckets?\b/gi, "White PPCP Buckets");
+}
+
+function testProductionInputAliasNormalization() {
+  const aliases = ["White Bucket", "White Buckets", "Mixed Buckets", "Mixed PPCP Buckets"];
+  const rows = aliases.map(function(alias) {
+    return {
+      alias,
+      grinderInput: assertProductionMaterialAllowed_(alias, "GRINDER", "INPUT", "GRINDER input material"),
+      washInput: assertProductionMaterialAllowed_(alias, "WASH", "INPUT", "WASH input material")
+    };
+  });
+  return output({
+    ok: rows.every(function(row) {
+      return row.grinderInput === "White PPCP Buckets" && row.washInput === "White PPCP Buckets";
+    }),
+    rows
+  });
 }
 
 function normalizeProductionCompositionAliases_(value) {

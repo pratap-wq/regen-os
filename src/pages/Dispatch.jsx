@@ -65,6 +65,7 @@ export default function Dispatch() {
   const [fgRateRows, setFgRateRows] = useState([]);
   const [materialRows, setMaterialRows] = useState([]);
   const [status, setStatus] = useState("");
+  const [saving, setSaving] = useState(false);
   const [editingRow, setEditingRow] = useState(null);
   const [form, setForm] = useState(blankForm);
   const [dispatchLines, setDispatchLines] = useState([{ ...blankLine }]);
@@ -92,9 +93,11 @@ export default function Dispatch() {
       setCustomerUnitRows(customerUnits.rows || []);
       setFgRateRows(fgRates.rows || []);
       setMaterialRows(materials.rows || []);
+      return true;
     } catch (err) {
       console.log(err);
       setStatus(err.message);
+      return false;
     }
   }
 
@@ -507,7 +510,10 @@ export default function Dispatch() {
   }
   async function submit(e) {
     e.preventDefault();
+    if (saving) return;
 
+    setSaving(true);
+    setStatus("Saving dispatch...");
     try {
       if (!form.material) {
         setStatus("Select material.");
@@ -561,19 +567,44 @@ export default function Dispatch() {
         });
       }
 
-      if (res.ok === false) {
-        setStatus(res.error || "Error saving dispatch");
+      const responseError = validateDispatchSaveResponse(res);
+      if (responseError) {
+        setStatus(responseError);
         return;
       }
 
-      setStatus(editingRow?.dispatchId ? "Dispatch updated" : "Dispatch saved");
+      const savedDispatchId = res.dispatchId || finalForm.dispatchId || editingRow?.dispatchId;
+      setStatus(res.message || `Dispatch saved successfully: ${savedDispatchId}`);
+      const reloaded = await loadData();
+      if (!reloaded) {
+        setStatus(`Dispatch saved successfully: ${savedDispatchId}, but refresh failed. Please press Refresh/reopen Dispatch before entering another dispatch.`);
+        return;
+      }
       setEditingRow(null);
       setForm(blankForm);
       setDispatchLines([{ ...blankLine }]);
-      loadData();
+      setStatus(res.message || `Dispatch saved successfully: ${savedDispatchId}`);
     } catch (err) {
-      setStatus(err.message);
+      console.log("dispatch save failed", err);
+      setStatus(err.message || "Dispatch save failed.");
+    } finally {
+      setSaving(false);
     }
+  }
+
+  function validateDispatchSaveResponse(res) {
+    if (!res) return "Dispatch save failed: backend returned no response.";
+    if (res.ok === false) return res.error || res.message || "Dispatch save failed.";
+    if (!res.dispatchId) return "Dispatch save failed: backend did not return dispatchId.";
+    if (res.ledgerError) return `Dispatch ledger error: ${res.ledgerError}`;
+    if (res.ledgerWarning) return `Dispatch ledger warning: ${res.ledgerWarning}`;
+    if (Array.isArray(res.ledgerWarnings) && res.ledgerWarnings.length) {
+      return `Dispatch ledger warning: ${res.ledgerWarnings.join(", ")}`;
+    }
+    if (res.ledgerPosted !== true) {
+      return "Dispatch save failed: inventory ledger posting was not confirmed.";
+    }
+    return "";
   }
 
   function editRow(row) {
@@ -1014,12 +1045,12 @@ export default function Dispatch() {
         </FormSection>
 
         <div style={stickyBar}>
-          <button type="button" onClick={clearForm} style={clearButton}>
+          <button type="button" onClick={clearForm} disabled={saving} style={saving ? disabledButton : clearButton}>
             Clear / New Dispatch
           </button>
 
-          <button type="submit" style={editingRow ? updateButton : saveButton}>
-            {editingRow ? "Update Dispatch" : "Save Dispatch"}
+          <button type="submit" disabled={saving} style={saving ? disabledButton : editingRow ? updateButton : saveButton}>
+            {saving ? "Saving..." : editingRow ? "Update Dispatch" : "Save Dispatch"}
           </button>
         </div>
       </form>
@@ -1258,6 +1289,12 @@ const saveButton = {
 const updateButton = {
   ...saveButton,
   background: "#ea580c",
+};
+
+const disabledButton = {
+  ...saveButton,
+  background: "#94a3b8",
+  cursor: "not-allowed",
 };
 
 const clearButton = {

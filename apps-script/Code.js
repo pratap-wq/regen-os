@@ -8684,6 +8684,7 @@ function voidDispatchLedgerRows_(dispatchId, reason) {
 }
 
 function postDispatchLedgerRows_(dispatchId, date, lineRows, data) {
+  let posted = 0;
   (lineRows || []).forEach(function(line) {
     const grade = dispatchLineGrade_(line, data.grade || data.material);
     const qty = dispatchLineQty_(line, data.quantityKg);
@@ -8702,7 +8703,20 @@ function postDispatchLedgerRows_(dispatchId, date, lineRows, data) {
       remarks: data.remarks || "FG dispatched",
       createdBy: data.createdBy || "System",
     });
+    posted += 1;
   });
+  return posted;
+}
+
+function dispatchLedgerPostedCount_(dispatchId) {
+  if (!dispatchId) return 0;
+  return getRowsAsObjects("Inventory_Ledger")
+    .filter(function(row) { return !isDeleted_(row); })
+    .filter(function(row) {
+      return String(row.module || "").toUpperCase() === "DISPATCH" &&
+        String(row.targetRef || "") === String(dispatchId);
+    })
+    .length;
 }
 
 function addDispatch(data = {}) {
@@ -8710,8 +8724,25 @@ function addDispatch(data = {}) {
   const sh = getSheet("Dispatches");
 
   const dispatchId = data.dispatchId || generateBatchId("DIS");
-  const duplicate = assertNoDuplicateCreate_("Dispatches", "dispatchId", dispatchId);
-  if (duplicate) return duplicate;
+  const existingDispatch = getRowById_("Dispatches", "dispatchId", dispatchId);
+  if (existingDispatch) {
+    const existingLedgerCount = dispatchLedgerPostedCount_(dispatchId);
+    return output({
+      ok: existingLedgerCount > 0,
+      duplicate: true,
+      alreadyExists: true,
+      dispatchId,
+      dispatchValue: num(existingDispatch.dispatchValue),
+      ledgerPosted: existingLedgerCount > 0,
+      ledgerRows: existingLedgerCount,
+      message: existingLedgerCount > 0
+        ? "Dispatch already exists. No duplicate row was created."
+        : "Dispatch already exists but ledger posting was not found. Do not clear the form; review dispatch ledger.",
+      error: existingLedgerCount > 0
+        ? ""
+        : "Dispatch already exists but ledger posting was not found.",
+    });
+  }
 
   const date = normalizeDateOnly_(data.date || todayYmd());
   const sourceId = "";
@@ -8768,11 +8799,34 @@ function addDispatch(data = {}) {
     updatedAt: new Date(),
   });
 
-  postDispatchLedgerRows_(dispatchId, date, lineRows, data);
+  let ledgerRows = 0;
+  try {
+    ledgerRows = postDispatchLedgerRows_(dispatchId, date, lineRows, data);
+  } catch (err) {
+    updateById("Dispatches", "dispatchId", dispatchId, {
+      status: "LEDGER_ERROR",
+      dispatchStatus: "LEDGER_ERROR",
+      remarks: (data.remarks || "") + " | Ledger error: " + (err.message || err),
+      updatedAt: new Date(),
+    });
+    return output({
+      ok: false,
+      dispatchId,
+      dispatchValue: financials.dispatchValue,
+      ledgerPosted: false,
+      ledgerError: err.message || String(err),
+      error: "Dispatch saved but ledger posting failed: " + (err.message || err),
+      message: "Dispatch ledger posting failed. Form was not cleared.",
+    });
+  }
 
   return output({
     ok: true,
     dispatchId,
+    dispatchValue: financials.dispatchValue,
+    ledgerPosted: ledgerRows > 0,
+    ledgerRows,
+    message: "Dispatch saved successfully: " + dispatchId,
   });
 }
 
@@ -8813,7 +8867,7 @@ function updateDispatch(data = {}) {
     ? { ratePerKg: num(data.ratePerKg), dispatchValue: num(data.dispatchValue), freightPerKg: num(data.freightPerKg), freightAmount: num(data.freightAmount), rateSource: data.rateSource || "" }
     : dispatchFinancials_(data, lineRows, date);
 
-  const updateResult = updateById("Dispatches", "dispatchId", data.dispatchId, {
+  updateById("Dispatches", "dispatchId", data.dispatchId, {
     sourceExtrusionBatchId: sourceId,
     sourceSupplier: data.sourceSupplier || "",
     availableFGQty: num(data.availableFGQty),
@@ -8845,12 +8899,42 @@ function updateDispatch(data = {}) {
     updatedAt: new Date(),
   });
 
-  voidDispatchLedgerRows_(data.dispatchId, isDeleted ? "Dispatch deleted" : "Dispatch updated");
+  const ledgerVoided = voidDispatchLedgerRows_(data.dispatchId, isDeleted ? "Dispatch deleted" : "Dispatch updated");
+  let ledgerRows = 0;
   if (!isDeleted) {
-    postDispatchLedgerRows_(data.dispatchId, date, lineRows, data);
+    try {
+      ledgerRows = postDispatchLedgerRows_(data.dispatchId, date, lineRows, data);
+    } catch (err) {
+      updateById("Dispatches", "dispatchId", data.dispatchId, {
+        status: "LEDGER_ERROR",
+        dispatchStatus: "LEDGER_ERROR",
+        remarks: (data.remarks || "") + " | Ledger error: " + (err.message || err),
+        updatedAt: new Date(),
+      });
+      return output({
+        ok: false,
+        dispatchId: data.dispatchId,
+        dispatchValue: financials.dispatchValue,
+        ledgerPosted: false,
+        ledgerVoided,
+        ledgerError: err.message || String(err),
+        error: "Dispatch updated but ledger reposting failed: " + (err.message || err),
+        message: "Dispatch ledger reposting failed. Form was not cleared.",
+      });
+    }
   }
 
-  return updateResult;
+  return output({
+    ok: true,
+    dispatchId: data.dispatchId,
+    dispatchValue: financials.dispatchValue,
+    ledgerPosted: isDeleted ? false : ledgerRows > 0,
+    ledgerRows,
+    ledgerVoided,
+    message: isDeleted
+      ? "Dispatch deleted and ledger rows voided."
+      : "Dispatch updated successfully: " + data.dispatchId,
+  });
 }
 
 function patchOldDispatchData() {

@@ -37,6 +37,7 @@ function doGet(e) {
     if (p.fn === "productionMaterialMaster.seedDefaults") return seedProductionMaterialMaster(p);
     if (p.fn === "materialAliasMap.list") return listMaterialAliasMap(p);
     if (p.fn === "materialAliasMap.seedDefaults") return seedMaterialAliasMap(p);
+    if (p.fn === "materialValidation.check") return output(materialValidationCheck(p));
     if (p.fn === "materialMaster.list") return listMaterialMaster(p);
     if (p.fn === "materialMaster.add") return addMaterialMaster(p);
     if (p.fn === "materialMaster.update") return updateMaterialMaster(p);
@@ -592,6 +593,7 @@ function debugRoutes() {
       "productionMaterialMaster.seedDefaults",
       "materialAliasMap.list",
       "materialAliasMap.seedDefaults",
+      "materialValidation.check",
       "materialMaster.list",
       "materialMaster.add",
       "materialMaster.update",
@@ -2704,19 +2706,14 @@ function normalizeProductionMaterialName_(value) {
 }
 
 function assertProductionMaterialAllowed_(value, stage, direction, label) {
-  const normalized = normalizeProductionMaterialName_(value);
-  if (!normalized.canonicalName) return "";
+  const result = productionMaterialValidationResult_(value, stage, direction, label);
+  if (!result.canonicalName) return "";
 
-  if (!normalized.known) {
-    throw new Error((label || "Production material") + " needs manual review: " + normalized.originalName);
+  if (!result.known) {
+    throw new Error((label || "Production material") + " needs manual review: " + result.rawName);
   }
 
-  const row = getProductionMaterialMasterRows_().find(function(item) {
-    return String(item.canonicalName || item.materialName || "").trim().toUpperCase() ===
-      normalized.canonicalName.toUpperCase();
-  }) || fallbackProductionMaterialRow_(normalized.canonicalName);
-
-  if (!row || !productionMaterialAllowedFor_(row, stage, direction)) {
+  if (!result.eligible) {
     throw new Error(
       (label || "Production material") +
         " is not allowed for " +
@@ -2724,11 +2721,90 @@ function assertProductionMaterialAllowed_(value, stage, direction, label) {
         " " +
         direction +
         ": " +
-        normalized.canonicalName
+        result.canonicalName
     );
   }
 
-  return normalized.canonicalName;
+  return result.canonicalName;
+}
+
+function productionMaterialValidationResult_(value, stage, direction, label) {
+  const rawName = String(value || "").trim();
+  const stageName = String(stage || "").trim().toUpperCase();
+  const directionName = String(direction || "").trim().toUpperCase();
+  const normalized = normalizeProductionMaterialName_(rawName);
+  const canonicalName = normalized.canonicalName || "";
+  const canonicalCode = materialCode_(canonicalName);
+
+  const result = {
+    rawName,
+    normalizedName: canonicalName,
+    canonicalCode,
+    canonicalName,
+    context: [stageName, directionName].filter(Boolean).join(" "),
+    eligible: false,
+    known: !!normalized.known,
+    reason: "",
+    whichValidator: "productionMaterialValidationResult_",
+    whichValidatorFunction: "productionMaterialValidationResult_",
+    source: normalized.source || "",
+  };
+
+  if (!canonicalName) {
+    result.reason = "Blank material";
+    return result;
+  }
+
+  if (!normalized.known) {
+    result.reason = "Material is not known in Material_Master, Production_Material_Master, or alias defaults";
+    return result;
+  }
+
+  const row = getProductionMaterialMasterRows_().find(function(item) {
+    return materialCode_(item.canonicalName || item.materialName) === canonicalCode;
+  }) || fallbackProductionMaterialRow_(canonicalName);
+
+  if (!row) {
+    result.reason = "Known alias but no active material row was available";
+    return result;
+  }
+
+  result.category = normalizeMaterialCategoryForDropdown_(row.materialType || row.category);
+  result.stageAllowed = row.stageAllowed || "";
+  result.directionAllowed = row.directionAllowed || "";
+  result.materialRowName = row.canonicalName || row.materialName || "";
+  result.eligible = productionMaterialAllowedFor_(row, stageName, directionName);
+  result.reason = result.eligible
+    ? "Known active material is eligible for this dropdown/context"
+    : "Known active material is not eligible for this dropdown/context";
+
+  return result;
+}
+
+function materialValidationCheck(data = {}) {
+  const parsed = parseMaterialValidationContext_(data.context || data.stage || "");
+  const stage = data.stage && data.direction
+    ? String(data.stage || "")
+    : parsed.stage;
+  const direction = data.direction || parsed.direction || "INPUT";
+  return productionMaterialValidationResult_(
+    data.materialName || data.material || data.name || "",
+    stage,
+    direction,
+    "Material validation"
+  );
+}
+
+function parseMaterialValidationContext_(context) {
+  const text = String(context || "").trim().toUpperCase();
+  if (!text) return { stage: "", direction: "INPUT" };
+  if (text === "RM_INWARD" || text === "RM INWARD") return { stage: "RM_INWARD", direction: "INPUT" };
+  if (text === "DISPATCH" || text === "DISPATCH INPUT") return { stage: "DISPATCH", direction: "INPUT" };
+  const parts = text.split(/\s+/).filter(Boolean);
+  return {
+    stage: parts[0] || text,
+    direction: parts[1] || "INPUT",
+  };
 }
 
 function fallbackProductionMaterialRow_(canonicalName) {

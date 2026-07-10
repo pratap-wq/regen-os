@@ -85,6 +85,7 @@ function doGet(e) {
     if (p.fn === "grinder.list") return listGrinderBatches(p);
     if (p.fn === "grinder.update") return updateGrinderBatch(p);
     if (p.fn === "production.historySummary") return getProductionHistorySummary(p);
+    if (p.fn === "production.historyRecord") return getProductionHistoryRecord(p);
     if (p.fn === "dashboard.ceoSummary") return getDashboardCeoSummary(p);
     if (p.fn === "dashboard.factorySummary") return getDashboardFactorySummary(p);
 
@@ -638,6 +639,7 @@ function debugRoutes() {
       "grinder.list",
       "grinder.update",
       "production.historySummary",
+      "production.historyRecord",
       "dashboard.ceoSummary",
       "dashboard.factorySummary",
       "wash.add",
@@ -4904,8 +4906,9 @@ function getRowsAsObjects(sheetName) {
 }
 
 function isDeleted_(row) {
+  const status = String(row.status || "").toUpperCase();
   return (
-    String(row.status || "").toUpperCase() === "DELETED" ||
+    ["DELETED", "INACTIVE", "DISABLED", "ARCHIVED", "VOID", "VOIDED", "REVERSED", "CANCELLED"].indexOf(status) !== -1 ||
     String(row.dispatchStatus || "").toUpperCase() === "DELETED" ||
     String(row.inwardStatus || "").toUpperCase() === "DELETED" ||
     String(row.issueStatus || "").toUpperCase() === "DELETED" ||
@@ -7631,6 +7634,87 @@ function getProductionHistorySummary(data = {}) {
   }
 }
 
+function getProductionHistoryRecord(data = {}) {
+  const startedAt = Date.now();
+  const stage = productionHistoryStage_(data.stage);
+  const recordId = String(data.recordId || "").trim();
+  const config = productionHistoryRecordConfig_(stage);
+
+  if (!config || stage === "ALL") {
+    return output({ ok: false, error: "production.historyRecord requires a valid stage", elapsedMs: Date.now() - startedAt });
+  }
+  if (!recordId) {
+    return output({ ok: false, stage, error: "production.historyRecord requires recordId", elapsedMs: Date.now() - startedAt });
+  }
+
+  try {
+    if (stage === "GRINDER") ensureGrinderBatchesSheet_();
+    const match = findSheetObjectRowById_(config.sheetName, config.idField, recordId);
+    if (!match) {
+      return output({ ok: false, stage, recordId, error: "Production record not found: " + recordId, elapsedMs: Date.now() - startedAt });
+    }
+
+    return output({
+      ok: true,
+      stage,
+      recordId,
+      generatedAt: new Date().toISOString(),
+      elapsedMs: Date.now() - startedAt,
+      record: productionHistoryNormalizeRow_(stage, match.object, true),
+    });
+  } catch (err) {
+    return output({ ok: false, stage, recordId, error: err.message || String(err), elapsedMs: Date.now() - startedAt });
+  }
+}
+
+function productionHistoryRecordConfig_(stage) {
+  const configs = {
+    GRINDER: { stage: "GRINDER", sheetName: "Grinder_Batches", idField: "grinderBatchId", headers: grinderBatchHeaders_() },
+    WASH: {
+      stage: "WASH", sheetName: "Wash_Batches", idField: "washBatchId",
+      headers: REGEN_DB_SCHEMA.Wash_Batches.concat(["feedComposition", "outputComposition", "updatedAt"]),
+    },
+    SORTING: {
+      stage: "SORTING", sheetName: "Sorting_Batches", idField: "sortingBatchId",
+      headers: REGEN_DB_SCHEMA.Sorting_Batches.concat([
+        "periodMonth", "inputMaterial", "feedComposition", "outputComposition", "whiteSortedKg",
+        "whiteGreyKg", "allMixSortedKg", "sorterVarianceKg", "recoveryPercent", "updatedAt",
+      ]),
+    },
+    EXTRUSION: {
+      stage: "EXTRUSION", sheetName: "Extrusion_Batches", idField: "extrusionBatchId",
+      headers: REGEN_DB_SCHEMA.Extrusion_Batches.concat(["feedComposition", "outputComposition", "updatedAt"]),
+    },
+  };
+  return configs[String(stage || "").toUpperCase()] || null;
+}
+
+function findSheetObjectRowById_(sheetName, idField, idValue) {
+  if (!idValue) return null;
+  const sh = getSheet(sheetName);
+  const headers = getHeaders(sh);
+  const idIndex = headers.indexOf(idField);
+  if (idIndex === -1 || sh.getLastRow() < 2) return null;
+
+  const match = sh
+    .getRange(2, idIndex + 1, sh.getLastRow() - 1, 1)
+    .createTextFinder(String(idValue))
+    .matchEntireCell(true)
+    .findNext();
+  if (!match) return null;
+
+  const values = sh.getRange(match.getRow(), 1, 1, headers.length).getValues()[0];
+  const object = {};
+  headers.forEach(function(header, index) {
+    if (!header) return;
+    const value = values[index];
+    object[header] = Object.prototype.toString.call(value) === "[object Date]"
+      ? Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd")
+      : value;
+  });
+  return { sheet: sh, headers, rowNumber: match.getRow(), values, object };
+}
+
 function productionHistoryStage_(value) {
   const stage = String(value || "ALL").trim().toUpperCase().replace(/\s+/g, "_");
   if (["COLOR_SORTER", "COLOUR_SORTER", "SORTER"].indexOf(stage) !== -1) return "SORTING";
@@ -8152,6 +8236,422 @@ function dashboardFgAvailability_(ledgerRows) {
   return grades;
 }
 
+function updateProductionRecordWithLedger_(stage, recordId, data) {
+  const startedAt = Date.now();
+  const timings = {
+    validation: 0,
+    rowLookup: 0,
+    operationalUpdate: 0,
+    oldLedgerVoid: 0,
+    newLedgerPost: 0,
+    total: 0,
+  };
+  const config = productionHistoryRecordConfig_(stage);
+  let failedStep = "validation";
+  let match = null;
+  let voidResult = { count: 0, previousRows: [] };
+  let postedCount = 0;
+  let operationalUpdated = false;
+  let postAttempted = false;
+
+  try {
+    if (!config || !recordId) throw new Error("Missing production stage or record ID");
+
+    failedStep = "rowLookup";
+    let stepStarted = Date.now();
+    if (stage === "GRINDER") ensureGrinderBatchesSheet_();
+    ensureHeaders_(config.sheetName, config.headers || []);
+    match = findSheetObjectRowById_(config.sheetName, config.idField, recordId);
+    timings.rowLookup = Date.now() - stepStarted;
+    if (!match) throw new Error("Production record not found: " + recordId);
+
+    failedStep = "validation";
+    stepStarted = Date.now();
+    validateOperationalWrite_(Object.assign({}, match.object, data), match.object);
+    const isDelete = String(data.status || "").toUpperCase() === "DELETED";
+    const prepared = isDelete
+      ? { patch: { status: "DELETED", updatedAt: new Date() }, ledgerBatch: null }
+      : prepareProductionRecordUpdate_(stage, match.object, data, recordId);
+    timings.validation = Date.now() - stepStarted;
+
+    failedStep = "operationalUpdate";
+    stepStarted = Date.now();
+    applySheetObjectPatch_(match, prepared.patch);
+    operationalUpdated = true;
+    timings.operationalUpdate = Date.now() - stepStarted;
+
+    failedStep = "oldLedgerVoid";
+    stepStarted = Date.now();
+    voidResult = voidProductionLedgerRows_(stage, recordId, isDelete ? "Production record deleted" : "Production record updated");
+    timings.oldLedgerVoid = Date.now() - stepStarted;
+
+    if (!isDelete) {
+      failedStep = "newLedgerPost";
+      stepStarted = Date.now();
+      postAttempted = true;
+      postedCount = appendProductionLedgerBatch_(prepared.ledgerBatch);
+      timings.newLedgerPost = Date.now() - stepStarted;
+    }
+
+    timings.total = Date.now() - startedAt;
+    const result = {
+      ok: true,
+      id: recordId,
+      recordId,
+      stage,
+      ledgerPosted: true,
+      ledgerRowsVoided: voidResult.count,
+      ledgerRowsPosted: postedCount,
+      deleted: isDelete,
+      elapsedMs: timings.total,
+      timings,
+      message: isDelete
+        ? "Production record soft-deleted and related ledger rows voided."
+        : "Production changes saved and related ledger movements reposted.",
+    };
+    result[config.idField] = recordId;
+    return output(result);
+  } catch (err) {
+    if (postAttempted) {
+      try { voidProductionLedgerRows_(stage, recordId, "Voided after failed production update"); } catch (ignore) {}
+    }
+    if (voidResult.previousRows && voidResult.previousRows.length) {
+      try { restoreProductionLedgerRows_(voidResult.previousRows); } catch (ignore) {}
+    }
+    if (operationalUpdated && match) {
+      try { match.sheet.getRange(match.rowNumber, 1, 1, match.values.length).setValues([match.values]); } catch (ignore) {}
+    }
+    timings.total = Date.now() - startedAt;
+    return output({
+      ok: false,
+      recordId: recordId || "",
+      stage: stage || "",
+      ledgerPosted: false,
+      failedStep,
+      elapsedMs: timings.total,
+      timings,
+      error: (err.message || String(err)) + " (failed step: " + failedStep + ")",
+    });
+  }
+}
+
+function prepareProductionRecordUpdate_(stage, existing, data, recordId) {
+  let row = Object.assign({}, existing, data);
+  row = normalizeProductionBatchPayload_(row, stage);
+  const date = normalizeDateOnly_(row.date || todayYmd());
+  let patch = {};
+
+  if (stage === "GRINDER") {
+    const outputComposition = normalizeGrinderOutputComposition_(row);
+    const inputWeightKg = num(row.inputWeightKg);
+    const regrindOutputKg = num(row.regrindOutputKg) || grinderOutputQtyFromComposition_(outputComposition);
+    const dustKg = num(row.dustKg);
+    const metalRejectKg = num(row.metalRejectKg);
+    const totalOutputKg = regrindOutputKg + dustKg + metalRejectKg;
+    patch = {
+      date,
+      periodMonth: row.periodMonth || getPeriodMonth(date),
+      shift: row.shift || "",
+      machine: row.machine || "",
+      entryMode: row.entryMode || "DAILY",
+      inputMaterial: row.inputMaterial || "",
+      inputWeightKg,
+      feedComposition: row.feedComposition || "",
+      outputComposition,
+      regrindOutputKg,
+      dustKg,
+      metalRejectKg,
+      grinderVarianceKg: row.grinderVarianceKg !== undefined && row.grinderVarianceKg !== "" ? num(row.grinderVarianceKg) : inputWeightKg - totalOutputKg,
+      recoveryPercent: row.recoveryPercent !== undefined && row.recoveryPercent !== "" ? num(row.recoveryPercent) : inputWeightKg > 0 ? round2(regrindOutputKg * 100 / inputWeightKg) : 0,
+      operatorName: row.operatorName || "",
+      supervisorName: row.supervisorName || "",
+      machineRunningHours: num(row.machineRunningHours),
+      downtimeHours: num(row.downtimeHours),
+      downtimeReason: row.downtimeReason || "",
+      remarks: row.remarks || "",
+      status: row.status || "",
+      nextProcess: row.nextProcess || "",
+      linkedWashBatchId: row.linkedWashBatchId || "",
+      updatedAt: new Date(),
+    };
+    row.outputComposition = outputComposition;
+  } else if (stage === "WASH") {
+    const inputMaterial = normalizeProductionMaterialAliasesInText_(row.inputMaterial || "");
+    const feedComposition = normalizeProductionCompositionAliases_(row.feedComposition || "");
+    patch = {
+      sourceRMId: row.sourceRMId || "", sourceRmInwardId: row.sourceRmInwardId || "",
+      sourceGrinderBatchId: row.sourceGrinderBatchId || "", supplier: row.supplier || "",
+      availableRMQty: num(row.availableRMQty), date, shift: row.shift || "", machine: row.machine || "",
+      entryMode: row.entryMode || "DAILY", periodMonth: row.periodMonth || getPeriodMonth(date),
+      inputMaterial, inputWeightKg: num(row.inputWeightKg), feedComposition,
+      outputComposition: row.outputComposition || "", washedOutputKg: num(row.washedOutputKg),
+      raffiaKg: num(row.raffiaKg), wrappersKg: num(row.wrappersKg), microPlasticKg: num(row.microPlasticKg),
+      sinkMaterialKg: num(row.sinkMaterialKg), ironScrapKg: num(row.ironScrapKg), otherColorKg: num(row.otherColorKg),
+      dustKg: num(row.dustKg), sludgeKg: num(row.sludgeKg), washVarianceKg: num(row.washVarianceKg),
+      estimatedRecoveryPercent: num(row.estimatedRecoveryPercent), recoverySeverity: row.recoverySeverity || "",
+      operatorName: row.operatorName || "", supervisorName: row.supervisorName || "",
+      machineRunningHours: num(row.machineRunningHours), downtimeHours: num(row.downtimeHours),
+      downtimeReason: row.downtimeReason || "", remarks: row.remarks || "", status: row.status || "",
+      sortingRequired: row.sortingRequired || "", nextProcess: row.nextProcess || "",
+      linkedSortingBatchId: row.linkedSortingBatchId || "", linkedExtrusionBatchId: row.linkedExtrusionBatchId || "",
+      updatedAt: new Date(),
+    };
+    row.inputMaterial = inputMaterial;
+    row.feedComposition = feedComposition;
+  } else if (stage === "SORTING") {
+    patch = {
+      sourceWashBatchId: row.sourceWashBatchId || "", supplier: row.supplier || "", date,
+      periodMonth: row.periodMonth || getPeriodMonth(date), shift: row.shift || "", machine: row.machine || "",
+      inputMaterial: row.inputMaterial || "", inputWeightKg: num(row.inputWeightKg),
+      feedComposition: row.feedComposition || "", outputComposition: row.outputComposition || "",
+      whiteSortedKg: num(row.whiteSortedKg), whiteGreyKg: num(row.whiteGreyKg), commodityKg: 0,
+      allMixSortedKg: num(row.allMixSortedKg), rejectedQtyKg: num(row.rejectedQtyKg),
+      acceptedQtyKg: num(row.acceptedQtyKg), sorterVarianceKg: num(row.sorterVarianceKg),
+      recoveryPercent: num(row.recoveryPercent), operatorName: row.operatorName || "",
+      supervisorName: row.supervisorName || "", machineRunningHours: num(row.machineRunningHours),
+      downtimeHours: num(row.downtimeHours), downtimeReason: row.downtimeReason || "",
+      remarks: row.remarks || "", status: row.status || "", nextProcess: row.nextProcess || "",
+      updatedAt: new Date(),
+    };
+  } else if (stage === "EXTRUSION") {
+    patch = {
+      sourceType: row.sourceType || "", sourceBatchId: row.sourceBatchId || "",
+      sourceSortingBatchId: row.sourceSortingBatchId || "", sourceWashBatchId: row.sourceWashBatchId || "",
+      sourceSupplier: row.sourceSupplier || "", availableSourceQty: num(row.availableSourceQty), date,
+      shift: row.shift || "", machine: row.machine || "", entryMode: row.entryMode || "DAILY",
+      periodMonth: row.periodMonth || getPeriodMonth(date), inputMaterial: row.inputMaterial || "",
+      inputWeightKg: num(row.inputWeightKg || row.totalInputKg), totalInputKg: num(row.totalInputKg || row.inputWeightKg),
+      feedComposition: row.feedComposition || "", outputComposition: row.outputComposition || "",
+      fgOutputKg: num(row.fgOutputKg), lumpsKg: num(row.lumpsKg), purgingKg: num(row.purgingKg),
+      reworkGranulesKg: num(row.reworkGranulesKg), rejectKg: num(row.rejectKg),
+      vacuumRejectKg: num(row.vacuumRejectKg), meshRejectKg: num(row.meshRejectKg),
+      floorSpillageKg: num(row.floorSpillageKg), totalRecoverableKg: num(row.totalRecoverableKg),
+      totalNonRecoverableKg: num(row.totalNonRecoverableKg), totalOutputKg: num(row.totalOutputKg),
+      varianceKg: num(row.varianceKg), recoveryPercent: num(row.recoveryPercent),
+      recoveryMaterialPercent: num(row.recoveryMaterialPercent), virginRatioPercent: num(row.virginRatioPercent),
+      batteryRatioPercent: num(row.batteryRatioPercent), additiveRatioPercent: num(row.additiveRatioPercent),
+      productionGrade: row.productionGrade || "", operatorName: row.operatorName || "",
+      supervisorName: row.supervisorName || "", machineRunningHours: num(row.machineRunningHours),
+      downtimeHours: num(row.downtimeHours), downtimeReason: row.downtimeReason || "",
+      remarks: row.remarks || "", status: row.status || "", nextProcess: row.nextProcess || "",
+      recoverySeverity: row.recoverySeverity || "", lotNo: row.lotNo || "",
+      linkedPackingBatchId: row.linkedPackingBatchId || "", updatedAt: new Date(),
+    };
+  }
+
+  const current = Object.assign({}, row, patch);
+  return {
+    patch,
+    ledgerBatch: prepareProductionLedgerBatch_(stage, recordId, current),
+  };
+}
+
+function applySheetObjectPatch_(match, patch) {
+  const nextValues = match.values.slice();
+  Object.keys(patch || {}).forEach(function(key) {
+    const index = match.headers.indexOf(key);
+    if (index !== -1) nextValues[index] = patch[key];
+  });
+  match.sheet.getRange(match.rowNumber, 1, 1, nextValues.length).setValues([nextValues]);
+}
+
+function prepareProductionLedgerBatch_(stage, recordId, row) {
+  const inputTotal = stage === "EXTRUSION"
+    ? num(row.totalInputKg || row.inputWeightKg)
+    : num(row.inputWeightKg);
+  let inputs = parseManufacturingCompositionRows_(
+    row.feedComposition,
+    ["material", "materialType", "sourceType", "inputBucket"],
+    ["qtyKg", "quantityKg", "consumeQty", "quantity"]
+  );
+  inputs = scaleProductionLedgerLines_(inputs, inputTotal, row.inputMaterial || "");
+
+  let outputs = parseManufacturingCompositionRows_(
+    row.outputComposition,
+    ["material", "materialType", "outputBucket", "outputMaterial"],
+    ["qtyKg", "quantityKg", "outputQty", "quantity"]
+  );
+  const outputTotal = productionRecordOutputTotal_(stage, row);
+  if (outputs.length) {
+    outputs = scaleProductionLedgerLines_(outputs, outputTotal, productionRecordDefaultOutputMaterial_(stage, row));
+  } else {
+    outputs = productionRecordFallbackOutputs_(stage, row);
+  }
+
+  if (!inputs.length) throw new Error(stage + " update has no valid input composition for ledger repost");
+  if (!outputs.length) throw new Error(stage + " update has no valid output composition for ledger repost");
+
+  const materials = getMaterialMasterRows_();
+  if (!materials.length) throw new Error("Material_Master is empty; ledger repost cannot continue");
+  const moves = [];
+  inputs.forEach(function(line) { moves.push(productionLedgerMove_(materials, line, "OUT")); });
+  outputs.forEach(function(line) { moves.push(productionLedgerMove_(materials, line, "IN")); });
+
+  return {
+    date: normalizeDateOnly_(row.date || todayYmd()),
+    stage,
+    recordId,
+    sourceRef: stage === "EXTRUSION" ? (row.sourceBatchId || recordId) : recordId,
+    createdBy: row.updatedBy || row.createdBy || "System",
+    moves,
+  };
+}
+
+function productionLedgerMove_(materials, line, direction) {
+  const name = String(line.material || "").trim();
+  if (!name || isInvalidInventoryItemName_(name)) throw new Error("Invalid ledger material: " + name);
+  const code = materialCode_(name);
+  const upper = name.toUpperCase();
+  const material = materials.find(function(item) {
+    return materialCode_(item.materialCode || item.materialName) === code ||
+      String(item.materialName || "").trim().toUpperCase() === upper;
+  });
+  if (!material) throw new Error("Material not found in Material_Master: " + name);
+  return {
+    direction,
+    materialId: material.materialId || "",
+    materialName: material.materialName,
+    category: normalizeMaterialCategoryForLedger_(material.category),
+    qtyKg: num(line.qtyKg),
+  };
+}
+
+function scaleProductionLedgerLines_(lines, targetTotal, defaultMaterial) {
+  const total = num(targetTotal);
+  if (total <= 0) return [];
+  if (!lines || !lines.length) {
+    return defaultMaterial ? [{ material: defaultMaterial, qtyKg: total }] : [];
+  }
+  const currentTotal = lines.reduce(function(sum, line) { return sum + num(line.qtyKg); }, 0);
+  if (currentTotal <= 0) return defaultMaterial ? [{ material: defaultMaterial, qtyKg: total }] : [];
+  let assigned = 0;
+  return lines.map(function(line, index) {
+    const qty = index === lines.length - 1
+      ? round2(total - assigned)
+      : round2(total * num(line.qtyKg) / currentTotal);
+    assigned += qty;
+    return { material: line.material, qtyKg: qty };
+  }).filter(function(line) { return line.material && line.qtyKg > 0; });
+}
+
+function productionRecordOutputTotal_(stage, row) {
+  if (stage === "GRINDER") return num(row.regrindOutputKg) + num(row.dustKg) + num(row.metalRejectKg);
+  if (stage === "WASH") {
+    return ["washedOutputKg", "raffiaKg", "wrappersKg", "microPlasticKg", "sinkMaterialKg", "ironScrapKg", "otherColorKg", "dustKg", "sludgeKg"]
+      .reduce(function(sum, key) { return sum + num(row[key]); }, 0);
+  }
+  if (stage === "SORTING") {
+    const accepted = num(row.acceptedQtyKg) || num(row.whiteSortedKg) + num(row.whiteGreyKg) + num(row.allMixSortedKg);
+    return accepted + num(row.rejectedQtyKg);
+  }
+  return num(row.totalOutputKg) || num(row.totalRecoverableKg) + num(row.totalNonRecoverableKg) ||
+    num(row.fgOutputKg) + num(row.lumpsKg) + num(row.purgingKg) + num(row.reworkGranulesKg) +
+    num(row.rejectKg) + num(row.vacuumRejectKg) + num(row.meshRejectKg) + num(row.floorSpillageKg);
+}
+
+function productionRecordDefaultOutputMaterial_(stage, row) {
+  if (stage === "GRINDER") return GRINDER_OUTPUT_MATERIAL;
+  if (stage === "WASH") return "White Regrind (Washed)";
+  if (stage === "SORTING") return "White Sorted Regrind";
+  return row.productionGrade || "";
+}
+
+function productionRecordFallbackOutputs_(stage, row) {
+  const lines = [];
+  function add(material, qty) { if (num(qty) > 0) lines.push({ material, qtyKg: num(qty) }); }
+  if (stage === "GRINDER") {
+    add(GRINDER_OUTPUT_MATERIAL, row.regrindOutputKg); add("Dust", row.dustKg); add("Metal Reject", row.metalRejectKg);
+  } else if (stage === "WASH") {
+    add("White Regrind (Washed)", row.washedOutputKg); add("Sink Material", row.sinkMaterialKg);
+    add("Dust", row.dustKg); add("Sludge", row.sludgeKg); add("Wrappers", row.wrappersKg);
+    add("Micro Plastic", row.microPlasticKg); add("Metal Reject", row.ironScrapKg);
+  } else if (stage === "SORTING") {
+    const white = num(row.whiteSortedKg) + num(row.whiteGreyKg);
+    const mixed = num(row.allMixSortedKg);
+    if (white + mixed > 0) {
+      add("White Sorted Regrind", white); add("Mixed Sorted", mixed);
+    } else {
+      add("White Sorted Regrind", row.acceptedQtyKg);
+    }
+    add("Colour Reject", row.rejectedQtyKg);
+  } else {
+    add(row.productionGrade || "", row.fgOutputKg); add("Lumps", row.lumpsKg); add("Purging", row.purgingKg);
+    add("Rework Material", row.reworkGranulesKg);
+    add("Extrusion Waste", num(row.rejectKg) + num(row.vacuumRejectKg) + num(row.meshRejectKg) + num(row.floorSpillageKg));
+  }
+  return lines;
+}
+
+function appendProductionLedgerBatch_(batch) {
+  const sh = getSheet("Inventory_Ledger");
+  ensureHeaders_("Inventory_Ledger", inventoryLedgerHeaders_());
+  const headers = getHeaders(sh);
+  const rows = (batch.moves || []).map(function(move) {
+    const payload = {
+      ledgerId: generateBatchId("LED"), date: batch.date, module: batch.stage,
+      movementType: move.direction, itemType: move.category, materialId: move.materialId,
+      itemName: move.materialName, sourceRef: batch.sourceRef, targetRef: batch.recordId,
+      qtyIn: move.direction === "IN" ? move.qtyKg : 0,
+      qtyOut: move.direction === "OUT" ? move.qtyKg : 0,
+      unit: "Kg", remarks: batch.stage + (move.direction === "IN" ? " output" : " input"),
+      status: "ACTIVE", createdBy: batch.createdBy, createdAt: new Date(),
+    };
+    return headers.map(function(header) { return payload[header] !== undefined ? payload[header] : ""; });
+  });
+  if (!rows.length) throw new Error("No ledger movements were prepared");
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, headers.length).setValues(rows);
+  return rows.length;
+}
+
+function voidProductionLedgerRows_(stage, recordId, reason) {
+  const sh = getSheet("Inventory_Ledger");
+  ensureHeaders_("Inventory_Ledger", inventoryLedgerHeaders_());
+  const headers = getHeaders(sh);
+  const sourceIndex = headers.indexOf("sourceRef");
+  const targetIndex = headers.indexOf("targetRef");
+  const moduleIndex = headers.indexOf("module");
+  const statusIndex = headers.indexOf("status");
+  const remarksIndex = headers.indexOf("remarks");
+  if (sourceIndex === -1 || targetIndex === -1 || moduleIndex === -1 || statusIndex === -1 || sh.getLastRow() < 2) {
+    return { count: 0, previousRows: [] };
+  }
+
+  const rowNumbers = {};
+  [sourceIndex, targetIndex].forEach(function(index) {
+    sh.getRange(2, index + 1, sh.getLastRow() - 1, 1)
+      .createTextFinder(String(recordId)).matchEntireCell(true).findAll()
+      .forEach(function(cell) { rowNumbers[cell.getRow()] = true; });
+  });
+  const allowedModules = stage === "SORTING" ? ["SORTING", "COLOR_SORTER", "COLOUR_SORTER", "COLOUR SORTER"] : [stage];
+  const previousRows = [];
+  try {
+    Object.keys(rowNumbers).forEach(function(rowNumberText) {
+      const rowNumber = Number(rowNumberText);
+      const values = sh.getRange(rowNumber, 1, 1, headers.length).getValues()[0];
+      const moduleName = String(values[moduleIndex] || "").trim().toUpperCase();
+      const status = String(values[statusIndex] || "ACTIVE").trim().toUpperCase();
+      if (allowedModules.indexOf(moduleName) === -1 || status === "VOIDED" || status === "DELETED" || status === "INACTIVE") return;
+      previousRows.push({ rowNumber, values: values.slice() });
+      values[statusIndex] = "VOIDED";
+      if (remarksIndex !== -1) values[remarksIndex] = [values[remarksIndex], reason].filter(Boolean).join(" | ");
+      sh.getRange(rowNumber, 1, 1, headers.length).setValues([values]);
+    });
+  } catch (err) {
+    previousRows.forEach(function(row) {
+      try { sh.getRange(row.rowNumber, 1, 1, row.values.length).setValues([row.values]); } catch (ignore) {}
+    });
+    throw err;
+  }
+  return { count: previousRows.length, previousRows };
+}
+
+function restoreProductionLedgerRows_(previousRows) {
+  const sh = getSheet("Inventory_Ledger");
+  (previousRows || []).forEach(function(row) {
+    sh.getRange(row.rowNumber, 1, 1, row.values.length).setValues([row.values]);
+  });
+}
+
 function addGrinderBatch(data = {}) {
   validateOperationalWrite_(data);
   data = normalizeProductionBatchPayload_(data, "GRINDER");
@@ -8245,60 +8745,7 @@ function addGrinderBatch(data = {}) {
 
 function updateGrinderBatch(data = {}) {
   const idValue = data.grinderBatchId || data.batchId;
-  ensureGrinderBatchesSheet_();
-  validateOperationalWrite_(
-    data,
-    getRowById_("Grinder_Batches", "grinderBatchId", idValue)
-  );
-  data = normalizeProductionBatchPayload_(data, "GRINDER");
-
-  const date = normalizeDateOnly_(data.date || todayYmd());
-  const outputComposition = normalizeGrinderOutputComposition_(data);
-  const inputWeightKg = num(data.inputWeightKg);
-  const regrindOutputKg = num(data.regrindOutputKg) || grinderOutputQtyFromComposition_(outputComposition);
-  const dustKg = num(data.dustKg);
-  const metalRejectKg = num(data.metalRejectKg);
-  const totalOutputKg = regrindOutputKg + dustKg + metalRejectKg;
-
-  return updateById(
-    "Grinder_Batches",
-    "grinderBatchId",
-    idValue,
-    {
-      date,
-      periodMonth: data.periodMonth || getPeriodMonth(date),
-      shift: data.shift || "",
-      machine: data.machine || "",
-      entryMode: data.entryMode || "DAILY",
-      inputMaterial: data.inputMaterial || "",
-      inputWeightKg,
-      feedComposition: data.feedComposition || "",
-      outputComposition,
-      regrindOutputKg,
-      dustKg,
-      metalRejectKg,
-      grinderVarianceKg:
-        data.grinderVarianceKg !== undefined && data.grinderVarianceKg !== ""
-          ? num(data.grinderVarianceKg)
-          : inputWeightKg - totalOutputKg,
-      recoveryPercent:
-        data.recoveryPercent !== undefined && data.recoveryPercent !== ""
-          ? num(data.recoveryPercent)
-          : inputWeightKg > 0
-          ? round2((regrindOutputKg / inputWeightKg) * 100)
-          : 0,
-      operatorName: data.operatorName || "",
-      supervisorName: data.supervisorName || "",
-      machineRunningHours: num(data.machineRunningHours),
-      downtimeHours: num(data.downtimeHours),
-      downtimeReason: data.downtimeReason || "",
-      remarks: data.remarks || "",
-      status: data.status || "",
-      nextProcess: data.nextProcess || "",
-      linkedWashBatchId: data.linkedWashBatchId || "",
-      updatedAt: new Date(),
-    }
-  );
+  return updateProductionRecordWithLedger_("GRINDER", idValue, data);
 }
 
 function addWashBatch(data = {}) {
@@ -8432,66 +8879,7 @@ function addWashBatch(data = {}) {
 
 function updateWashBatch(data = {}) {
   const idValue = data.washBatchId || data.batchId;
-  validateOperationalWrite_(
-    data,
-    getRowById_("Wash_Batches", "washBatchId", idValue)
-  );
-  data = normalizeProductionBatchPayload_(data, "WASH");
-
-  const inputMaterial = normalizeProductionMaterialAliasesInText_(data.inputMaterial || "");
-  const feedComposition = normalizeProductionCompositionAliases_(data.feedComposition || "");
-
-  return updateById(
-    "Wash_Batches",
-    "washBatchId",
-    idValue,
-    {
-
-      sourceRMId:data.sourceRMId||"",
-      sourceRmInwardId:data.sourceRmInwardId||"",
-      sourceGrinderBatchId:data.sourceGrinderBatchId||"",
-      supplier:data.supplier||"",
-      availableRMQty:num(data.availableRMQty),
-
-      date:normalizeDateOnly_(data.date||todayYmd()),
-      shift:data.shift||"",
-      machine:data.machine||"",
-      entryMode:data.entryMode||"DAILY",
-      periodMonth:data.periodMonth||getPeriodMonth(data.date),
-
-      inputMaterial,
-      inputWeightKg:num(data.inputWeightKg),
-      feedComposition,
-      washedOutputKg:num(data.washedOutputKg),
-
-      raffiaKg:num(data.raffiaKg),
-      wrappersKg:num(data.wrappersKg),
-      microPlasticKg:num(data.microPlasticKg),
-      sinkMaterialKg:num(data.sinkMaterialKg),
-      ironScrapKg:num(data.ironScrapKg),
-      otherColorKg:num(data.otherColorKg),
-      dustKg:num(data.dustKg),
-      sludgeKg:num(data.sludgeKg),
-
-      washVarianceKg:num(data.washVarianceKg),
-      estimatedRecoveryPercent:num(data.estimatedRecoveryPercent),
-      recoverySeverity:data.recoverySeverity||"",
-
-      operatorName:data.operatorName||"",
-      supervisorName:data.supervisorName||"",
-      machineRunningHours:num(data.machineRunningHours),
-      downtimeHours:num(data.downtimeHours),
-      downtimeReason:data.downtimeReason||"",
-
-      remarks:data.remarks||"",
-      status:data.status||"",
-      sortingRequired:data.sortingRequired||"",
-      nextProcess:data.nextProcess||"",
-      linkedSortingBatchId:data.linkedSortingBatchId||"",
-      linkedExtrusionBatchId:data.linkedExtrusionBatchId||""
-    }
-  );
-
+  return updateProductionRecordWithLedger_("WASH", idValue, data);
 }
 
 
@@ -8632,53 +9020,7 @@ function addSortingBatch(data={}){
 
 
 function updateSortingBatch(data={}){
-    validateOperationalWrite_(
-        data,
-        getRowById_("Sorting_Batches", "sortingBatchId", data.sortingBatchId)
-    );
-    data = normalizeProductionBatchPayload_(data, "SORTING");
-
-    return updateById(
-        "Sorting_Batches",
-        "sortingBatchId",
-        data.sortingBatchId,
-        {
-
-            sourceWashBatchId:data.sourceWashBatchId||"",
-            supplier:data.supplier||"",
-
-            date:normalizeDateOnly_(data.date||todayYmd()),
-            periodMonth:data.periodMonth||getPeriodMonth(data.date),
-
-            shift:data.shift||"",
-            machine:data.machine||"",
-
-            inputMaterial:data.inputMaterial||"",
-            inputWeightKg:num(data.inputWeightKg),
-
-            whiteSortedKg:num(data.whiteSortedKg),
-            whiteGreyKg:num(data.whiteGreyKg),
-            commodityKg:0,
-            allMixSortedKg:num(data.allMixSortedKg),
-
-            rejectedQtyKg:num(data.rejectedQtyKg),
-            acceptedQtyKg:num(data.acceptedQtyKg),
-
-            sorterVarianceKg:num(data.sorterVarianceKg),
-            recoveryPercent:num(data.recoveryPercent),
-
-            operatorName:data.operatorName||"",
-            supervisorName:data.supervisorName||"",
-
-            machineRunningHours:num(data.machineRunningHours),
-            downtimeHours:num(data.downtimeHours),
-            downtimeReason:data.downtimeReason||"",
-
-            remarks:data.remarks||"",
-            status:data.status||""
-        }
-    );
-
+    return updateProductionRecordWithLedger_("SORTING", data.sortingBatchId, data);
 }
 
 
@@ -8905,73 +9247,8 @@ function addExtrusionBatch(data = {}) {
 }
 
 function updateExtrusionBatch(data = {}) {
-  const date = normalizeDateOnly_(data.date || todayYmd());
   const idValue = data.extrusionBatchId || data.batchId;
-  validateOperationalWrite_(
-    { ...data, date },
-    getRowById_("Extrusion_Batches", "extrusionBatchId", idValue)
-  );
-  data = normalizeProductionBatchPayload_(data, "EXTRUSION");
-
-  return updateById(
-    "Extrusion_Batches",
-    "extrusionBatchId",
-    idValue,
-    {
-      sourceType: data.sourceType || "",
-      sourceBatchId: data.sourceBatchId || "",
-      sourceSortingBatchId: data.sourceSortingBatchId || "",
-      sourceWashBatchId: data.sourceWashBatchId || "",
-      sourceSupplier: data.sourceSupplier || "",
-      availableSourceQty: num(data.availableSourceQty),
-
-      date,
-      shift: data.shift || "",
-      machine: data.machine || "",
-      entryMode: data.entryMode || "DAILY",
-      periodMonth: data.periodMonth || getPeriodMonth(date),
-
-      inputMaterial: data.inputMaterial || "",
-      inputWeightKg: num(data.inputWeightKg || data.totalInputKg),
-      totalInputKg: num(data.totalInputKg || data.inputWeightKg),
-      feedComposition: data.feedComposition || "",
-
-      fgOutputKg: num(data.fgOutputKg),
-      lumpsKg: num(data.lumpsKg),
-      purgingKg: num(data.purgingKg),
-      reworkGranulesKg: num(data.reworkGranulesKg),
-      rejectKg: num(data.rejectKg),
-      vacuumRejectKg: num(data.vacuumRejectKg),
-      meshRejectKg: num(data.meshRejectKg),
-      floorSpillageKg: num(data.floorSpillageKg),
-
-      totalRecoverableKg: num(data.totalRecoverableKg),
-      totalNonRecoverableKg: num(data.totalNonRecoverableKg),
-      totalOutputKg: num(data.totalOutputKg),
-      varianceKg: num(data.varianceKg),
-      recoveryPercent: num(data.recoveryPercent),
-
-      recoveryMaterialPercent: num(data.recoveryMaterialPercent),
-      virginRatioPercent: num(data.virginRatioPercent),
-      batteryRatioPercent: num(data.batteryRatioPercent),
-      additiveRatioPercent: num(data.additiveRatioPercent),
-
-      productionGrade: data.productionGrade || "",
-
-      operatorName: data.operatorName || "",
-      supervisorName: data.supervisorName || "",
-      machineRunningHours: num(data.machineRunningHours),
-      downtimeHours: num(data.downtimeHours),
-      downtimeReason: data.downtimeReason || "",
-
-      remarks: data.remarks || "",
-      status: data.status || "",
-      nextProcess: data.nextProcess || "",
-      recoverySeverity: data.recoverySeverity || "",
-      lotNo: data.lotNo || "",
-      linkedPackingBatchId: data.linkedPackingBatchId || "",
-    }
-  );
+  return updateProductionRecordWithLedger_("EXTRUSION", idValue, data);
 }
 
 // DISPATCH

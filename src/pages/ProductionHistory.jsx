@@ -9,6 +9,7 @@ import {
   normalizeProductionMaterialName,
   productionMaterialAllowed,
 } from "../services/productionMaterialMaster";
+import { requireSuccessfulResponse, withRequestTimeout } from "../utils/requestSafety";
 
 const SHIFT_OPTIONS = ["A", "B", "C"];
 const STATUS_OPTIONS = [
@@ -60,6 +61,8 @@ export default function ProductionHistory() {
   const [status, setStatus] = useState("");
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [loadingRecordId, setLoadingRecordId] = useState("");
+  const [deletingId, setDeletingId] = useState("");
   const [editMastersLoaded, setEditMastersLoaded] = useState(false);
   const [masterRows, setMasterRows] = useState({
     machines: [],
@@ -67,6 +70,8 @@ export default function ProductionHistory() {
     grades: [],
   });
   const requestIdRef = useRef(0);
+  const editMastersPromiseRef = useRef(null);
+  const writeLockRef = useRef(false);
   const periodMonth = `${year}-${month}`;
 
   useEffect(() => {
@@ -114,15 +119,20 @@ export default function ProductionHistory() {
 
   async function loadEditMasters() {
     if (editMastersLoaded) return masterRows;
-    const [machines, productionMaterials, grades] = await Promise.all([
+    if (editMastersPromiseRef.current) return editMastersPromiseRef.current;
+    editMastersPromiseRef.current = Promise.all([
       safeMasterList("machine"),
       safeProductionMaterials(),
       safeMasterList("productGrade"),
-    ]);
-    const next = { machines, productionMaterials, grades };
-    setMasterRows(next);
-    setEditMastersLoaded(true);
-    return next;
+    ]).then(([machines, productionMaterials, grades]) => {
+      const next = { machines, productionMaterials, grades };
+      setMasterRows(next);
+      setEditMastersLoaded(true);
+      return next;
+    }).finally(() => {
+      editMastersPromiseRef.current = null;
+    });
+    return editMastersPromiseRef.current;
   }
 
   async function safeMasterList(masterType) {
@@ -434,29 +444,26 @@ export default function ProductionHistory() {
   }
 
   async function loadHistorySource(row) {
-    const res = await productionHistoryCall({
-      periodMonth,
+    const res = await productionHistoryRecordCall({
       stage: row.stage,
       recordId: row.id,
-      page: 1,
-      pageSize: 1,
-      dateMode: dateFilterMode,
-      includeSource: true,
     });
     if (!res || res.ok === false) throw new Error(res?.error || "Unable to load the production record");
-    const match = (res.rows || []).find((item) => String(item.recordId || "") === String(row.id || ""));
-    if (!match?.source) throw new Error(`Production record not found: ${row.id}`);
-    return match.source;
+    if (!res.record?.source) throw new Error(`Production record not found: ${row.id}`);
+    return { source: res.record.source, elapsedMs: Number(res.elapsedMs || 0) };
   }
 
   async function editRow(row) {
-    setStatus("Loading edit details...");
+    if (loadingRecordId || writeLockRef.current) return;
+    const startedAt = Date.now();
+    setLoadingRecordId(row.id);
+    setStatus("Loading record...");
     try {
-      const [source] = await Promise.all([
+      const [recordResult] = await Promise.all([
         loadHistorySource(row),
         loadEditMasters(),
       ]);
-      const detailedRow = { ...row, source };
+      const detailedRow = { ...row, source: recordResult.source };
       setEditing({
         process: row.process,
         updateFn: row.updateFn,
@@ -465,9 +472,13 @@ export default function ProductionHistory() {
         fields: prepareEditFields(detailedRow),
         sections: getEditSections(detailedRow),
       });
-      setStatus("");
+      const totalMs = Date.now() - startedAt;
+      console.info("production.historyRecord", { stage: row.stage, recordId: row.id, backendMs: recordResult.elapsedMs, totalMs });
+      setStatus(`Record loaded in ${totalMs} ms.`);
     } catch (err) {
       setStatus(err.message || "Unable to load edit details");
+    } finally {
+      setLoadingRecordId("");
     }
   }
 
@@ -482,18 +493,19 @@ export default function ProductionHistory() {
   }
 
   async function saveEdit() {
-    if (!editing) return;
+    if (!editing || writeLockRef.current) return;
+    writeLockRef.current = true;
+    const startedAt = Date.now();
+    setSaving(true);
+    setStatus("Saving changes...");
 
     try {
-      setSaving(true);
-
       const cleanDate = dateForInput(editing.fields.date);
       const normalizedFields = normalizeEditFields(editing.fields);
       const validationError = validateEditFields(normalizedFields, editing.sections, editing.process);
 
       if (validationError) {
-        alert(validationError);
-        return;
+        throw new Error(validationError);
       }
 
       const payload = {
@@ -504,46 +516,58 @@ export default function ProductionHistory() {
       };
       delete payload.__process;
 
-      const res = await apiCall(payload);
-
-      if (res.ok === false) {
-        alert(res.error || "Update failed");
-        return;
+      const res = requireSuccessfulResponse(
+        await withRequestTimeout(apiCall(payload), 30000),
+        "recordId",
+        `${editing.process} update`
+      );
+      if (res.ledgerPosted !== true) {
+        throw new Error(res.failedStep ? `Ledger update failed at ${res.failedStep}.` : "Ledger update was not confirmed.");
       }
 
+      const savedProcess = editing.process;
+      const savedId = editing.id;
       setEditing(null);
-      setStatus(`${editing.process} ${editing.id} updated successfully`);
+      setStatus("Changes saved successfully. Refreshing history...");
       await loadData();
+      const totalMs = Date.now() - startedAt;
+      console.info(`${savedProcess.toLowerCase()}.update`, { recordId: savedId, backendMs: res.elapsedMs, timings: res.timings, totalMs });
+      setStatus(`Changes saved successfully: ${savedProcess} ${savedId}. Backend ${Number(res.elapsedMs || 0)} ms; total ${totalMs} ms.`);
     } catch (err) {
-      alert(err.message);
+      setStatus(err.message || "Update failed");
     } finally {
+      writeLockRef.current = false;
       setSaving(false);
     }
   }
 
   async function deleteRow(row) {
+    if (writeLockRef.current || deletingId) return;
     const ok = window.confirm(`Delete ${row.process} ${row.id}?`);
     if (!ok) return;
 
+    writeLockRef.current = true;
+    setDeletingId(row.id);
+    const startedAt = Date.now();
     try {
-      setStatus(`Loading ${row.process} ${row.id}...`);
-      const source = await loadHistorySource(row);
-      const res = await apiCall({
-        ...source,
+      setStatus(`Deleting ${row.process} ${row.id}...`);
+      const res = requireSuccessfulResponse(await withRequestTimeout(apiCall({
         fn: row.updateFn,
         [row.idKey]: row.id,
         status: "DELETED",
-      });
+      }), 30000), "recordId", `${row.process} delete`);
+      if (res.ledgerPosted !== true) throw new Error(res.failedStep ? `Delete failed at ${res.failedStep}.` : "Ledger void was not confirmed.");
 
-      if (res.ok === false) {
-        alert(res.error || "Delete failed");
-        return;
-      }
-
-      setStatus(`${row.process} ${row.id} deleted`);
+      setStatus(`${row.process} ${row.id} deleted. Refreshing history...`);
       await loadData();
+      const totalMs = Date.now() - startedAt;
+      console.info(`${row.process.toLowerCase()}.delete`, { recordId: row.id, backendMs: res.elapsedMs, timings: res.timings, totalMs });
+      setStatus(`${row.process} ${row.id} deleted successfully. Backend ${Number(res.elapsedMs || 0)} ms; total ${totalMs} ms.`);
     } catch (err) {
-      alert(err.message);
+      setStatus(err.message || "Delete failed");
+    } finally {
+      writeLockRef.current = false;
+      setDeletingId("");
     }
   }
 
@@ -821,12 +845,12 @@ export default function ProductionHistory() {
             </details>
 
             <div style={modalButtons}>
-              <button onClick={() => setEditing(null)} style={cancelButton}>
+              <button onClick={() => setEditing(null)} disabled={saving} style={saving ? disabledCancelButton : cancelButton}>
                 Cancel
               </button>
 
               <button onClick={saveEdit} disabled={saving} style={saveButton}>
-                {saving ? "Saving..." : "Save Changes"}
+                {saving ? "Saving changes..." : "Save Changes"}
               </button>
             </div>
           </div>
@@ -859,6 +883,14 @@ async function productionHistoryCall(payload) {
     apiCall({ fn: "production.historySummary", ...payload }),
     timeout,
   ]).finally(() => clearTimeout(timeoutId));
+}
+
+async function productionHistoryRecordCall(payload) {
+  return withRequestTimeout(
+    apiCall({ fn: "production.historyRecord", ...payload }),
+    30000,
+    "Loading record timed out. Check the Apps Script deployment and try again."
+  );
 }
 
 function productionHistoryDisplayRow(row = {}) {
@@ -1341,6 +1373,12 @@ const cancelButton = {
   borderRadius: 8,
   cursor: "pointer",
   fontWeight: 700,
+};
+
+const disabledCancelButton = {
+  ...cancelButton,
+  opacity: 0.65,
+  cursor: "not-allowed",
 };
 
 const saveButton = {

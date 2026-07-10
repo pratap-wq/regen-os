@@ -59,7 +59,7 @@ export default function LiveInventory() {
     return rows.filter((row) => row.openingMissing || Number(row.qtyKg || 0) !== 0);
   }, [rows]);
 
-  const openingRequired = rows.some((row) => row.openingMissing);
+  const openingRequired = rows.some((row) => row.openingMissing || row.openingStatus === "OPENING_INSUFFICIENT");
 
   const categoryTotals = useMemo(() => {
     const totals = {
@@ -149,11 +149,11 @@ export default function LiveInventory() {
             key: "qtyKg",
             label: "Stock Kg",
             render: (r) => (
-              <span style={r.openingMissing || Number(r.qtyKg || 0) < 0 ? negativeText : positiveText}>
-                {r.openingMissing ? "Opening Balance Required" : Number(r.qtyKg || 0).toFixed(2)}
+              <span style={r.openingMissing || r.openingStatus === "OPENING_INSUFFICIENT" || Number(r.qtyKg || 0) < 0 ? negativeText : positiveText}>
+                {r.openingStatus === "OPENING_INSUFFICIENT" ? "Opening Balance Insufficient" : r.openingMissing ? "Opening Balance Required" : Number(r.qtyKg || 0).toFixed(2)}
               </span>
             ),
-            renderExport: (r) => r.openingMissing ? "Opening Balance Required" : Number(r.qtyKg || 0).toFixed(2),
+            renderExport: (r) => r.openingStatus === "OPENING_INSUFFICIENT" ? "Opening Balance Insufficient" : r.openingMissing ? "Opening Balance Required" : Number(r.qtyKg || 0).toFixed(2),
           },
           {
             key: "value",

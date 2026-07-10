@@ -43,9 +43,9 @@ assert.equal(white.postCutoverOutKg, 4);
 assert.equal(white.approvedOpeningKg, 25);
 assert.equal(white.operationalBalanceKg, 31);
 assert.equal(white.physicalConfirmationRequired, false);
-assert.equal(e1.openingMissing, undefined);
-assert.equal(e1.physicalConfirmationRequired, true);
-assert.equal(e1.operationalBalanceKg, null);
+assert.equal(e1.openingStatus, "ZERO_OPENING_SUFFICIENT");
+assert.equal(e1.physicalConfirmationRequired, false);
+assert.equal(e1.operationalBalanceKg, 15);
 
 console.log("Inventory cutover preview regression checks passed (11/11).");
 

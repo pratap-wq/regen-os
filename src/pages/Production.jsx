@@ -136,12 +136,14 @@ export default function Production() {
     const qtyIn = Number(row?.qtyIn || 0);
     const qtyOut = Number(row?.qtyOut || 0);
     const openingMissing = row?.openingMissing === true;
+    const openingInsufficient = row?.openingStatus === "OPENING_INSUFFICIENT";
+    const zeroOpening = row?.openingStatus === "ZERO_OPENING_SUFFICIENT" || row?.openingStatus === "NO_MOVEMENT_ZERO_OPENING";
     return (
       <KpiCard
         title={`${label} Ledger Balance`}
-        value={openingMissing ? "Opening Balance Required" : `${balance.toFixed(0)} Kg`}
-        tone={openingMissing || balance < 0 ? "warning" : "neutral"}
-        helper={`${openingMissing ? "Post-cutover stock is shown for review only | " : balance < 0 ? "Reconciliation Required | " : ""}Opening: ${row?.approvedOpeningKg == null ? "Not approved" : formatKg(row.approvedOpeningKg)} | Post-cutover IN: ${formatKg(row?.postCutoverInKg ?? qtyIn)} | Post-cutover OUT: ${formatKg(row?.postCutoverOutKg ?? qtyOut)}`}
+        value={openingInsufficient ? "Opening Balance Insufficient" : openingMissing ? "Opening Balance Required" : `${balance.toFixed(0)} Kg`}
+        tone={openingInsufficient || openingMissing || balance < 0 ? "warning" : "neutral"}
+        helper={`${openingInsufficient ? `Shortfall: ${formatKg(row?.openingShortfallKg)} | ` : openingMissing ? "Post-cutover stock is shown for review only | " : zeroOpening ? "Zero Opening | " : balance < 0 ? "Reconciliation Required | " : "Operational Balance | "}Opening: ${row?.approvedOpeningKg == null ? "0 kg" : formatKg(row.approvedOpeningKg)} | Post-cutover IN: ${formatKg(row?.postCutoverInKg ?? qtyIn)} | Post-cutover OUT: ${formatKg(row?.postCutoverOutKg ?? qtyOut)}`}
       />
     );
   }

@@ -2551,6 +2551,7 @@ function inventoryCutoverCompute_() {
   const ledgerRows = inventoryReconciliationReadRows_("Inventory_Ledger");
   const openings = inventoryCutoverApprovedOpeningRows_(materialIndex, ledgerRows);
   const stats = {};
+  const eventsByIdentity = {};
   const historical = {};
   const unknownOperationalRows = [];
   const ledgerRefs = {};
@@ -2573,9 +2574,10 @@ function inventoryCutoverCompute_() {
       preCutoverInKg: 0,
       preCutoverOutKg: 0,
     };
+    eventsByIdentity[identity] = [];
   });
 
-  ledgerRows.forEach(function(row) {
+  ledgerRows.forEach(function(row, rowIndex) {
     if (!inventoryCutoverStatusActive_(row)) return;
     const qtyIn = num(row.qtyIn);
     const qtyOut = num(row.qtyOut);
@@ -2599,6 +2601,12 @@ function inventoryCutoverCompute_() {
     if (!stats[identity]) return;
     stats[identity].postCutoverInKg += qtyIn;
     stats[identity].postCutoverOutKg += qtyOut;
+    eventsByIdentity[identity].push({
+      date: inventoryCutoverRowDate_(row),
+      createdAt: row.createdAt,
+      rowOrder: rowIndex,
+      delta: qtyIn - qtyOut,
+    });
     [row.sourceRef, row.targetRef, row.legacySourceId, row.ledgerId].forEach(function(ref) {
       const clean = String(ref || "").trim();
       if (clean) ledgerRefs[clean] = true;
@@ -2615,15 +2623,54 @@ function inventoryCutoverCompute_() {
     if (!material) return;
     const identity = inventoryCutoverMaterialIdentity_(material);
     if (!stats[identity]) return;
-    stats[identity].postCutoverAdjustmentKg += inventoryCutoverQuantity_(row);
+    const adjustmentKg = inventoryCutoverQuantity_(row);
+    stats[identity].postCutoverAdjustmentKg += adjustmentKg;
+    eventsByIdentity[identity].push({
+      date,
+      createdAt: row.createdAt,
+      rowOrder: 1000000 + eventsByIdentity[identity].length,
+      delta: adjustmentKg,
+    });
   });
 
   const rows = Object.keys(stats).map(function(identity) {
     const row = stats[identity];
     const postNet = row.postCutoverInKg - row.postCutoverOutKg + row.postCutoverAdjustmentKg;
-    const openingMissing = row.approvedOpeningKg === null;
+    const events = (eventsByIdentity[identity] || []).slice().sort(function(a, b) {
+      return String(a.date || "").localeCompare(String(b.date || "")) ||
+        String(a.createdAt || "").localeCompare(String(b.createdAt || "")) ||
+        num(a.rowOrder) - num(b.rowOrder);
+    });
+    let runningBalance = 0;
+    let minimumRunningBalance = 0;
+    events.forEach(function(event) {
+      runningBalance += num(event.delta);
+      minimumRunningBalance = Math.min(minimumRunningBalance, runningBalance);
+    });
+    const requiredOpeningKg = round2(Math.max(0, -minimumRunningBalance));
+    const hasMovement = events.length > 0;
+    let approvedOpeningKg = row.approvedOpeningKg;
+    let openingMissing = false;
+    let openingStatus = "";
+    let openingShortfallKg = 0;
+    let operationalBalanceKg = null;
+    if (approvedOpeningKg !== null && num(approvedOpeningKg) + 0.001 < requiredOpeningKg) {
+      openingStatus = "OPENING_INSUFFICIENT";
+      openingShortfallKg = round2(requiredOpeningKg - num(approvedOpeningKg));
+    } else if (approvedOpeningKg !== null) {
+      operationalBalanceKg = round2(num(approvedOpeningKg) + postNet);
+      openingStatus = num(approvedOpeningKg) === 0 && requiredOpeningKg === 0 ? "ZERO_OPENING_SUFFICIENT" : "APPROVED_OPENING";
+    } else if (requiredOpeningKg === 0) {
+      approvedOpeningKg = 0;
+      operationalBalanceKg = round2(postNet);
+      openingStatus = hasMovement ? "ZERO_OPENING_SUFFICIENT" : "NO_MOVEMENT_ZERO_OPENING";
+    } else {
+      openingMissing = true;
+      openingStatus = "OPENING_REQUIRED";
+    }
     return Object.assign({}, row, {
       cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
+      approvedOpeningKg,
       postCutoverInKg: round2(row.postCutoverInKg),
       postCutoverOutKg: round2(row.postCutoverOutKg),
       postCutoverAdjustmentKg: round2(row.postCutoverAdjustmentKg),
@@ -2631,9 +2678,14 @@ function inventoryCutoverCompute_() {
       legacyAliasBalanceKg: round2(row.legacyAliasBalanceKg),
       preCutoverInKg: round2(row.preCutoverInKg),
       preCutoverOutKg: round2(row.preCutoverOutKg),
-      operationalBalanceKg: openingMissing ? null : round2(row.approvedOpeningKg + postNet),
+      operationalBalanceKg,
       openingMissing,
-      reconciliationRequired: openingMissing,
+      openingStatus,
+      openingShortfallKg,
+      minimumRunningBalanceKg: round2(minimumRunningBalance),
+      requiredOpeningKg,
+      earliestMovement: events.length ? events[0].date : "",
+      reconciliationRequired: openingMissing || openingStatus === "OPENING_INSUFFICIENT",
       openingSources: openings.sources[identity] || [],
     });
   });
@@ -2686,7 +2738,12 @@ function getInventoryCutoverPreview(data = {}) {
       approvedOpeningKg: row.approvedOpeningKg,
       calculatedOpeningGap,
       operationalBalanceKg: row.operationalBalanceKg,
-      physicalConfirmationRequired: row.openingMissing,
+      physicalConfirmationRequired: row.openingMissing || row.openingStatus === "OPENING_INSUFFICIENT",
+      earliestMovement: row.earliestMovement,
+      minimumRunningBalanceKg: row.minimumRunningBalanceKg,
+      requiredOpeningKg: row.requiredOpeningKg,
+      openingStatus: row.openingStatus,
+      openingShortfallKg: row.openingShortfallKg,
       warnings,
     };
   });
@@ -7025,6 +7082,11 @@ function getProductionEntryBootstrap() {
       allHistoryBalanceKg: 0,
       operationalBalanceKg: null,
       openingMissing: true,
+      openingStatus: "OPENING_REQUIRED",
+      openingShortfallKg: 0,
+      minimumRunningBalanceKg: 0,
+      requiredOpeningKg: 0,
+      earliestMovement: "",
       reconciliationRequired: true,
     };
     if (!item.materialName) return;
@@ -7037,7 +7099,12 @@ function getProductionEntryBootstrap() {
       item.allHistoryBalanceKg = stock.allHistoryBalanceKg;
       item.operationalBalanceKg = stock.operationalBalanceKg;
       item.openingMissing = stock.openingMissing;
-      item.reconciliationRequired = stock.reconciliationRequired;
+      item.openingStatus = stock.openingStatus;
+      item.openingShortfallKg = stock.openingShortfallKg;
+      item.minimumRunningBalanceKg = stock.minimumRunningBalanceKg;
+      item.requiredOpeningKg = stock.requiredOpeningKg;
+      item.earliestMovement = stock.earliestMovement;
+      item.reconciliationRequired = stock.reconciliationRequired || stock.openingStatus === "OPENING_INSUFFICIENT";
       item.qtyKg = stock.operationalBalanceKg === null ? 0 : stock.operationalBalanceKg;
       item.qtyIn = stock.postCutoverInKg;
       item.qtyOut = stock.postCutoverOutKg;
@@ -12078,7 +12145,7 @@ function getInventoryLiveSummary() {
         category: row.category,
         qtyKg: row.operationalBalanceKg === null ? null : round2(row.operationalBalanceKg),
         value: 0,
-        status: row.openingMissing ? "OPENING_REQUIRED" : row.operationalBalanceKg < 0 ? "RECONCILIATION_REQUIRED" : row.status,
+        status: row.openingStatus === "OPENING_INSUFFICIENT" ? "OPENING_INSUFFICIENT" : row.openingMissing ? "OPENING_REQUIRED" : row.operationalBalanceKg < 0 ? "RECONCILIATION_REQUIRED" : row.openingStatus,
         cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
         approvedOpeningKg: row.approvedOpeningKg,
         postCutoverInKg: row.postCutoverInKg,
@@ -12086,6 +12153,7 @@ function getInventoryLiveSummary() {
         postCutoverAdjustmentKg: row.postCutoverAdjustmentKg,
         operationalBalanceKg: row.operationalBalanceKg,
         openingMissing: row.openingMissing,
+        openingStatus: row.openingStatus,
       };
     })
     .sort(function(a, b) {
@@ -12160,6 +12228,7 @@ function getInventoryLedgerLiveBalance(data = {}) {
       balanceKg: row.operationalBalanceKg,
       movementCount: 0,
       openingMissing: row.openingMissing,
+      openingStatus: row.openingStatus,
       approvedOpeningKg: row.approvedOpeningKg,
       cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
     };

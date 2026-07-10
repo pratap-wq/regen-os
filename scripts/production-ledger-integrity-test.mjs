@@ -72,6 +72,16 @@ assert.equal(deletedSummary.qtyInKg, 45);
 assert.equal(deletedSummary.qtyOutKg, 50);
 assert.equal(deletedSummary.netInventoryImpactKg, -5);
 
+context.__sheets.Grinder_Batches = [
+  { grinderBatchId: "GB-ONLY-DELETED", status: "DELETED" },
+  { grinderBatchId: "GB-MIXED", status: "DELETED" },
+  { grinderBatchId: "GB-MIXED", status: "ACTIVE" },
+];
+const deletedSourceIndex = evaluate("productionLedgerDeletedSourceIndex_()");
+assert.equal(deletedSourceIndex.index["GRINDER|GB-ONLY-DELETED"], true);
+assert.equal(Boolean(deletedSourceIndex.index["GRINDER|GB-MIXED"]), false);
+assert.equal(deletedSourceIndex.ambiguousSources.length, 1);
+
 context.__events = [];
 context.__updateData = {};
 vm.runInContext(`
@@ -112,4 +122,4 @@ assert.equal(deleteUpdate.deleted, true);
 assert.equal(deleteUpdate.ledgerVoided, true);
 assert.deepEqual(Array.from(context.__events), ["void", "operational"]);
 
-console.log("Production ledger integrity regression checks passed (25/25).");
+console.log("Production ledger integrity regression checks passed (28/28).");

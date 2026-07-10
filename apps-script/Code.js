@@ -17638,21 +17638,38 @@ function productionLedgerDeletedSourceIndex_() {
     { sheetName: "Sorting_Batches", idFields: ["sortingBatchId", "batchId"], modules: ["SORTING", "COLOR_SORTER", "COLOUR_SORTER", "COLOUR SORTER"] },
     { sheetName: "Extrusion_Batches", idFields: ["extrusionBatchId", "batchId"], modules: ["EXTRUSION"] },
   ];
-  const index = {};
-  const deletedSources = [];
+  const sourceStates = {};
 
   configs.forEach(function(config) {
     getRowsAsObjects(config.sheetName).forEach(function(row) {
-      if (String(row.status || "").trim().toUpperCase() !== "DELETED") return;
       const sourceId = config.idFields.map(function(field) { return String(row[field] || "").trim(); })
         .filter(Boolean)[0] || "";
       if (!sourceId) return;
-      config.modules.forEach(function(moduleName) { index[moduleName + "|" + sourceId] = true; });
-      deletedSources.push({ sheetName: config.sheetName, sourceId });
+      const deleted = String(row.status || "").trim().toUpperCase() === "DELETED";
+      config.modules.forEach(function(moduleName) {
+        const key = moduleName + "|" + sourceId;
+        if (!sourceStates[key]) {
+          sourceStates[key] = { sheetName: config.sheetName, module: moduleName, sourceId, deletedRows: 0, nonDeletedRows: 0 };
+        }
+        if (deleted) sourceStates[key].deletedRows += 1;
+        else sourceStates[key].nonDeletedRows += 1;
+      });
     });
   });
 
-  return { index, deletedSources };
+  const index = {};
+  const deletedSources = [];
+  const ambiguousSources = [];
+  Object.keys(sourceStates).forEach(function(key) {
+    const state = sourceStates[key];
+    if (state.deletedRows > 0 && state.nonDeletedRows === 0) {
+      index[key] = true;
+      deletedSources.push(state);
+    } else if (state.deletedRows > 0 && state.nonDeletedRows > 0) {
+      ambiguousSources.push(state);
+    }
+  });
+  return { index, deletedSources, ambiguousSources };
 }
 
 function productionLedgerDeletedSourceMatch_(row, deletedSourceIndex) {
@@ -17731,6 +17748,8 @@ function repairDeletedProductionLedgerSources(data = {}) {
         dryRun: true,
         generatedAt: new Date().toISOString(),
         deletedOperationalSourceCount: deleted.deletedSources.length,
+        ambiguousSourceCount: deleted.ambiguousSources.length,
+        ambiguousSources: deleted.ambiguousSources.slice(0, 100),
         summary,
         rows: candidates.slice(0, 200).map(productionLedgerAuditRow_),
         requiredConfirmation,

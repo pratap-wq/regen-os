@@ -110,6 +110,7 @@ function doGet(e) {
     if (p.fn === "grinder.update") return updateGrinderBatch(p);
     if (p.fn === "production.historySummary") return getProductionHistorySummary(p);
     if (p.fn === "production.historyRecord") return getProductionHistoryRecord(p);
+    if (p.fn === "productionLedger.audit") return auditProductionLedger(p);
     if (p.fn === "production.entryBootstrap") return getProductionEntryBootstrap(p);
     if (p.fn === "dashboard.ceoSummary") return getDashboardCeoSummary(p);
     if (p.fn === "dashboard.factorySummary") return getDashboardFactorySummary(p);
@@ -670,6 +671,7 @@ function debugRoutes() {
       "grinder.update",
       "production.historySummary",
       "production.historyRecord",
+      "productionLedger.audit",
       "production.entryBootstrap",
       "dashboard.ceoSummary",
       "dashboard.factorySummary",
@@ -7931,12 +7933,19 @@ function findSheetObjectRowById_(sheetName, idField, idValue) {
   const idIndex = headers.indexOf(idField);
   if (idIndex === -1 || sh.getLastRow() < 2) return null;
 
-  const match = sh
+  const matches = sh
     .getRange(2, idIndex + 1, sh.getLastRow() - 1, 1)
     .createTextFinder(String(idValue))
     .matchEntireCell(true)
-    .findNext();
-  if (!match) return null;
+    .findAll();
+  if (!matches.length) return null;
+  if (matches.length > 1) {
+    throw new Error(
+      "Duplicate " + idField + " found in " + sheetName + ": " + idValue +
+      ". Editing is blocked until the duplicate operational rows are reviewed."
+    );
+  }
+  const match = matches[0];
 
   const values = sh.getRange(match.getRow(), 1, 1, headers.length).getValues()[0];
   const object = {};
@@ -8501,9 +8510,16 @@ function updateProductionRecordWithLedger_(stage, recordId, data) {
   let postedCount = 0;
   let operationalUpdated = false;
   let postAttempted = false;
+  let lock = null;
+  let lockAcquired = false;
 
   try {
     if (!config || !recordId) throw new Error("Missing production stage or record ID");
+
+    failedStep = "transactionLock";
+    lock = LockService.getScriptLock();
+    lockAcquired = lock.tryLock(5000);
+    if (!lockAcquired) throw new Error("Another production update is in progress. Please retry after it completes.");
 
     failedStep = "rowLookup";
     let stepStarted = Date.now();
@@ -8520,26 +8536,36 @@ function updateProductionRecordWithLedger_(stage, recordId, data) {
     const prepared = isDelete
       ? { patch: { status: "DELETED", updatedAt: new Date() }, ledgerBatch: null }
       : prepareProductionRecordUpdate_(stage, match.object, data, recordId);
+    const ledgerChanged = isDelete || productionLedgerImpactChanged_(
+      stage,
+      match.object,
+      Object.assign({}, match.object, prepared.patch)
+    );
     timings.validation = Date.now() - stepStarted;
+
+    if (ledgerChanged) {
+      failedStep = "oldLedgerVoid";
+      stepStarted = Date.now();
+      voidResult = voidProductionLedgerRows_(stage, recordId, isDelete ? "Production record deleted" : "Production record updated");
+      timings.oldLedgerVoid = Date.now() - stepStarted;
+      if (isDelete && voidResult.count <= 0) {
+        throw new Error("No active production ledger movements were found. Delete was not applied.");
+      }
+
+      if (!isDelete) {
+        failedStep = "newLedgerPost";
+        stepStarted = Date.now();
+        postAttempted = true;
+        postedCount = appendProductionLedgerBatch_(prepared.ledgerBatch);
+        timings.newLedgerPost = Date.now() - stepStarted;
+      }
+    }
 
     failedStep = "operationalUpdate";
     stepStarted = Date.now();
     applySheetObjectPatch_(match, prepared.patch);
     operationalUpdated = true;
     timings.operationalUpdate = Date.now() - stepStarted;
-
-    failedStep = "oldLedgerVoid";
-    stepStarted = Date.now();
-    voidResult = voidProductionLedgerRows_(stage, recordId, isDelete ? "Production record deleted" : "Production record updated");
-    timings.oldLedgerVoid = Date.now() - stepStarted;
-
-    if (!isDelete) {
-      failedStep = "newLedgerPost";
-      stepStarted = Date.now();
-      postAttempted = true;
-      postedCount = appendProductionLedgerBatch_(prepared.ledgerBatch);
-      timings.newLedgerPost = Date.now() - stepStarted;
-    }
 
     timings.total = Date.now() - startedAt;
     const transactionTrace = {
@@ -8555,7 +8581,9 @@ function updateProductionRecordWithLedger_(stage, recordId, data) {
       id: recordId,
       recordId,
       stage,
-      ledgerPosted: true,
+      ledgerPosted: !isDelete && ledgerChanged && postedCount > 0,
+      ledgerUnchanged: !ledgerChanged,
+      ledgerVoided: isDelete && voidResult.count > 0,
       ledgerRowsVoided: voidResult.count,
       ledgerRowsPosted: postedCount,
       deleted: isDelete,
@@ -8564,7 +8592,9 @@ function updateProductionRecordWithLedger_(stage, recordId, data) {
       transactionTrace,
       message: isDelete
         ? "Production record soft-deleted and related ledger rows voided."
-        : "Production changes saved and related ledger movements reposted.",
+        : ledgerChanged
+        ? "Production changes saved and related ledger movements reposted."
+        : "Production changes saved. Inventory movement was unchanged.",
     };
     result[config.idField] = recordId;
     return output(result);
@@ -8592,13 +8622,54 @@ function updateProductionRecordWithLedger_(stage, recordId, data) {
       recordId: recordId || "",
       stage: stage || "",
       ledgerPosted: false,
+      ledgerUnchanged: false,
+      ledgerVoided: false,
       failedStep,
       elapsedMs: timings.total,
       timings,
       transactionTrace,
       error: (err.message || String(err)) + " (failed step: " + failedStep + ")",
     });
+  } finally {
+    if (lockAcquired && lock) lock.releaseLock();
   }
+}
+
+function productionLedgerImpactChanged_(stage, before, after) {
+  const common = ["date", "inputMaterial", "inputWeightKg", "feedComposition", "outputComposition"];
+  const byStage = {
+    GRINDER: ["regrindOutputKg", "dustKg", "metalRejectKg"],
+    WASH: [
+      "washedOutputKg", "raffiaKg", "wrappersKg", "microPlasticKg", "sinkMaterialKg",
+      "ironScrapKg", "otherColorKg", "dustKg", "sludgeKg",
+    ],
+    SORTING: [
+      "whiteSortedKg", "whiteGreyKg", "allMixSortedKg", "rejectedQtyKg", "acceptedQtyKg",
+    ],
+    EXTRUSION: [
+      "sourceBatchId", "totalInputKg", "fgOutputKg", "lumpsKg", "purgingKg",
+      "reworkGranulesKg", "rejectKg", "vacuumRejectKg", "meshRejectKg",
+      "floorSpillageKg", "totalRecoverableKg", "totalNonRecoverableKg", "totalOutputKg",
+      "productionGrade",
+    ],
+  };
+  return common.concat(byStage[stage] || []).some(function(field) {
+    return productionLedgerComparable_(field, before[field]) !== productionLedgerComparable_(field, after[field]);
+  });
+}
+
+function productionLedgerComparable_(field, value) {
+  if (field === "date") return normalizeDateOnly_(value || todayYmd());
+  if (field === "feedComposition" || field === "outputComposition") {
+    try {
+      const parsed = typeof value === "string" ? JSON.parse(value || "[]") : value || [];
+      return JSON.stringify(parsed);
+    } catch (err) {
+      return String(value || "").trim();
+    }
+  }
+  if (/Kg$/.test(field)) return String(round2(num(value)));
+  return String(value || "").trim();
 }
 
 function prepareProductionRecordUpdate_(stage, existing, data, recordId) {
@@ -8616,7 +8687,7 @@ function prepareProductionRecordUpdate_(stage, existing, data, recordId) {
     const totalOutputKg = regrindOutputKg + dustKg + metalRejectKg;
     patch = {
       date,
-      periodMonth: row.periodMonth || getPeriodMonth(date),
+      periodMonth: getPeriodMonth(date),
       shift: row.shift || "",
       machine: row.machine || "",
       entryMode: row.entryMode || "DAILY",
@@ -8648,7 +8719,7 @@ function prepareProductionRecordUpdate_(stage, existing, data, recordId) {
       sourceRMId: row.sourceRMId || "", sourceRmInwardId: row.sourceRmInwardId || "",
       sourceGrinderBatchId: row.sourceGrinderBatchId || "", supplier: row.supplier || "",
       availableRMQty: num(row.availableRMQty), date, shift: row.shift || "", machine: row.machine || "",
-      entryMode: row.entryMode || "DAILY", periodMonth: row.periodMonth || getPeriodMonth(date),
+      entryMode: row.entryMode || "DAILY", periodMonth: getPeriodMonth(date),
       inputMaterial, inputWeightKg: num(row.inputWeightKg), feedComposition,
       outputComposition: row.outputComposition || "", washedOutputKg: num(row.washedOutputKg),
       raffiaKg: num(row.raffiaKg), wrappersKg: num(row.wrappersKg), microPlasticKg: num(row.microPlasticKg),
@@ -8667,7 +8738,7 @@ function prepareProductionRecordUpdate_(stage, existing, data, recordId) {
   } else if (stage === "SORTING") {
     patch = {
       sourceWashBatchId: row.sourceWashBatchId || "", supplier: row.supplier || "", date,
-      periodMonth: row.periodMonth || getPeriodMonth(date), shift: row.shift || "", machine: row.machine || "",
+      periodMonth: getPeriodMonth(date), shift: row.shift || "", machine: row.machine || "",
       inputMaterial: row.inputMaterial || "", inputWeightKg: num(row.inputWeightKg),
       feedComposition: row.feedComposition || "", outputComposition: row.outputComposition || "",
       whiteSortedKg: num(row.whiteSortedKg), whiteGreyKg: num(row.whiteGreyKg), commodityKg: 0,
@@ -8685,7 +8756,7 @@ function prepareProductionRecordUpdate_(stage, existing, data, recordId) {
       sourceSortingBatchId: row.sourceSortingBatchId || "", sourceWashBatchId: row.sourceWashBatchId || "",
       sourceSupplier: row.sourceSupplier || "", availableSourceQty: num(row.availableSourceQty), date,
       shift: row.shift || "", machine: row.machine || "", entryMode: row.entryMode || "DAILY",
-      periodMonth: row.periodMonth || getPeriodMonth(date), inputMaterial: row.inputMaterial || "",
+      periodMonth: getPeriodMonth(date), inputMaterial: row.inputMaterial || "",
       inputWeightKg: num(row.inputWeightKg || row.totalInputKg), totalInputKg: num(row.totalInputKg || row.inputWeightKg),
       feedComposition: row.feedComposition || "", outputComposition: row.outputComposition || "",
       fgOutputKg: num(row.fgOutputKg), lumpsKg: num(row.lumpsKg), purgingKg: num(row.purgingKg),
@@ -8853,12 +8924,14 @@ function appendProductionLedgerBatch_(batch) {
   ensureHeaders_("Inventory_Ledger", inventoryLedgerHeaders_());
   const headers = getHeaders(sh);
   const rows = (batch.moves || []).map(function(move) {
+    const qtyKg = num(move.qtyKg);
+    if (qtyKg <= 0) throw new Error("Production ledger quantities must be positive");
     const payload = {
       ledgerId: generateBatchId("LED"), date: batch.date, module: batch.stage,
       movementType: move.direction, itemType: move.category, materialId: move.materialId,
       itemName: move.materialName, sourceRef: batch.sourceRef, targetRef: batch.recordId,
-      qtyIn: move.direction === "IN" ? move.qtyKg : 0,
-      qtyOut: move.direction === "OUT" ? move.qtyKg : 0,
+      qtyIn: move.direction === "IN" ? qtyKg : 0,
+      qtyOut: move.direction === "OUT" ? qtyKg : 0,
       unit: "Kg", remarks: batch.stage + (move.direction === "IN" ? " output" : " input"),
       status: "ACTIVE", createdBy: batch.createdBy, createdAt: new Date(),
     };
@@ -8872,50 +8945,61 @@ function appendProductionLedgerBatch_(batch) {
 function voidProductionLedgerRows_(stage, recordId, reason) {
   const sh = getSheet("Inventory_Ledger");
   ensureHeaders_("Inventory_Ledger", inventoryLedgerHeaders_());
-  const headers = getHeaders(sh);
+  const data = sh.getDataRange().getValues();
+  const headers = data.length ? data[0].map(function(value) { return String(value || "").trim(); }) : [];
   const sourceIndex = headers.indexOf("sourceRef");
   const targetIndex = headers.indexOf("targetRef");
   const moduleIndex = headers.indexOf("module");
   const statusIndex = headers.indexOf("status");
   const remarksIndex = headers.indexOf("remarks");
-  if (sourceIndex === -1 || targetIndex === -1 || moduleIndex === -1 || statusIndex === -1 || sh.getLastRow() < 2) {
+  if (sourceIndex === -1 || targetIndex === -1 || moduleIndex === -1 || statusIndex === -1 || data.length < 2) {
     return { count: 0, previousRows: [] };
   }
 
-  const rowNumbers = {};
-  [sourceIndex, targetIndex].forEach(function(index) {
-    sh.getRange(2, index + 1, sh.getLastRow() - 1, 1)
-      .createTextFinder(String(recordId)).matchEntireCell(true).findAll()
-      .forEach(function(cell) { rowNumbers[cell.getRow()] = true; });
-  });
   const allowedModules = stage === "SORTING" ? ["SORTING", "COLOR_SORTER", "COLOUR_SORTER", "COLOUR SORTER"] : [stage];
   const previousRows = [];
-  try {
-    Object.keys(rowNumbers).forEach(function(rowNumberText) {
-      const rowNumber = Number(rowNumberText);
-      const values = sh.getRange(rowNumber, 1, 1, headers.length).getValues()[0];
+  const changedRows = [];
+  data.slice(1).forEach(function(values, index) {
+      const rowNumber = index + 2;
+      const sourceMatches = String(values[sourceIndex] || "") === String(recordId);
+      const targetMatches = String(values[targetIndex] || "") === String(recordId);
+      if (!sourceMatches && !targetMatches) return;
       const moduleName = String(values[moduleIndex] || "").trim().toUpperCase();
       const status = String(values[statusIndex] || "ACTIVE").trim().toUpperCase();
       if (allowedModules.indexOf(moduleName) === -1 || status === "VOIDED" || status === "DELETED" || status === "INACTIVE") return;
       previousRows.push({ rowNumber, values: values.slice() });
       values[statusIndex] = "VOIDED";
       if (remarksIndex !== -1) values[remarksIndex] = [values[remarksIndex], reason].filter(Boolean).join(" | ");
-      sh.getRange(rowNumber, 1, 1, headers.length).setValues([values]);
-    });
-  } catch (err) {
-    previousRows.forEach(function(row) {
-      try { sh.getRange(row.rowNumber, 1, 1, row.values.length).setValues([row.values]); } catch (ignore) {}
-    });
-    throw err;
-  }
+      changedRows.push({ rowNumber, values: values.slice() });
+  });
+  writeSheetRowsByNumber_(sh, changedRows);
   return { count: previousRows.length, previousRows };
 }
 
 function restoreProductionLedgerRows_(previousRows) {
   const sh = getSheet("Inventory_Ledger");
-  (previousRows || []).forEach(function(row) {
-    sh.getRange(row.rowNumber, 1, 1, row.values.length).setValues([row.values]);
-  });
+  writeSheetRowsByNumber_(sh, previousRows || []);
+}
+
+function writeSheetRowsByNumber_(sheet, rows) {
+  const ordered = (rows || []).slice().sort(function(a, b) { return a.rowNumber - b.rowNumber; });
+  if (!ordered.length) return;
+  let group = [ordered[0]];
+  function flush() {
+    if (!group.length) return;
+    sheet.getRange(group[0].rowNumber, 1, group.length, group[0].values.length)
+      .setValues(group.map(function(row) { return row.values; }));
+  }
+  for (let index = 1; index < ordered.length; index += 1) {
+    const row = ordered[index];
+    if (row.rowNumber === group[group.length - 1].rowNumber + 1) {
+      group.push(row);
+    } else {
+      flush();
+      group = [row];
+    }
+  }
+  flush();
 }
 
 function addGrinderBatch(data = {}) {
@@ -15859,6 +15943,197 @@ function ledgerBalancesForItems_(rows, itemNames) {
     qtyOut: round2(wanted[key].qtyOut),
     balance: round2(wanted[key].balance),
   }));
+}
+
+function auditProductionLedger(data = {}) {
+  const startedAt = Date.now();
+  const periodMonth = auditPeriodMonth_(data.periodMonth || data.month || "");
+  const moduleNames = ["GRINDER", "WASH", "SORTING", "COLOR_SORTER", "COLOUR_SORTER", "COLOUR SORTER", "EXTRUSION"];
+  const allLedgerRows = getRowsAsObjects("Inventory_Ledger");
+  const scopedLedgerRows = periodMonth
+    ? allLedgerRows.filter(function(row) { return auditRowPeriod_(row) === periodMonth; })
+    : allLedgerRows;
+  const productionRows = scopedLedgerRows.filter(function(row) {
+    return moduleNames.indexOf(String(row.module || "").trim().toUpperCase()) !== -1;
+  });
+  const activeRows = productionRows.filter(productionLedgerRowActive_);
+  const inactiveRows = productionRows.filter(function(row) { return !productionLedgerRowActive_(row); });
+  const negativeQuantityRows = activeRows.filter(function(row) {
+    return num(row.qtyIn) < 0 || num(row.qtyOut) < 0;
+  });
+  const doubleNegatedOutRows = activeRows.filter(function(row) {
+    return String(row.movementType || "").trim().toUpperCase() === "OUT" && num(row.qtyOut) < 0;
+  });
+
+  const activeGroupMap = {};
+  activeRows.forEach(function(row) {
+    const batchId = productionLedgerRecordId_(row);
+    const direction = num(row.qtyOut) !== 0 ? "OUT" : "IN";
+    const material = String(row.materialId || row.itemName || "").trim().toUpperCase();
+    const key = [String(row.module || "").trim().toUpperCase(), batchId, direction, material].join("|");
+    if (!activeGroupMap[key]) activeGroupMap[key] = { key, batchId, module: row.module || "", direction, material: row.itemName || material, count: 0, ledgerIds: [], qtyIn: 0, qtyOut: 0 };
+    activeGroupMap[key].count += 1;
+    activeGroupMap[key].qtyIn += num(row.qtyIn);
+    activeGroupMap[key].qtyOut += num(row.qtyOut);
+    if (activeGroupMap[key].ledgerIds.length < 10) activeGroupMap[key].ledgerIds.push(row.ledgerId || "");
+  });
+  const duplicateActiveMovementGroups = Object.keys(activeGroupMap)
+    .map(function(key) { return activeGroupMap[key]; })
+    .filter(function(group) { return group.count > 1; })
+    .map(productionLedgerRoundGroup_);
+
+  const editMap = {};
+  productionRows.forEach(function(row) {
+    const batchId = productionLedgerRecordId_(row);
+    if (!batchId) return;
+    if (!editMap[batchId]) editMap[batchId] = { batchId, activeRows: 0, voidedRows: 0, totalRows: 0 };
+    editMap[batchId].totalRows += 1;
+    if (productionLedgerRowActive_(row)) editMap[batchId].activeRows += 1;
+    else editMap[batchId].voidedRows += 1;
+  });
+  const editedBatches = Object.keys(editMap)
+    .map(function(key) { return editMap[key]; })
+    .filter(function(group) { return group.voidedRows > 0; })
+    .sort(function(a, b) { return b.totalRows - a.totalRows; });
+
+  const allActiveRows = scopedLedgerRows.filter(productionLedgerRowActive_);
+  const balanceMap = {};
+  allActiveRows.forEach(function(row) {
+    if (String(row.itemType || "").trim().toUpperCase() === "STORE") return;
+    const material = String(row.itemName || "").trim() || "(blank)";
+    if (!balanceMap[material]) balanceMap[material] = { itemName: material, itemType: row.itemType || "", qtyIn: 0, qtyOut: 0, balanceKg: 0, affectedBatchIds: {} };
+    balanceMap[material].qtyIn += num(row.qtyIn);
+    balanceMap[material].qtyOut += num(row.qtyOut);
+    balanceMap[material].balanceKg += num(row.qtyIn) - num(row.qtyOut);
+  });
+  activeRows.forEach(function(row) {
+    if (num(row.qtyOut) <= 0) return;
+    const material = String(row.itemName || "").trim() || "(blank)";
+    if (!balanceMap[material]) return;
+    const batchId = productionLedgerRecordId_(row);
+    if (batchId) balanceMap[material].affectedBatchIds[batchId] = true;
+  });
+  const negativeBalances = Object.keys(balanceMap)
+    .map(function(key) {
+      const item = balanceMap[key];
+      return {
+        itemName: item.itemName,
+        itemType: item.itemType,
+        qtyIn: round2(item.qtyIn),
+        qtyOut: round2(item.qtyOut),
+        balanceKg: round2(item.balanceKg),
+        affectedBatchIds: Object.keys(item.affectedBatchIds).slice(0, 25),
+      };
+    })
+    .filter(function(item) { return item.balanceKg < 0; })
+    .sort(function(a, b) { return a.balanceKg - b.balanceKg; });
+  const negativeBalanceMaterialMap = {};
+  negativeBalances.forEach(function(item) { negativeBalanceMaterialMap[item.itemName] = true; });
+  const negativeBalanceBatchMap = {};
+  activeRows.forEach(function(row) {
+    const itemName = String(row.itemName || "").trim() || "(blank)";
+    if (!negativeBalanceMaterialMap[itemName] || num(row.qtyOut) <= 0) return;
+    const batchId = productionLedgerRecordId_(row);
+    if (batchId) negativeBalanceBatchMap[batchId] = true;
+  });
+
+  const operationalDuplicateBatchIds = productionOperationalDuplicateIds_();
+  const movementTotals = {};
+  activeRows.forEach(function(row) {
+    const moduleName = String(row.module || "").trim().toUpperCase();
+    if (!movementTotals[moduleName]) movementTotals[moduleName] = { module: moduleName, activeRows: 0, qtyIn: 0, qtyOut: 0, netKg: 0 };
+    movementTotals[moduleName].activeRows += 1;
+    movementTotals[moduleName].qtyIn += num(row.qtyIn);
+    movementTotals[moduleName].qtyOut += num(row.qtyOut);
+    movementTotals[moduleName].netKg += num(row.qtyIn) - num(row.qtyOut);
+  });
+  const affected = {};
+  duplicateActiveMovementGroups.forEach(function(group) { if (group.batchId) affected[group.batchId] = true; });
+  negativeQuantityRows.forEach(function(row) { const id = productionLedgerRecordId_(row); if (id) affected[id] = true; });
+  operationalDuplicateBatchIds.forEach(function(group) { if (group.batchId) affected[group.batchId] = true; });
+
+  return output({
+    ok: true,
+    route: "productionLedger.audit",
+    readOnly: true,
+    periodMonth: periodMonth || "ALL",
+    generatedAt: new Date().toISOString(),
+    elapsedMs: Date.now() - startedAt,
+    rowsAudited: productionRows.length,
+    activeProductionRows: activeRows.length,
+    inactiveOrVoidedProductionRows: inactiveRows.length,
+    negativeQuantityRowCount: negativeQuantityRows.length,
+    doubleNegatedOutRowCount: doubleNegatedOutRows.length,
+    duplicateActiveMovementGroupCount: duplicateActiveMovementGroups.length,
+    operationalDuplicateBatchIdCount: operationalDuplicateBatchIds.length,
+    negativeMaterialBalanceCount: negativeBalances.length,
+    negativeBalanceAffectedBatchIdCount: Object.keys(negativeBalanceBatchMap).length,
+    affectedBatchIds: Object.keys(affected),
+    negativeBalanceAffectedBatchIds: Object.keys(negativeBalanceBatchMap),
+    negativeQuantityRows: negativeQuantityRows.slice(0, 100).map(productionLedgerAuditRow_),
+    doubleNegatedOutRows: doubleNegatedOutRows.slice(0, 100).map(productionLedgerAuditRow_),
+    duplicateActiveMovementGroups: duplicateActiveMovementGroups.slice(0, 100),
+    editedBatches: editedBatches.slice(0, 100),
+    operationalDuplicateBatchIds,
+    negativeBalances: negativeBalances.slice(0, 100),
+    movementTotals: Object.keys(movementTotals).map(function(key) { return productionLedgerRoundGroup_(movementTotals[key]); }),
+    conclusion: {
+      doubleNegationFound: doubleNegatedOutRows.length > 0,
+      activeEditDuplicatesFound: duplicateActiveMovementGroups.length > 0,
+      likelyNegativeCause: negativeBalances.length
+        ? "Active OUT movements exceed matching canonical inbound stock. Legacy aliases, missing opening/inward postings, and recipe strings stored as item names are the primary causes."
+        : "No negative manufacturing material balances found in the selected scope.",
+    },
+  });
+}
+
+function productionLedgerRowActive_(row) {
+  return ["VOIDED", "DELETED", "INACTIVE", "DISABLED", "REVERSED", "CANCELLED"].indexOf(String(row.status || "ACTIVE").trim().toUpperCase()) === -1;
+}
+
+function productionLedgerRecordId_(row) {
+  return String(row.targetRef || row.sourceRef || row.legacySourceId || "").trim();
+}
+
+function productionLedgerRoundGroup_(group) {
+  const copy = Object.assign({}, group);
+  ["qtyIn", "qtyOut", "netKg"].forEach(function(key) { if (copy[key] !== undefined) copy[key] = round2(copy[key]); });
+  return copy;
+}
+
+function productionLedgerAuditRow_(row) {
+  return {
+    ledgerId: row.ledgerId || "",
+    date: row.date || "",
+    module: row.module || "",
+    batchId: productionLedgerRecordId_(row),
+    movementType: row.movementType || "",
+    itemName: row.itemName || "",
+    qtyIn: num(row.qtyIn),
+    qtyOut: num(row.qtyOut),
+    status: row.status || "",
+  };
+}
+
+function productionOperationalDuplicateIds_() {
+  const configs = [
+    { stage: "GRINDER", sheet: "Grinder_Batches", idField: "grinderBatchId" },
+    { stage: "WASH", sheet: "Wash_Batches", idField: "washBatchId" },
+    { stage: "SORTING", sheet: "Sorting_Batches", idField: "sortingBatchId" },
+    { stage: "EXTRUSION", sheet: "Extrusion_Batches", idField: "extrusionBatchId" },
+  ];
+  const result = [];
+  configs.forEach(function(config) {
+    const counts = {};
+    getRowsAsObjects(config.sheet).forEach(function(row) {
+      const id = String(row[config.idField] || "").trim();
+      if (id) counts[id] = (counts[id] || 0) + 1;
+    });
+    Object.keys(counts).forEach(function(id) {
+      if (counts[id] > 1) result.push({ stage: config.stage, sheet: config.sheet, batchId: id, rowCount: counts[id] });
+    });
+  });
+  return result;
 }
 
 function auditInventoryLedger(data = {}) {

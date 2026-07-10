@@ -459,10 +459,8 @@ export default function ProductionHistory() {
     setLoadingRecordId(row.id);
     setStatus("Loading record...");
     try {
-      const [recordResult] = await Promise.all([
-        loadHistorySource(row),
-        loadEditMasters(),
-      ]);
+      const mastersPromise = loadEditMasters();
+      const recordResult = await loadHistorySource(row);
       const detailedRow = { ...row, source: recordResult.source };
       setEditing({
         process: row.process,
@@ -474,7 +472,9 @@ export default function ProductionHistory() {
       });
       const totalMs = Date.now() - startedAt;
       console.info("production.historyRecord", { stage: row.stage, recordId: row.id, backendMs: recordResult.elapsedMs, totalMs });
-      setStatus(`Record loaded in ${totalMs} ms.`);
+      setStatus(editMastersLoaded ? `Record loaded in ${totalMs} ms.` : `Record loaded in ${totalMs} ms. Loading dropdowns...`);
+      await mastersPromise;
+      setStatus(`Record ready to edit. Loaded in ${Date.now() - startedAt} ms.`);
     } catch (err) {
       setStatus(err.message || "Unable to load edit details");
     } finally {
@@ -521,7 +521,7 @@ export default function ProductionHistory() {
         "recordId",
         `${editing.process} update`
       );
-      if (res.ledgerPosted !== true) {
+      if (res.ledgerPosted !== true && res.ledgerUnchanged !== true) {
         throw new Error(res.failedStep ? `Ledger update failed at ${res.failedStep}.` : "Ledger update was not confirmed.");
       }
 
@@ -556,7 +556,9 @@ export default function ProductionHistory() {
         [row.idKey]: row.id,
         status: "DELETED",
       }), 30000), "recordId", `${row.process} delete`);
-      if (res.ledgerPosted !== true) throw new Error(res.failedStep ? `Delete failed at ${res.failedStep}.` : "Ledger void was not confirmed.");
+      if (res.deleted !== true || res.ledgerVoided !== true) {
+        throw new Error(res.failedStep ? `Delete failed at ${res.failedStep}.` : "Ledger void was not confirmed.");
+      }
 
       setStatus(`${row.process} ${row.id} deleted. Refreshing history...`);
       await loadData();
@@ -1045,17 +1047,23 @@ function getSelectOptions(type, context) {
   }
 
   if (type === "materialSelect") {
-    return (context.masterRows?.productionMaterials || [])
-      .filter((item) => productionMaterialAllowed(item, context.process, "INPUT"))
-      .map(itemLabel)
-      .filter(Boolean);
+    return withCurrent(
+      (context.masterRows?.productionMaterials || [])
+        .filter((item) => productionMaterialAllowed(item, context.process, "INPUT"))
+        .map(itemLabel)
+        .filter(Boolean),
+      context.value
+    );
   }
 
   if (type === "gradeSelect") {
-    return (context.masterRows?.productionMaterials || [])
-      .filter((item) => productionMaterialAllowed(item, "EXTRUSION", "OUTPUT"))
-      .map(itemLabel)
-      .filter(Boolean);
+    return withCurrent(
+      (context.masterRows?.productionMaterials || [])
+        .filter((item) => productionMaterialAllowed(item, "EXTRUSION", "OUTPUT"))
+        .map(itemLabel)
+        .filter(Boolean),
+      context.value
+    );
   }
 
   return null;

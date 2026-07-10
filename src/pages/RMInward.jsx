@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 import DataTable from "../components/DataTable";
@@ -14,6 +14,7 @@ const blankLine = {
   rate: "",
   amount: "",
 };
+const RM_SAVE_TIMEOUT_MS = 30000;
 
 export default function RMInward() {
   const today = new Date().toISOString().split("T")[0];
@@ -54,12 +55,17 @@ export default function RMInward() {
   const [suppliers, setSuppliers] = useState([]);
   const [status, setStatus] = useState("");
   const [editingRow, setEditingRow] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveState, setSaveState] = useState("idle");
+  const savingRef = useRef(false);
+  const successTimerRef = useRef(null);
 
   useEffect(() => {
     loadData();
+    return () => clearTimeout(successTimerRef.current);
   }, []);
 
-  async function loadData() {
+  async function loadData({ preserveStatus = false } = {}) {
     try {
       const [supplierRes, rmRes] = await Promise.all([
         apiCall({ fn: "suppliers.list" }),
@@ -76,8 +82,10 @@ export default function RMInward() {
           (r) => String(r.status || "").toUpperCase() !== "DELETED"
         )
       );
+      return true;
     } catch (err) {
-      setStatus(err.message);
+      if (!preserveStatus) setStatus(err.message);
+      return false;
     }
   }
 
@@ -243,10 +251,17 @@ export default function RMInward() {
   }
 
   function onChange(e) {
-    setForm({ ...form, [e.target.name]: e.target.value });
+    markEntryChanged();
+    const { name, value } = e.target;
+    setForm((current) => ({
+      ...current,
+      [name]: value,
+      ...(["date", "supplier"].includes(name) && current[name] !== value ? { inwardId: "" } : {}),
+    }));
   }
 
   function updateLine(index, key, value) {
+    markEntryChanged();
     const cleanValue = value && value.target ? value.target.value : value;
     setMaterialLines((lines) =>
       lines.map((line, i) => {
@@ -262,36 +277,75 @@ export default function RMInward() {
   }
 
   function addLine() {
+    markEntryChanged();
     setMaterialLines((lines) => [...lines, { ...blankLine }]);
   }
 
   function removeLine(index) {
+    markEntryChanged();
     setMaterialLines((lines) => {
       const updated = lines.filter((_, i) => i !== index);
       return updated.length ? updated : [{ ...blankLine }];
     });
   }
 
-  function clearForm() {
+  function markEntryChanged() {
+    if (saveState !== "saved") return;
+    clearTimeout(successTimerRef.current);
+    setSaveState("idle");
+    setStatus("");
+  }
+
+  function clearForm({ preserveStatus = false, preserveSaveState = false, force = false } = {}) {
+    if (savingRef.current && !force) return;
+    clearTimeout(successTimerRef.current);
     setForm(blankForm);
     setMaterialLines([{ ...blankLine }]);
-    setStatus("Ready for new receiving entry");
+    if (!preserveStatus) setStatus("Ready for new receiving entry");
+    if (!preserveSaveState) setSaveState("idle");
+  }
+
+  function createStableInwardId() {
+    const compactDate = String(form.date || today).replace(/-/g, "");
+    const timeToken = `${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, "0")}`.slice(-9);
+    return `MR-${compactDate}-${supplierCode(form.supplier)}-${timeToken}`;
+  }
+
+  function releaseSaveLock() {
+    savingRef.current = false;
+    setIsSaving(false);
+  }
+
+  function showSaveError(message) {
+    setStatus(message);
+    setSaveState("idle");
+    releaseSaveLock();
   }
 
   async function submit(e) {
     e.preventDefault();
+    if (savingRef.current || saveState === "saved") return;
+
+    savingRef.current = true;
+    setIsSaving(true);
+    setSaveState("saving");
+    setStatus("Saving RM inward...");
 
     const lines = cleanLines();
     const commercialTotals = calculateCommercialTotals(form, materialLines);
-    if (!form.date) return alert("Date is mandatory");
-    if (!form.supplier) return alert("Supplier is mandatory");
-    if (!form.vehicleNo) return alert("Vehicle Number is mandatory");
-    if (lines.length === 0) return alert("Add at least one material line");
+    if (!form.date) return showSaveError("Date is mandatory");
+    if (!form.supplier) return showSaveError("Supplier is mandatory");
+    if (!form.vehicleNo) return showSaveError("Vehicle Number is mandatory");
+    if (lines.length === 0) return showSaveError("Add at least one material line");
+
+    const inwardId = form.inwardId || createStableInwardId();
+    if (!form.inwardId) setForm((current) => ({ ...current, inwardId }));
 
     try {
-      const res = await apiCall({
+      const res = await saveRmInwardWithTimeout({
         fn: "rm.add",
         ...form,
+        inwardId,
         material: lines[0].material,
         netWeight: commercialTotals.totalQuantity,
         quantityKg: commercialTotals.totalQuantity,
@@ -305,16 +359,23 @@ export default function RMInward() {
         qcStatus: "PENDING",
       });
 
-      if (res.ok === false) {
-        setStatus(res.error || "Error saving RM inward");
-        return;
-      }
+      if (!res || res.ok !== true) throw new Error(res?.error || "RM inward save failed");
+      if (!res.inwardId) throw new Error("RM inward save failed: backend did not return inwardId");
 
-      setStatus(`Material receiving saved: ${res.inwardId || "QC Pending"}`);
-      clearForm();
-      loadData();
+      const successMessage = `RM inward saved successfully: ${res.inwardId}`;
+      setStatus(successMessage);
+      setSaveState("saved");
+      await loadData({ preserveStatus: true });
+      clearForm({ preserveStatus: true, preserveSaveState: true, force: true });
+      successTimerRef.current = setTimeout(() => {
+        setSaveState("idle");
+        setStatus((current) => current === successMessage ? "Ready for new receiving entry" : current);
+      }, 5000);
     } catch (err) {
-      setStatus(err.message);
+      setStatus(err.message || "RM inward save failed");
+      setSaveState("idle");
+    } finally {
+      releaseSaveLock();
     }
   }
 
@@ -456,6 +517,7 @@ export default function RMInward() {
   const qcApproved = filteredRows.filter((row) => String(row.qcStatus || "").toUpperCase() === "APPROVED").length;
   const invoiceValue = filteredRows.reduce((sum, row) => sum + n(row.invoiceTotal), 0);
   const commercialTotals = calculateCommercialTotals(form, materialLines);
+  const saveButtonText = isSaving ? "Saving..." : saveState === "saved" ? "Saved" : "Save RM Inward";
 
   return (
     <PageLayout
@@ -493,12 +555,20 @@ export default function RMInward() {
         <KpiCard title="Invoice Total" value={`₹ ${invoiceValue.toFixed(0)}`} />
       </div>
 
-      {status && <div style={statusStyle}>{status}</div>}
+      {status && (
+        <div style={/failed|error|timed out|mandatory/i.test(status) ? errorStatusStyle : statusStyle}>
+          {status}
+        </div>
+      )}
 
       <form
         onSubmit={submit}
+        aria-busy={isSaving}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && e.target.tagName !== "TEXTAREA") e.preventDefault();
+          if (e.key === "Enter" && (isSaving || saveState === "saved" || e.target.tagName !== "TEXTAREA")) {
+            e.preventDefault();
+            if (isSaving || saveState === "saved") e.stopPropagation();
+          }
         }}
         style={formStyle}
       >
@@ -683,8 +753,16 @@ export default function RMInward() {
         </Field>
 
         <div style={buttonWrap}>
-          <button type="submit" style={saveButton}>Save Material Receiving</button>
-          <button type="button" onClick={clearForm} style={clearButton}>Clear / New Entry</button>
+          <button
+            type="submit"
+            disabled={isSaving || saveState === "saved"}
+            style={isSaving || saveState === "saved" ? disabledSaveButton : saveButton}
+          >
+            {saveButtonText}
+          </button>
+          <button type="button" disabled={isSaving} onClick={clearForm} style={isSaving ? disabledClearButton : clearButton}>
+            Clear / New Entry
+          </button>
         </div>
       </form>
 
@@ -883,6 +961,16 @@ export default function RMInward() {
   );
 }
 
+async function saveRmInwardWithTimeout(payload) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error("RM inward save timed out. Check whether the record was saved before retrying."));
+    }, RM_SAVE_TIMEOUT_MS);
+  });
+  return Promise.race([apiCall(payload), timeout]).finally(() => clearTimeout(timeoutId));
+}
+
 function SectionTitle({ text }) {
   return <div style={sectionTitle}>{text}</div>;
 }
@@ -905,6 +993,7 @@ const inputStyle = { width: "100%", height: 40, padding: "0 10px", border: "1px 
 const readonlyStyle = { ...inputStyle, background: "#f8fafc", fontWeight: 800 };
 const textareaStyle = { ...inputStyle, height: 82, padding: 10 };
 const statusStyle = { background: "#ecfdf5", color: "#166534", border: "1px solid #bbf7d0", padding: 12, borderRadius: 10, marginBottom: 14, fontWeight: 700 };
+const errorStatusStyle = { ...statusStyle, background: "#fef2f2", color: "#991b1b", border: "1px solid #fecaca" };
 const tableWrap = { gridColumn: "1 / -1", overflowX: "auto" };
 const table = { width: "100%", borderCollapse: "collapse", minWidth: 760, marginBottom: 10 };
 const head = { background: "#0f766e", color: "white" };
@@ -916,6 +1005,8 @@ const lineTotal = { marginTop: 8, fontWeight: 800, color: "#0f766e" };
 const buttonWrap = { gridColumn: "1 / -1", display: "flex", gap: 10, flexWrap: "wrap" };
 const saveButton = { background: "#0f766e", color: "white", border: "none", padding: "12px 18px", borderRadius: 8, cursor: "pointer", fontWeight: 800 };
 const clearButton = { background: "#64748b", color: "white", border: "none", padding: "12px 18px", borderRadius: 8, cursor: "pointer", fontWeight: 800 };
+const disabledSaveButton = { ...saveButton, background: "#94a3b8", cursor: "not-allowed" };
+const disabledClearButton = { ...clearButton, opacity: 0.6, cursor: "not-allowed" };
 const modalOverlay = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 9999 };
 const modal = { background: "white", width: "min(980px,92vw)", maxHeight: "90vh", overflow: "auto", borderRadius: 14, padding: 22 };
 const modalButtons = { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 };

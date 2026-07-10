@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 import {
@@ -10,6 +10,7 @@ import {
 import DataTable from "../components/DataTable";
 import FormSection from "../components/FormSection";
 import ProductionMaterialSelect from "../components/ProductionMaterialSelect";
+import { createStableTransactionId, requireSuccessfulResponse, withRequestTimeout } from "../utils/requestSafety";
 
 function materialKey(value) {
   return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_");
@@ -85,6 +86,8 @@ export default function ExtrusionBatches() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(blankForm);
   const [feedRows, setFeedRows] = useState(blankFeed);
+  const [writeAction, setWriteAction] = useState("");
+  const writeLockRef = useRef(false);
 
   useEffect(() => {
     loadRows();
@@ -407,21 +410,33 @@ export default function ExtrusionBatches() {
     const confirmed = window.confirm("Delete extrusion batch?");
     if (!confirmed) return;
 
+    if (writeLockRef.current) return;
+    writeLockRef.current = true;
+    setWriteAction(`DELETE:${row.extrusionBatchId}`);
+    setStatus("Deleting...");
     try {
-      await apiCall({
+      const res = await withRequestTimeout(apiCall({
         fn: "extrusion.update",
         extrusionBatchId: row.extrusionBatchId,
         status: "DELETED",
-      });
+      }));
+      requireSuccessfulResponse(res, "", "Extrusion delete");
 
-      loadRows();
+      await loadRows();
     } catch (err) {
-      alert(err.message);
+      setStatus(err.message);
+    } finally {
+      writeLockRef.current = false;
+      setWriteAction("");
     }
   }
 
   async function submit(e) {
     e.preventDefault();
+    if (writeLockRef.current) return;
+    writeLockRef.current = true;
+    setWriteAction(editingId ? "UPDATE" : "SAVE");
+    setStatus(editingId ? "Updating..." : "Saving...");
 
     try {
       const cleanFeed = feedRows.filter(
@@ -429,37 +444,39 @@ export default function ExtrusionBatches() {
       );
 
       if (cleanFeed.length === 0) {
-        alert("Add at least one feed material");
-        return;
+        throw new Error("Add at least one feed material");
       }
 
-      const finalForm = autoCalculate({ ...form }, cleanFeed);
+      const extrusionBatchId = form.extrusionBatchId || createStableTransactionId("EX", form.date, form.shift);
+      if (!form.extrusionBatchId) setForm((current) => ({ ...current, extrusionBatchId }));
+      const finalForm = autoCalculate({ ...form, extrusionBatchId }, cleanFeed);
 
       let res;
 
       if (editingId) {
-        res = await apiCall({
+        res = await withRequestTimeout(apiCall({
           fn: "extrusion.update",
           ...finalForm,
-        });
+        }));
       } else {
-        res = await apiCall({
+        res = await withRequestTimeout(apiCall({
           fn: "extrusion.add",
           ...finalForm,
-        });
+        }));
       }
 
-      if (res.ok) {
+      requireSuccessfulResponse(res, editingId ? "" : "extrusionBatchId", editingId ? "Extrusion update" : "Extrusion save");
+      if (res.ledgerPosted !== true) throw new Error("Extrusion save did not confirm inventory posting.");
         setStatus(editingId ? "Extrusion batch updated" : "Extrusion batch saved");
         setEditingId(null);
         setForm(blankForm);
         setFeedRows(blankFeed);
         loadRows();
-      } else {
-        setStatus(res.error || "Error saving batch");
-      }
     } catch (err) {
       setStatus(err.message);
+    } finally {
+      writeLockRef.current = false;
+      setWriteAction("");
     }
   }
 
@@ -727,8 +744,8 @@ export default function ExtrusionBatches() {
         </FormSection>
 
         <div style={stickyBar}>
-          <button type="submit" style={saveButton(editingId)}>
-            {editingId ? "Update Batch" : "Save Batch"}
+          <button type="submit" disabled={Boolean(writeAction)} style={saveButton(editingId)}>
+            {writeAction === "SAVE" ? "Saving..." : writeAction === "UPDATE" ? "Updating..." : editingId ? "Update Batch" : "Save Batch"}
           </button>
         </div>
       </form>

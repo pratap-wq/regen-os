@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiCall } from "../api/api";
 import FactoryDropdown from "../components/FactoryDropdown";
+import { createStableTransactionId, requireSuccessfulResponse, withRequestTimeout } from "../utils/requestSafety";
 
 import {
   pageStyle,
@@ -106,6 +107,8 @@ export default function FactoryExpenses() {
   const [storesIssueRows, setStoresIssueRows] = useState([]);
   const [status, setStatus] = useState("");
   const [editingExpenseId, setEditingExpenseId] = useState("");
+  const [writeAction, setWriteAction] = useState("");
+  const writeLockRef = useRef(false);
 
   const blankForm = {
     date: todayYmd(),
@@ -127,6 +130,7 @@ export default function FactoryExpenses() {
 
   useEffect(() => {
     if (!editingExpenseId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm((prev) => ({ ...prev, periodMonth: selectedPeriod(year, month) }));
     }
   }, [month, year, editingExpenseId]);
@@ -160,6 +164,7 @@ export default function FactoryExpenses() {
 
   async function submit(e) {
     e.preventDefault();
+    if (writeLockRef.current) return;
 
     if (!form.date) return alert("Date is mandatory");
     if (!form.periodMonth) return alert("Period Month is mandatory");
@@ -167,23 +172,26 @@ export default function FactoryExpenses() {
     if (!form.description) return alert("Description is mandatory");
     if (Number(form.amount || 0) <= 0) return alert("Amount must be greater than zero");
 
+    writeLockRef.current = true;
+    setWriteAction(editingExpenseId ? "UPDATE" : "SAVE");
+    setStatus(editingExpenseId ? "Updating factory expense..." : "Saving factory expense...");
+    const expenseId = editingExpenseId || form.expenseId || createStableTransactionId("EXP", form.date, form.category);
+    if (!editingExpenseId && !form.expenseId) setForm((current) => ({ ...current, expenseId }));
     try {
-      const res = await apiCall({
+      const res = requireSuccessfulResponse(await withRequestTimeout(apiCall({
         fn: editingExpenseId ? "factoryExpenses.update" : "factoryExpenses.add",
         ...form,
-        expenseId: editingExpenseId,
+        expenseId,
         itemName: form.description,
-      });
+      })), editingExpenseId ? "" : "expenseId", editingExpenseId ? "Factory expense update" : "Factory expense save");
 
-      if (res.ok === false) {
-        setStatus(res.error || "Error saving factory expense");
-        return;
-      }
-
-      resetForm(editingExpenseId ? "Factory expense updated" : "Factory expense saved");
-      loadRows();
+      resetForm(`${editingExpenseId ? "Factory expense updated" : "Factory expense saved"}: ${res.expenseId || res.id || expenseId}`);
+      await loadRows();
     } catch (err) {
       setStatus(err.message);
+    } finally {
+      writeLockRef.current = false;
+      setWriteAction("");
     }
   }
 
@@ -209,23 +217,25 @@ export default function FactoryExpenses() {
     const ok = window.confirm("Delete this factory expense? This will soft-delete the row and exclude it from totals.");
     if (!ok) return;
 
+    if (writeLockRef.current) return;
+    writeLockRef.current = true;
+    setWriteAction(`DELETE:${row.expenseId}`);
+    setStatus("Deleting factory expense...");
     try {
-      const res = await apiCall({
+      requireSuccessfulResponse(await withRequestTimeout(apiCall({
         fn: "factoryExpenses.delete",
         expenseId: row.expenseId,
         deletedBy: "Pratap",
-      });
-
-      if (res.ok === false) {
-        setStatus(res.error || "Delete failed");
-        return;
-      }
+      })), "", "Factory expense delete");
 
       if (editingExpenseId === row.expenseId) resetForm();
       setStatus("Factory expense deleted");
-      loadRows();
+      await loadRows();
     } catch (err) {
       setStatus(err.message);
+    } finally {
+      writeLockRef.current = false;
+      setWriteAction("");
     }
   }
 
@@ -384,11 +394,11 @@ export default function FactoryExpenses() {
           </Field>
 
           <div style={buttonRow}>
-            <button type="submit" style={primaryButton}>
-              {editingExpenseId ? "Update Expense" : "Save Expense"}
+            <button type="submit" disabled={Boolean(writeAction)} style={primaryButton}>
+              {writeAction === "SAVE" ? "Saving..." : writeAction === "UPDATE" ? "Updating..." : editingExpenseId ? "Update Expense" : "Save Expense"}
             </button>
             {editingExpenseId && (
-              <button type="button" onClick={() => resetForm("Edit cancelled")} style={secondaryButton}>
+              <button type="button" disabled={Boolean(writeAction)} onClick={() => resetForm("Edit cancelled")} style={secondaryButton}>
                 Cancel Edit
               </button>
             )}
@@ -433,8 +443,8 @@ export default function FactoryExpenses() {
                     </button>
                   </td>
                   <td style={tdStyle}>
-                    <button type="button" onClick={() => deleteExpense(row)} style={deleteButton}>
-                      Delete
+                    <button type="button" disabled={Boolean(writeAction)} onClick={() => deleteExpense(row)} style={deleteButton}>
+                      {writeAction === `DELETE:${row.expenseId}` ? "Deleting..." : "Delete"}
                     </button>
                   </td>
                 </tr>

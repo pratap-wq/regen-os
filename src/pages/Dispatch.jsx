@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 
@@ -87,6 +87,7 @@ export default function Dispatch() {
   const [editingRow, setEditingRow] = useState(null);
   const [form, setForm] = useState(blankForm);
   const [dispatchLines, setDispatchLines] = useState([{ ...blankLine }]);
+  const writeLockRef = useRef(false);
 
   useEffect(() => {
     loadData();
@@ -452,8 +453,9 @@ export default function Dispatch() {
   }
   async function submit(e) {
     e.preventDefault();
-    if (saving) return;
+    if (writeLockRef.current) return;
 
+    writeLockRef.current = true;
     setSaving(true);
     setStatus("Saving dispatch...");
     setSaveDebug(null);
@@ -543,6 +545,7 @@ export default function Dispatch() {
       setStatus(err.message || "Dispatch save failed.");
     } finally {
       setSaving(false);
+      writeLockRef.current = false;
     }
   }
 
@@ -614,14 +617,18 @@ export default function Dispatch() {
     const confirmed = window.confirm("Delete dispatch?");
     if (!confirmed) return;
 
+    if (writeLockRef.current) return;
+    writeLockRef.current = true;
+    setSaving(true);
+    setStatus("Deleting dispatch...");
     try {
-      const res = await apiCall({
+      const res = await withTimeout(apiCall({
         fn: "dispatch.update",
         ...row,
         dispatchId: row.dispatchId,
         dispatchStatus: "DELETED",
         status: "DELETED",
-      });
+      }), 30000, "Request timed out. Check whether the record was saved before retrying.");
 
       if (res.ok === false) {
         setStatus(res.error || "Delete failed");
@@ -629,9 +636,12 @@ export default function Dispatch() {
       }
 
       setStatus("Dispatch deleted");
-      loadData();
+      await loadData();
     } catch (err) {
       setStatus(err.message);
+    } finally {
+      setSaving(false);
+      writeLockRef.current = false;
     }
   }
 
@@ -1109,22 +1119,6 @@ function normalizeFgGrade(value) {
   return materialKey(normalizeInventoryMaterial(value));
 }
 
-const pageStyle = { padding: 20 };
-
-const headerCard = {
-  background: "white",
-  padding: 18,
-  borderRadius: 12,
-  border: "1px solid #e5e7eb",
-  marginBottom: 16,
-};
-
-const subText = {
-  color: "#64748b",
-  marginTop: 4,
-  fontSize: 13,
-};
-
 const stockNote = {
   background: "#ecfdf5",
   border: "1px solid #bbf7d0",
@@ -1161,13 +1155,6 @@ const hintText = {
   marginTop: 4,
   color: "#64748b",
   fontSize: 12,
-};
-
-const kpiGrid = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))",
-  gap: 14,
-  marginBottom: 16,
 };
 
 const kpiCard = {

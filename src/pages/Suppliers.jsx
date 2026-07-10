@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiCall } from "../api/api";
+import { createStableTransactionId, requireSuccessfulResponse, withRequestTimeout } from "../utils/requestSafety";
 
 export default function Suppliers() {
   const blankForm = {
@@ -35,6 +36,8 @@ export default function Suppliers() {
   const [editing, setEditing] = useState(false);
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
+  const [writeAction, setWriteAction] = useState("");
+  const writeLockRef = useRef(false);
 
   useEffect(() => {
     loadRows();
@@ -62,23 +65,29 @@ export default function Suppliers() {
 
   async function submit(e) {
     e.preventDefault();
+    if (writeLockRef.current) return;
+    writeLockRef.current = true;
+    setWriteAction(editing ? "UPDATE" : "SAVE");
+    setStatus(editing ? "Updating supplier..." : "Saving supplier...");
+    const supplierId = form.supplierId || createStableTransactionId("SUP", new Date().toISOString().slice(0, 10), form.supplierName);
+    if (!form.supplierId) setForm((current) => ({ ...current, supplierId }));
 
     try {
-      const res = await apiCall({
+      const res = requireSuccessfulResponse(await withRequestTimeout(apiCall({
         fn: editing ? "supplier.update" : "supplier.add",
         ...form,
-      });
+        supplierId,
+      })), editing ? "" : "supplierId", editing ? "Supplier update" : "Supplier save");
 
-      if (res.ok) {
-        setStatus(editing ? "Supplier updated" : "Supplier added");
+        setStatus(`${editing ? "Supplier updated" : "Supplier added"}: ${res.supplierId || res.id || supplierId}`);
         setForm(blankForm);
         setEditing(false);
-        loadRows();
-      } else {
-        setStatus(res.error || "Save failed");
-      }
+        await loadRows();
     } catch (err) {
       setStatus(err.message);
+    } finally {
+      writeLockRef.current = false;
+      setWriteAction("");
     }
   }
 
@@ -104,22 +113,24 @@ export default function Suppliers() {
     const ok = window.confirm("Mark this supplier as inactive?");
     if (!ok) return;
 
+    if (writeLockRef.current) return;
+    writeLockRef.current = true;
+    setWriteAction(`DELETE:${row.supplierId}`);
+    setStatus("Disabling supplier...");
     try {
-      const res = await apiCall({
+      requireSuccessfulResponse(await withRequestTimeout(apiCall({
         fn: "supplier.update",
         ...row,
         supplierId: row.supplierId,
         isActive: "FALSE",
-      });
-
-      if (res.ok) {
+      })), "", "Supplier disable");
         setStatus("Supplier marked inactive");
-        loadRows();
-      } else {
-        setStatus(res.error || "Delete failed");
-      }
+        await loadRows();
     } catch (err) {
       setStatus(err.message);
+    } finally {
+      writeLockRef.current = false;
+      setWriteAction("");
     }
   }
 
@@ -358,13 +369,13 @@ export default function Suppliers() {
 
         <div style={buttonRow}>
           {editing && (
-            <button type="button" onClick={cancelEdit} style={cancelButton}>
+            <button type="button" disabled={Boolean(writeAction)} onClick={cancelEdit} style={cancelButton}>
               Cancel
             </button>
           )}
 
-          <button type="submit" style={saveButton}>
-            {editing ? "Update Supplier" : "Save Supplier"}
+          <button type="submit" disabled={Boolean(writeAction)} style={saveButton}>
+            {writeAction === "SAVE" ? "Saving..." : writeAction === "UPDATE" ? "Updating..." : editing ? "Update Supplier" : "Save Supplier"}
           </button>
         </div>
       </form>
@@ -425,11 +436,11 @@ export default function Suppliers() {
                     </td>
                     <td style={td}>
                       <div style={{ display: "flex", gap: 8 }}>
-                        <button onClick={() => editRow(r)} style={editButton}>
+                        <button disabled={Boolean(writeAction)} onClick={() => editRow(r)} style={editButton}>
                           Edit
                         </button>
-                        <button onClick={() => deleteRow(r)} style={deleteButton}>
-                          Delete
+                        <button disabled={Boolean(writeAction)} onClick={() => deleteRow(r)} style={deleteButton}>
+                          {writeAction === `DELETE:${r.supplierId}` ? "Deleting..." : "Delete"}
                         </button>
                       </div>
                     </td>

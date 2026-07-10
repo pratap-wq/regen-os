@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { apiCall } from "../api/api";
+import { createStableTransactionId, requireSuccessfulResponse, withRequestTimeout } from "../utils/requestSafety";
 
 import {
   pageStyle,
@@ -46,6 +47,8 @@ export default function SupplierEntry() {
 
   const [form, setForm] =
     useState(blankForm);
+  const [saving, setSaving] = useState(false);
+  const saveLockRef = useRef(false);
 
   function onChange(e) {
 
@@ -63,37 +66,33 @@ export default function SupplierEntry() {
   async function submit(e) {
 
     e.preventDefault();
+    if (saveLockRef.current) return;
+    saveLockRef.current = true;
+    setSaving(true);
+    setStatus("Saving supplier...");
+    const supplierId = form.supplierId || createStableTransactionId("SUP", new Date().toISOString().slice(0, 10), form.supplierName);
+    if (!form.supplierId) setForm((current) => ({ ...current, supplierId }));
 
     try {
 
-      const res =
-        await apiCall({
+      const res = requireSuccessfulResponse(
+        await withRequestTimeout(apiCall({
 
           fn:
             "supplier.add",
 
           ...form,
+          supplierId,
 
-        });
-
-      if (res.ok) {
+        })), "supplierId", "Supplier save");
 
         setStatus(
-          "Supplier created successfully"
+          `Supplier created successfully: ${res.supplierId}`
         );
 
         setForm(
           blankForm
         );
-
-      } else {
-
-        setStatus(
-          res.error ||
-            "Error"
-        );
-
-      }
 
     } catch (err) {
 
@@ -101,6 +100,9 @@ export default function SupplierEntry() {
         err.message
       );
 
+    } finally {
+      saveLockRef.current = false;
+      setSaving(false);
     }
 
   }
@@ -379,12 +381,13 @@ export default function SupplierEntry() {
 
             <button
               type="submit"
+              disabled={saving}
               style={
                 primaryButton
               }
             >
 
-              Save Supplier
+              {saving ? "Saving..." : "Save Supplier"}
 
             </button>
 

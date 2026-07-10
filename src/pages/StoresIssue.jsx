@@ -288,6 +288,7 @@ export default function StoresIssue() {
         ...finalForm,
         issueId,
       })), "issueId", "Stores issue save");
+      if (res.ledgerPosted !== true) throw new Error("Stores issue save did not confirm inventory posting.");
 
         setStatus(`Stores issue saved successfully: ${res.issueId}`);
         setSaveState("saved");
@@ -354,12 +355,14 @@ export default function StoresIssue() {
   }
 
   async function saveEdit() {
+    if (saveLockRef.current) return;
     if (!editingRow) return;
     if (!editingRow.itemName) return alert("Item is required");
     if (!editingRow.qty) return alert("Qty is required");
     if (!editingRow.department) return alert("Department is required");
 
     try {
+      saveLockRef.current = true;
       setSavingEdit(true);
 
       const finalRate =
@@ -367,17 +370,12 @@ export default function StoresIssue() {
 
       const finalValue = calcValue(editingRow.qty, finalRate);
 
-      const res = await apiCall({
+      requireSuccessfulResponse(await withRequestTimeout(apiCall({
         fn: "storesIssue.update",
         ...editingRow,
         issueRate: finalRate ? Number(finalRate).toFixed(2) : "",
         issueValue: finalValue.toFixed(2),
-      });
-
-      if (res.ok === false) {
-        alert(res.error || "Update failed");
-        return;
-      }
+      })), "", "Stores issue update");
 
       setStatus("Stores issue updated");
       setEditingRow(null);
@@ -386,29 +384,31 @@ export default function StoresIssue() {
       alert(err.message);
     } finally {
       setSavingEdit(false);
+      saveLockRef.current = false;
     }
   }
 
   async function deleteRow(row) {
+    if (saveLockRef.current) return;
     const ok = window.confirm(`Delete issue entry for ${row.itemName}?`);
     if (!ok) return;
 
     try {
-      const res = await apiCall({
+      saveLockRef.current = true;
+      setSavingEdit(true);
+      requireSuccessfulResponse(await withRequestTimeout(apiCall({
         fn: "storesIssue.update",
         ...row,
         status: "DELETED",
-      });
-
-      if (res.ok === false) {
-        alert(res.error || "Delete failed");
-        return;
-      }
+      })), "", "Stores issue delete");
 
       setStatus("Stores issue deleted");
       loadData();
     } catch (err) {
       alert(err.message);
+    } finally {
+      setSavingEdit(false);
+      saveLockRef.current = false;
     }
   }
 

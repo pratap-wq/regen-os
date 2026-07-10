@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiCall } from "../api/api";
+import { createStableTransactionId, requireSuccessfulResponse, withRequestTimeout } from "../utils/requestSafety";
 
 import {
   pageStyle,
@@ -26,6 +27,8 @@ export default function FGRates() {
 
   const [status, setStatus] =
     useState("");
+  const [saving, setSaving] = useState(false);
+  const saveLockRef = useRef(false);
 
   const blankForm = {
 
@@ -101,23 +104,28 @@ export default function FGRates() {
   async function submit(e) {
 
     e.preventDefault();
+    if (saveLockRef.current) return;
+    saveLockRef.current = true;
+    setSaving(true);
+    setStatus("Saving FG rate...");
+    const rateId = form.rateId || createStableTransactionId("FGR", `${form.year}-${form.month}`, form.grade);
+    if (!form.rateId) setForm((current) => ({ ...current, rateId }));
 
     try {
 
-      const res =
-        await apiCall({
+      const res = requireSuccessfulResponse(
+        await withRequestTimeout(apiCall({
 
           fn:
             "fgRate.add",
 
           ...form,
+          rateId,
 
-        });
-
-      if (res.ok) {
+        })), "rateId", "FG rate save");
 
         setStatus(
-          "FG Rate saved successfully"
+          `FG Rate saved successfully: ${res.rateId}`
         );
 
         setForm(
@@ -126,21 +134,15 @@ export default function FGRates() {
 
         loadData();
 
-      } else {
-
-        setStatus(
-          res.error ||
-            "Error"
-        );
-
-      }
-
     } catch (err) {
 
       setStatus(
         err.message
       );
 
+    } finally {
+      saveLockRef.current = false;
+      setSaving(false);
     }
 
   }
@@ -429,12 +431,13 @@ export default function FGRates() {
 
             <button
               type="submit"
+              disabled={saving}
               style={
                 primaryButton
               }
             >
 
-              Save FG Rate
+              {saving ? "Saving..." : "Save FG Rate"}
 
             </button>
 

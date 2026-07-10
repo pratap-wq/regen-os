@@ -6,6 +6,28 @@ const SHEET_ID = "165IV2wQxli0Qi7K0s-bl7IuxnmoPUkirYbXPiedDUIE";
 let REQUEST_SPREADSHEET_ = null;
 let REQUEST_SHEET_CACHE_ = {};
 
+function executeCriticalWriteRoute_(routeName, handler) {
+  const startedAt = Date.now();
+  try {
+    return handler();
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    const upper = message.toUpperCase();
+    let failedStep = "operationalWrite";
+    if (/LOCK|VALID|REQUIRED|MATERIAL|QUANTITY|WEIGHT|COMPOSITION|AVAILABLE/.test(upper)) failedStep = "validation";
+    if (/DUPLICATE|ALREADY EXISTS/.test(upper)) failedStep = "duplicateCheck";
+    if (/LEDGER|INVENTORY POST|MOVEMENT/.test(upper)) failedStep = "ledgerWrite";
+    return output({
+      ok: false,
+      route: routeName,
+      failedStep,
+      message,
+      error: message + " (failed step: " + failedStep + ")",
+      elapsedMs: Date.now() - startedAt,
+    });
+  }
+}
+
 function doGet(e) {
   resetSpreadsheetRequestCache_();
   try {
@@ -73,6 +95,8 @@ function doGet(e) {
     if (p.fn === "rm.add") return addRM(p);
     if (p.fn === "rm.list") return listMaster("RM_Inward");
     if (p.fn === "rm.update") return updateRM(p);
+    if (p.fn === "rm.entryBootstrap") return getRmEntryBootstrap(p);
+    if (p.fn === "rm.historySummary") return getRmHistorySummary(p);
 
     // Suppliers
     if (p.fn === "supplier.add") return addSupplier(p);
@@ -81,29 +105,30 @@ function doGet(e) {
     if (p.fn === "customers.list") return listMaster("Customers");
 
     // Grinder
-    if (p.fn === "grinder.add") return addGrinderBatch(p);
+    if (p.fn === "grinder.add") return executeCriticalWriteRoute_(p.fn, function() { return addGrinderBatch(p); });
     if (p.fn === "grinder.list") return listGrinderBatches(p);
     if (p.fn === "grinder.update") return updateGrinderBatch(p);
     if (p.fn === "production.historySummary") return getProductionHistorySummary(p);
     if (p.fn === "production.historyRecord") return getProductionHistoryRecord(p);
+    if (p.fn === "production.entryBootstrap") return getProductionEntryBootstrap(p);
     if (p.fn === "dashboard.ceoSummary") return getDashboardCeoSummary(p);
     if (p.fn === "dashboard.factorySummary") return getDashboardFactorySummary(p);
 
     // Wash
-    if (p.fn === "wash.add") return addWashBatch(p);
+    if (p.fn === "wash.add") return executeCriticalWriteRoute_(p.fn, function() { return addWashBatch(p); });
     if (p.fn === "wash.list") return listMaster("Wash_Batches");
     if (p.fn === "wash.update") return updateWashBatch(p);
     if (p.fn === "wash.availableForSorting") return listWashAvailableForSorting();
     if (p.fn === "wash.availableForExtrusion") return listWashAvailableForExtrusion();
 
     // Sorting / Colour Sorter
-    if (p.fn === "sorting.add" || p.fn === "colorSorter.add") return addSortingBatch(p);
+    if (p.fn === "sorting.add" || p.fn === "colorSorter.add") return executeCriticalWriteRoute_(p.fn, function() { return addSortingBatch(p); });
     if (p.fn === "sorting.list" || p.fn === "colorSorter.list") return listMaster("Sorting_Batches");
     if (p.fn === "sorting.update" || p.fn === "colorSorter.update") return updateSortingBatch(p);
     if (p.fn === "sorting.availableForExtrusion") return listSortingAvailableForExtrusion();
 
     // Extrusion
-    if (p.fn === "extrusion.add") return addExtrusionBatch(p);
+    if (p.fn === "extrusion.add") return executeCriticalWriteRoute_(p.fn, function() { return addExtrusionBatch(p); });
     if (p.fn === "extrusion.list") return listMaster("Extrusion_Batches");
     if (p.fn === "extrusion.update") return updateExtrusionBatch(p);
 
@@ -146,10 +171,10 @@ if (p.fn === "factoryCostMaster.update") return updateFactoryCostMaster(p);
     if (p.fn === "storesMaster.add") return addStoresMaster(p);
     if (p.fn === "storesMaster.list") return listMaster("Stores_Master");
     if (p.fn === "storesMaster.update") return updateStoresMaster(p);
-    if (p.fn === "storesInward.add") return addStoresInward(p);
+    if (p.fn === "storesInward.add") return executeCriticalWriteRoute_(p.fn, function() { return addStoresInward(p); });
     if (p.fn === "storesInward.list") return listMaster("Stores_Inward");
     if (p.fn === "storesInward.update") return updateStoresInward(p);
-    if (p.fn === "storesIssue.add") return addStoresIssue(p);
+    if (p.fn === "storesIssue.add") return executeCriticalWriteRoute_(p.fn, function() { return addStoresIssue(p); });
     if (p.fn === "storesIssue.list") return listMaster("Stores_Issue");
     if (p.fn === "storesIssue.update") return updateStoresIssue(p);
     if (p.fn === "consumables.add") return addStoresMaster(p);
@@ -635,11 +660,14 @@ function debugRoutes() {
       "rm.add",
       "rm.list",
       "rm.update",
+      "rm.entryBootstrap",
+      "rm.historySummary",
       "grinder.add",
       "grinder.list",
       "grinder.update",
       "production.historySummary",
       "production.historyRecord",
+      "production.entryBootstrap",
       "dashboard.ceoSummary",
       "dashboard.factorySummary",
       "wash.add",
@@ -6558,7 +6586,144 @@ function postApprovedRmInventory_(inwardId, data = {}, dateValue) {
   return { posted: posted > 0, movements: posted, warnings };
 }
 
+function getRmEntryBootstrap() {
+  const startedAt = Date.now();
+  const suppliers = getRowsAsObjects("Suppliers")
+    .filter(function(row) { return !isDeleted_(row); })
+    .filter(function(row) {
+      return ["FALSE", "NO", "INACTIVE", "DISABLED", "ARCHIVED"].indexOf(
+        String(row.isActive !== undefined ? row.isActive : row.status || "ACTIVE").trim().toUpperCase()
+      ) === -1;
+    })
+    .map(function(row) { return row; });
+  const materials = getMaterialMasterRows_().filter(function(row) {
+    return materialMasterFlag_(row, ["appearsInRMInward", "appearsInRmInward"]) === "YES";
+  });
+
+  return output({
+    ok: true,
+    suppliers,
+    materials,
+    generatedAt: new Date().toISOString(),
+    elapsedMs: Date.now() - startedAt,
+  });
+}
+
+function getRmHistorySummary(data = {}) {
+  const startedAt = Date.now();
+  const periodMonth = normalizeMonthClosePeriod_(data.periodMonth || data.month || todayYmd().slice(0, 7));
+  const search = String(data.search || "").trim().toLowerCase();
+  const pageSize = Math.max(1, Math.min(num(data.pageSize) || 50, 200));
+  const page = Math.max(1, num(data.page) || 1);
+  const showDeleted = normalizeYesNo(data.showDeleted, "NO") === "YES";
+  let rows = getRowsAsObjects("RM_Inward")
+    .filter(function(row) { return showDeleted || !isDeleted_(row); })
+    .filter(function(row) {
+      return normalizeMonthClosePeriod_(row.periodMonth || row.date || row.createdAt) === periodMonth;
+    });
+
+  if (search) {
+    rows = rows.filter(function(row) {
+      return [
+        row.inwardId, row.supplier, row.vehicleNo, row.poNumber,
+        row.supplierGrnNumber, row.supplierInvoiceNumber, row.material,
+        row.materialSummary, row.paymentStatus, row.qcStatus,
+      ].some(function(value) { return String(value || "").toLowerCase().indexOf(search) !== -1; });
+    });
+  }
+
+  rows.sort(function(a, b) {
+    return String(normalizeDateOnly_(b.date || b.createdAt)).localeCompare(String(normalizeDateOnly_(a.date || a.createdAt)));
+  });
+  const totals = rows.reduce(function(result, row) {
+    result.totalQuantityKg += num(row.netWeight || row.quantityKg);
+    result.taxableValue += num(row.taxableValue);
+    result.invoiceTotal += num(row.invoiceTotal || row.grandTotal);
+    const qc = String(row.qcStatus || "PENDING").toUpperCase();
+    if (qc === "PENDING") result.qcPending += 1;
+    if (qc === "APPROVED") result.qcApproved += 1;
+    return result;
+  }, { totalQuantityKg: 0, taxableValue: 0, invoiceTotal: 0, qcPending: 0, qcApproved: 0 });
+  Object.keys(totals).forEach(function(key) {
+    if (typeof totals[key] === "number") totals[key] = round2(totals[key]);
+  });
+
+  const totalRows = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * pageSize;
+  return output({
+    ok: true,
+    periodMonth,
+    rows: rows.slice(start, start + pageSize),
+    totals,
+    pagination: { page: safePage, pageSize, totalRows, totalPages },
+    elapsedMs: Date.now() - startedAt,
+  });
+}
+
+function getProductionEntryBootstrap() {
+  const startedAt = Date.now();
+  const materials = getMaterialMasterRows_();
+  const machines = getRowsAsObjects("Machine_Master").filter(function(row) {
+    return !isDeleted_(row) && ["INACTIVE", "DISABLED", "ARCHIVED", "MERGED"].indexOf(String(row.status || "ACTIVE").toUpperCase()) === -1;
+  });
+  const materialIndex = {};
+  const inventoryRows = [];
+
+  materials.forEach(function(material) {
+    const category = normalizeMaterialCategoryForLedger_(material.category);
+    if (["STORE", "UNKNOWN", ""].indexOf(category) !== -1) return;
+    const item = {
+      materialId: material.materialId || "",
+      materialCode: material.materialCode || materialCode_(material.materialName),
+      materialName: material.materialName || material.materialCode || "",
+      category,
+      qtyKg: 0,
+    };
+    if (!item.materialName) return;
+    inventoryRows.push(item);
+    [item.materialId, item.materialCode, item.materialName].forEach(function(value) {
+      const key = compactInventoryMaterialKey_(value);
+      if (key) materialIndex[key] = item;
+    });
+  });
+
+  getRowsAsObjects("Inventory_Ledger").forEach(function(row) {
+    const status = String(row.status || "ACTIVE").toUpperCase();
+    if (isDeleted_(row) || ["INACTIVE", "DISABLED", "ARCHIVED", "VOID", "VOIDED", "REVERSED", "CANCELLED", "REJECTED"].indexOf(status) !== -1) return;
+    const material = [row.materialId, row.materialCode, row.itemName, row.materialName]
+      .map(compactInventoryMaterialKey_)
+      .map(function(key) { return materialIndex[key]; })
+      .filter(function(match) { return match; })[0];
+    if (material) material.qtyKg += num(row.qtyIn) - num(row.qtyOut);
+  });
+
+  const extrusionRefs = getRowsAsObjects("Extrusion_Batches").map(function(row) {
+    return { extrusionBatchId: row.extrusionBatchId || row.batchId || "" };
+  }).filter(function(row) { return row.extrusionBatchId; });
+
+  return output({
+    ok: true,
+    machines,
+    materials,
+    fgGrades: materials.filter(function(row) {
+      return normalizeMaterialCategoryForLedger_(row.category) === "FG" && materialMasterFlag_(row, ["appearsInExtrusionOutput"]) === "YES";
+    }),
+    inventoryRows: inventoryRows.map(function(row) {
+      return Object.assign({}, row, { qtyKg: round2(row.qtyKg) });
+    }),
+    extrusionRefs,
+    generatedAt: new Date().toISOString(),
+    elapsedMs: Date.now() - startedAt,
+  });
+}
+
 function addRM(data = {}) {
+  const startedAt = Date.now();
+  const timings = { validation: 0, duplicateCheck: 0, operationalWrite: 0, ledgerWrite: 0, refreshOrSummary: 0, total: 0 };
+  let failedStep = "validation";
+  try {
   const sh = getSheet("RM_Inward");
 
   ensureHeaders_("RM_Inward", [
@@ -6608,8 +6773,13 @@ function addRM(data = {}) {
 
   const date = normalizeDateOnly_(data.date || todayYmd());
   const inwardId = data.inwardId || data.batchId || generateRmReceivingRef_(date, data.supplier);
+  failedStep = "duplicateCheck";
+  let stepStarted = Date.now();
   const duplicate = assertNoDuplicateCreate_("RM_Inward", "inwardId", inwardId);
+  timings.duplicateCheck = Date.now() - stepStarted;
   if (duplicate) return duplicate;
+  failedStep = "validation";
+  stepStarted = Date.now();
   const lines = parseRmMaterialLines_(data.materialLines, data.material, data.netWeight || data.quantityKg, { strict: true });
   const totalQty = lines.reduce(function(sum, line) { return sum + num(line.quantityKg); }, 0);
   const taxableValue = num(data.taxableValue) || lines.reduce(function(sum, line) { return sum + num(line.amount); }, 0);
@@ -6630,7 +6800,10 @@ function addRM(data = {}) {
       });
     });
   }
+  timings.validation = Date.now() - stepStarted;
 
+  failedStep = "operationalWrite";
+  stepStarted = Date.now();
   appendObjectRow(sh, {
     inwardId,
     date,
@@ -6677,19 +6850,32 @@ function addRM(data = {}) {
     createdBy: data.createdBy || "System",
     createdAt: new Date(),
   });
+  timings.operationalWrite = Date.now() - stepStarted;
 
+  failedStep = "ledgerWrite";
+  stepStarted = Date.now();
   let ledger = { posted: false, reason: "QC_PENDING" };
   if (String(data.qcStatus || "").toUpperCase() === "APPROVED") {
     ledger = assertLedgerPosted_(postApprovedRmInventory_(inwardId, data, date), "RM inward inventory");
   }
-  return output({ ok: true, inwardId, ledger });
+  timings.ledgerWrite = Date.now() - stepStarted;
+  timings.total = Date.now() - startedAt;
+  return output({ ok: true, inwardId, ledger, ledgerPosted: String(data.qcStatus || "").toUpperCase() === "APPROVED" ? true : false, elapsedMs: timings.total, timings });
+  } catch (err) {
+    timings.total = Date.now() - startedAt;
+    return output({ ok: false, failedStep, elapsedMs: timings.total, timings, error: (err.message || String(err)) + " (failed step: " + failedStep + ")" });
+  }
 }
 
 function updateRM(data = {}) {
+  const startedAt = Date.now();
+  const timings = { validation: 0, duplicateCheck: 0, operationalWrite: 0, ledgerWrite: 0, refreshOrSummary: 0, total: 0 };
   const idValue = data.inwardId || data.batchId;
+  const validationStarted = Date.now();
+  const existing = getRowById_("RM_Inward", "inwardId", idValue);
   validateOperationalWrite_(
     data,
-    getRowById_("RM_Inward", "inwardId", idValue)
+    existing
   );
 
   ensureHeaders_("RM_Inward", [
@@ -6731,8 +6917,10 @@ function updateRM(data = {}) {
     num(data.grandTotal || data.invoiceTotal) ||
     taxableValue + gstAmount + num(data.freight) + otherCharges + num(data.roundOff);
   const outstandingAmount = Math.max(grandTotal - num(data.advancePaid), 0);
+  timings.validation = Date.now() - validationStarted;
 
-  return updateById("RM_Inward", "inwardId", idValue, {
+  const writeStarted = Date.now();
+  const response = updateById("RM_Inward", "inwardId", idValue, {
     date: normalizeDateOnly_(data.date || todayYmd()),
     supplier: data.supplier || "",
     vehicleNo: data.vehicleNo || "",
@@ -6771,6 +6959,14 @@ function updateRM(data = {}) {
     remarks: data.remarks || "",
     status: data.status || "",
   });
+  timings.operationalWrite = Date.now() - writeStarted;
+  timings.total = Date.now() - startedAt;
+  const result = JSON.parse(response.getContent());
+  return output(Object.assign({}, result, {
+    inwardId: result.ok ? idValue : "",
+    elapsedMs: timings.total,
+    timings,
+  }));
 }
 
 // SUPPLIERS
@@ -6809,6 +7005,8 @@ function addSupplier(data = {}) {
   ]);
 
   const supplierId = data.supplierId || generateBatchId("SUP");
+  const supplierDuplicate = assertNoDuplicateCreate_("Suppliers", "supplierId", supplierId);
+  if (supplierDuplicate) return supplierDuplicate;
   const supplierName = data.supplierName || data.name || "";
 
   appendObjectRow(sh, {
@@ -6898,6 +7096,8 @@ function addFgRate(data = {}) {
   ]);
 
   const rateId = data.rateId || generateBatchId("FGR");
+  const rateDuplicate = assertNoDuplicateCreate_("FG_Rates", "rateId", rateId);
+  if (rateDuplicate) return rateDuplicate;
   const date = normalizeDateOnly_(data.date || todayYmd());
   validateOperationalWrite_({ ...data, date });
 
@@ -6954,6 +7154,8 @@ function addFactoryExpense(data = {}) {
   ]);
 
   const expenseId = data.expenseId || generateBatchId("EXP");
+  const expenseDuplicate = assertNoDuplicateCreate_("Factory_Expenses", "expenseId", expenseId);
+  if (expenseDuplicate) return expenseDuplicate;
   const date = normalizeDateOnly_(data.date || todayYmd());
   const periodMonth = getPeriodMonthFromPayload_(data, date);
   validateOperationalWrite_({ ...data, date, periodMonth });
@@ -8294,6 +8496,14 @@ function updateProductionRecordWithLedger_(stage, recordId, data) {
     }
 
     timings.total = Date.now() - startedAt;
+    const transactionTrace = {
+      validation: timings.validation,
+      duplicateCheck: 0,
+      operationalWrite: timings.rowLookup + timings.operationalUpdate,
+      ledgerWrite: timings.oldLedgerVoid + timings.newLedgerPost,
+      refreshOrSummary: 0,
+      total: timings.total,
+    };
     const result = {
       ok: true,
       id: recordId,
@@ -8305,6 +8515,7 @@ function updateProductionRecordWithLedger_(stage, recordId, data) {
       deleted: isDelete,
       elapsedMs: timings.total,
       timings,
+      transactionTrace,
       message: isDelete
         ? "Production record soft-deleted and related ledger rows voided."
         : "Production changes saved and related ledger movements reposted.",
@@ -8322,6 +8533,14 @@ function updateProductionRecordWithLedger_(stage, recordId, data) {
       try { match.sheet.getRange(match.rowNumber, 1, 1, match.values.length).setValues([match.values]); } catch (ignore) {}
     }
     timings.total = Date.now() - startedAt;
+    const transactionTrace = {
+      validation: timings.validation,
+      duplicateCheck: 0,
+      operationalWrite: timings.rowLookup + timings.operationalUpdate,
+      ledgerWrite: timings.oldLedgerVoid + timings.newLedgerPost,
+      refreshOrSummary: 0,
+      total: timings.total,
+    };
     return output({
       ok: false,
       recordId: recordId || "",
@@ -8330,6 +8549,7 @@ function updateProductionRecordWithLedger_(stage, recordId, data) {
       failedStep,
       elapsedMs: timings.total,
       timings,
+      transactionTrace,
       error: (err.message || String(err)) + " (failed step: " + failedStep + ")",
     });
   }
@@ -8653,6 +8873,9 @@ function restoreProductionLedgerRows_(previousRows) {
 }
 
 function addGrinderBatch(data = {}) {
+  const startedAt = Date.now();
+  const timings = { validation: 0, duplicateCheck: 0, operationalWrite: 0, ledgerWrite: 0, refreshOrSummary: 0, total: 0 };
+  let stepStarted = Date.now();
   validateOperationalWrite_(data);
   data = normalizeProductionBatchPayload_(data, "GRINDER");
 
@@ -8660,8 +8883,11 @@ function addGrinderBatch(data = {}) {
   ensureHeaders_("Grinder_Batches", grinderBatchHeaders_());
 
   const grinderBatchId = data.grinderBatchId || data.batchId || generateBatchId("GB");
+  stepStarted = Date.now();
   const duplicate = assertNoDuplicateCreate_("Grinder_Batches", "grinderBatchId", grinderBatchId);
-  if (duplicate) return duplicate;
+  timings.duplicateCheck = Date.now() - stepStarted;
+  if (duplicate) return updateProductionRecordWithLedger_("GRINDER", grinderBatchId, data);
+  stepStarted = Date.now();
   const date = normalizeDateOnly_(data.date || todayYmd());
   const outputComposition = normalizeGrinderOutputComposition_(data);
   const inputWeightKg = num(data.inputWeightKg);
@@ -8692,7 +8918,9 @@ function addGrinderBatch(data = {}) {
     inputs: data.feedComposition,
     outputs: outputComposition
   });
+  timings.validation = Date.now() - stepStarted;
 
+  stepStarted = Date.now();
   appendObjectRow(sh, {
     grinderBatchId,
     batchId: grinderBatchId,
@@ -8723,7 +8951,9 @@ function addGrinderBatch(data = {}) {
     createdAt: new Date(),
     updatedAt: "",
   });
+  timings.operationalWrite = Date.now() - stepStarted;
 
+  stepStarted = Date.now();
   const ledger = assertLedgerPosted_(postManufacturingCompositionLedger_({
     date,
     module: "GRINDER",
@@ -8733,6 +8963,8 @@ function addGrinderBatch(data = {}) {
     outputs: outputComposition,
     createdBy: data.createdBy || "System",
   }), "Grinder inventory");
+  timings.ledgerWrite = Date.now() - stepStarted;
+  timings.total = Date.now() - startedAt;
 
   return output({
     ok: true,
@@ -8740,6 +8972,9 @@ function addGrinderBatch(data = {}) {
     batchId: grinderBatchId,
     outputMaterial: GRINDER_OUTPUT_MATERIAL,
     ledger,
+    ledgerPosted: true,
+    elapsedMs: timings.total,
+    timings,
   });
 }
 
@@ -8749,6 +8984,9 @@ function updateGrinderBatch(data = {}) {
 }
 
 function addWashBatch(data = {}) {
+  const startedAt = Date.now();
+  const timings = { validation: 0, duplicateCheck: 0, operationalWrite: 0, ledgerWrite: 0, refreshOrSummary: 0, total: 0 };
+  let stepStarted = Date.now();
 
   validateOperationalWrite_(data);
   data = normalizeProductionBatchPayload_(data, "WASH");
@@ -8774,8 +9012,11 @@ function addWashBatch(data = {}) {
     data.washBatchId ||
     data.batchId ||
     generateBatchId("WB");
+  stepStarted = Date.now();
   const duplicate = assertNoDuplicateCreate_("Wash_Batches", "washBatchId", washBatchId);
-  if (duplicate) return duplicate;
+  timings.duplicateCheck = Date.now() - stepStarted;
+  if (duplicate) return updateProductionRecordWithLedger_("WASH", washBatchId, data);
+  stepStarted = Date.now();
 
   const inputWeightKg = num(data.inputWeightKg);
   const washedOutputKg = num(data.washedOutputKg);
@@ -8785,6 +9026,7 @@ function addWashBatch(data = {}) {
     inputs: feedComposition,
     outputs: data.outputComposition
   });
+  timings.validation = Date.now() - stepStarted;
 
   const estimatedRecovery =
     inputWeightKg > 0
@@ -8804,6 +9046,7 @@ function addWashBatch(data = {}) {
       ? "READY_FOR_SORTING"
       : "READY_FOR_EXTRUSION";
 
+  stepStarted = Date.now();
   appendObjectRow(sh,{
     washBatchId,
     batchId:washBatchId,
@@ -8856,7 +9099,9 @@ function addWashBatch(data = {}) {
     createdBy:data.createdBy||"System",
     createdAt:new Date()
   });
+  timings.operationalWrite = Date.now() - stepStarted;
 
+  stepStarted = Date.now();
   const ledger = assertLedgerPosted_(postManufacturingCompositionLedger_({
     date: normalizeDateOnly_(data.date||todayYmd()),
     module: "WASH",
@@ -8866,11 +9111,16 @@ function addWashBatch(data = {}) {
     outputs: data.outputComposition,
     createdBy: data.createdBy||"System"
   }), "Wash inventory");
+  timings.ledgerWrite = Date.now() - stepStarted;
+  timings.total = Date.now() - startedAt;
 
   return output({
     ok:true,
     washBatchId,
-    ledger
+    ledger,
+    ledgerPosted:true,
+    elapsedMs:timings.total,
+    timings
   });
 
 }
@@ -8925,6 +9175,9 @@ function listWashAvailableForExtrusion(){
 // =====================================================
 
 function addSortingBatch(data={}){
+    const startedAt = Date.now();
+    const timings = { validation: 0, duplicateCheck: 0, operationalWrite: 0, ledgerWrite: 0, refreshOrSummary: 0, total: 0 };
+    let stepStarted = Date.now();
 
     validateOperationalWrite_(data);
     data = normalizeProductionBatchPayload_(data, "SORTING");
@@ -8946,14 +9199,19 @@ function addSortingBatch(data={}){
     const sortingBatchId=
         data.sortingBatchId||
         generateBatchId("SB");
+    stepStarted = Date.now();
     const duplicate = assertNoDuplicateCreate_("Sorting_Batches", "sortingBatchId", sortingBatchId);
-    if (duplicate) return duplicate;
+    timings.duplicateCheck = Date.now() - stepStarted;
+    if (duplicate) return updateProductionRecordWithLedger_("SORTING", sortingBatchId, data);
+    stepStarted = Date.now();
 
     validateManufacturingCompositionLedger_({
         inputs: data.feedComposition,
         outputs: data.outputComposition
     });
+    timings.validation = Date.now() - stepStarted;
 
+    stepStarted = Date.now();
     appendObjectRow(sh,{
 
         sortingBatchId,
@@ -8998,7 +9256,9 @@ function addSortingBatch(data={}){
         createdAt:new Date()
 
     });
+    timings.operationalWrite = Date.now() - stepStarted;
 
+    stepStarted = Date.now();
     const ledger = assertLedgerPosted_(postManufacturingCompositionLedger_({
         date: normalizeDateOnly_(data.date||todayYmd()),
         module: "SORTING",
@@ -9008,11 +9268,16 @@ function addSortingBatch(data={}){
         outputs: data.outputComposition,
         createdBy: data.createdBy||"System"
     }), "Sorting inventory");
+    timings.ledgerWrite = Date.now() - stepStarted;
+    timings.total = Date.now() - startedAt;
 
     return output({
         ok:true,
         sortingBatchId,
-        ledger
+        ledger,
+        ledgerPosted:true,
+        elapsedMs:timings.total,
+        timings
     });
 
 }
@@ -9042,6 +9307,9 @@ function listSortingAvailableForExtrusion(){
 // EXTRUSION
 
 function addExtrusionBatch(data = {}) {
+  const startedAt = Date.now();
+  const timings = { validation: 0, duplicateCheck: 0, operationalWrite: 0, ledgerWrite: 0, refreshOrSummary: 0, total: 0 };
+  let stepStarted = Date.now();
   validateOperationalWrite_(data);
   data = normalizeProductionBatchPayload_(data, "EXTRUSION");
 
@@ -9101,8 +9369,11 @@ function addExtrusionBatch(data = {}) {
 
   const extrusionBatchId =
     data.extrusionBatchId || data.batchId || generateBatchId("EX");
+  stepStarted = Date.now();
   const duplicate = assertNoDuplicateCreate_("Extrusion_Batches", "extrusionBatchId", extrusionBatchId);
-  if (duplicate) return duplicate;
+  timings.duplicateCheck = Date.now() - stepStarted;
+  if (duplicate) return updateProductionRecordWithLedger_("EXTRUSION", extrusionBatchId, data);
+  stepStarted = Date.now();
 
   const date = normalizeDateOnly_(data.date || todayYmd());
 
@@ -9163,7 +9434,9 @@ function addExtrusionBatch(data = {}) {
     inputs: data.feedComposition,
     outputs: data.outputComposition
   });
+  timings.validation = Date.now() - stepStarted;
 
+  stepStarted = Date.now();
   appendObjectRow(sh, {
     extrusionBatchId,
     batchId: extrusionBatchId,
@@ -9225,7 +9498,9 @@ function addExtrusionBatch(data = {}) {
     createdBy: data.createdBy || "System",
     createdAt: new Date(),
   });
+  timings.operationalWrite = Date.now() - stepStarted;
 
+  stepStarted = Date.now();
   const ledger = assertLedgerPosted_(postManufacturingCompositionLedger_({
     date,
     module: "EXTRUSION",
@@ -9235,6 +9510,8 @@ function addExtrusionBatch(data = {}) {
     outputs: data.outputComposition,
     createdBy: data.createdBy || "System"
   }), "Extrusion inventory");
+  timings.ledgerWrite = Date.now() - stepStarted;
+  timings.total = Date.now() - startedAt;
 
   return output({
     ok: true,
@@ -9243,6 +9520,9 @@ function addExtrusionBatch(data = {}) {
     sourceType,
     sourceBatchId,
     ledger,
+    ledgerPosted: true,
+    elapsedMs: timings.total,
+    timings,
   });
 }
 
@@ -10394,7 +10674,20 @@ function updateStoresMaster(data={}){
 // STORES INWARD
 // =====================================================
 
+function hasActiveInventoryLedgerMovement_(referenceId, movementType) {
+  return getRowsAsObjects("Inventory_Ledger").some(function(row) {
+    const status = String(row.status || "ACTIVE").toUpperCase();
+    return !isDeleted_(row) && ["VOID", "VOIDED", "REVERSED", "CANCELLED", "INACTIVE"].indexOf(status) === -1 &&
+      String(row.module || "").toUpperCase() === "STORES" &&
+      String(row.movementType || "").toUpperCase() === String(movementType || "").toUpperCase() &&
+      [row.sourceRef, row.targetRef].some(function(value) { return String(value || "") === String(referenceId || ""); });
+  });
+}
+
 function addStoresInward(data={}){
+  const startedAt = Date.now();
+  const timings = { validation: 0, duplicateCheck: 0, operationalWrite: 0, ledgerWrite: 0, refreshOrSummary: 0, total: 0 };
+  let stepStarted = Date.now();
 
   const sh=getSheet("Stores_Inward");
   validateOperationalWrite_(data);
@@ -10411,9 +10704,23 @@ function addStoresInward(data={}){
       data.inwardId ||
       data.storesInwardId ||
       generateBatchId("SIN");
+  stepStarted = Date.now();
   const duplicate = assertNoDuplicateCreate_("Stores_Inward", "inwardId", inwardId);
-  if (duplicate) return duplicate;
+  timings.duplicateCheck = Date.now() - stepStarted;
+  if (duplicate) {
+    const existing = getRowById_("Stores_Inward", "inwardId", inwardId) || data;
+    if (!hasActiveInventoryLedgerMovement_(inwardId, "IN")) {
+      addInventoryLedger({
+        date: existing.date || todayYmd(), module: "STORES", movementType: "IN", itemType: "STORE",
+        itemName: existing.itemName || data.itemName || "", sourceRef: existing.supplier || "", targetRef: inwardId,
+        qtyIn: num(existing.qty || data.qty), qtyOut: 0, unit: existing.unit || data.unit || "Nos",
+        remarks: "Recovered missing Stores Inward ledger posting", createdBy: data.createdBy || "System",
+      });
+    }
+    return output({ ok: true, duplicate: true, inwardId, ledgerPosted: true, message: "Stores inward already existed; inventory posting is confirmed." });
+  }
 
+  stepStarted = Date.now();
   const qty=num(data.qty);
   const rate=num(data.rate);
 
@@ -10421,7 +10728,9 @@ function addStoresInward(data={}){
       itemType:"STORE",
       itemName:data.itemName||""
   });
+  timings.validation = Date.now() - stepStarted;
 
+  stepStarted = Date.now();
   appendObjectRow(sh,{
 
       inwardId,
@@ -10456,7 +10765,9 @@ function addStoresInward(data={}){
       createdAt:new Date()
 
   });
+  timings.operationalWrite = Date.now() - stepStarted;
 
+  stepStarted = Date.now();
   addInventoryLedger({
 
       date:data.date||todayYmd(),
@@ -10479,10 +10790,15 @@ function addStoresInward(data={}){
       createdBy:data.createdBy||"System"
 
   });
+  timings.ledgerWrite = Date.now() - stepStarted;
+  timings.total = Date.now() - startedAt;
 
   return output({
       ok:true,
-      inwardId
+      inwardId,
+      ledgerPosted:true,
+      elapsedMs:timings.total,
+      timings
   });
 
 }
@@ -10531,6 +10847,9 @@ function updateStoresInward(data={}){
 // =====================================================
 
 function addStoresIssue(data={}){
+  const startedAt = Date.now();
+  const timings = { validation: 0, duplicateCheck: 0, operationalWrite: 0, ledgerWrite: 0, refreshOrSummary: 0, total: 0 };
+  let stepStarted = Date.now();
 
   const sh=getSheet("Stores_Issue");
   validateOperationalWrite_(data);
@@ -10544,9 +10863,23 @@ function addStoresIssue(data={}){
   ]);
 
   const issueId=data.issueId||generateBatchId("ISS");
+  stepStarted = Date.now();
   const duplicate = assertNoDuplicateCreate_("Stores_Issue", "issueId", issueId);
-  if (duplicate) return duplicate;
+  timings.duplicateCheck = Date.now() - stepStarted;
+  if (duplicate) {
+    const existing = getRowById_("Stores_Issue", "issueId", issueId) || data;
+    if (!hasActiveInventoryLedgerMovement_(issueId, "OUT")) {
+      addInventoryLedger({
+        date: existing.date || todayYmd(), module: "STORES", movementType: "OUT", itemType: "STORE",
+        itemName: existing.itemName || data.itemName || "", sourceRef: issueId, targetRef: existing.department || "",
+        qtyIn: 0, qtyOut: num(existing.qty || data.qty), unit: existing.unit || data.unit || "Nos",
+        remarks: "Recovered missing Stores Issue ledger posting", createdBy: data.createdBy || "System",
+      });
+    }
+    return output({ ok: true, duplicate: true, issueId, ledgerPosted: true, message: "Stores issue already existed; inventory posting is confirmed." });
+  }
 
+  stepStarted = Date.now();
   const qty=num(data.qty);
   const issueRate=num(data.issueRate || data.rate);
   const issueValue =
@@ -10559,7 +10892,9 @@ function addStoresIssue(data={}){
       itemType:"STORE",
       itemName:data.itemName||""
   });
+  timings.validation = Date.now() - stepStarted;
 
+  stepStarted = Date.now();
   appendObjectRow(sh,{
 
       issueId,
@@ -10587,7 +10922,9 @@ function addStoresIssue(data={}){
       createdAt:new Date()
 
   });
+  timings.operationalWrite = Date.now() - stepStarted;
 
+  stepStarted = Date.now();
   addInventoryLedger({
 
       date:data.date||todayYmd(),
@@ -10612,10 +10949,15 @@ function addStoresIssue(data={}){
       createdBy:data.createdBy||"System"
 
   });
+  timings.ledgerWrite = Date.now() - stepStarted;
+  timings.total = Date.now() - startedAt;
 
   return output({
       ok:true,
-      issueId
+      issueId,
+      ledgerPosted:true,
+      elapsedMs:timings.total,
+      timings
   });
 
 }

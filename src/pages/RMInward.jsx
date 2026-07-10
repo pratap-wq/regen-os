@@ -6,6 +6,7 @@ import FactoryDropdown from "../components/FactoryDropdown";
 import ProductionMaterialSelect from "../components/ProductionMaterialSelect";
 import { normalizeProductionMaterialName } from "../services/productionMaterialMaster";
 import { KpiCard, PageLayout } from "../components/factoryDesignSystem";
+import { runSafeAction } from "../utils/requestSafety";
 
 const blankLine = {
   material: "",
@@ -53,35 +54,54 @@ export default function RMInward() {
   const [materialLines, setMaterialLines] = useState([{ ...blankLine }]);
   const [rows, setRows] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
+  const [rmMaterials, setRmMaterials] = useState([]);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyMeta, setHistoryMeta] = useState({ page: 1, totalPages: 1, totalRows: 0 });
+  const [historyTotals, setHistoryTotals] = useState(null);
   const [status, setStatus] = useState("");
   const [editingRow, setEditingRow] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveState, setSaveState] = useState("idle");
   const savingRef = useRef(false);
   const successTimerRef = useRef(null);
+  const historyActionLockRef = useRef(false);
+  const [historyAction, setHistoryAction] = useState("");
 
   useEffect(() => {
-    loadData();
+    loadBootstrap();
     return () => clearTimeout(successTimerRef.current);
   }, []);
 
-  async function loadData({ preserveStatus = false } = {}) {
-    try {
-      const [supplierRes, rmRes] = await Promise.all([
-        apiCall({ fn: "suppliers.list" }),
-        apiCall({ fn: "rm.list" }),
-      ]);
+  useEffect(() => {
+    loadHistory();
+  }, [month, year, historyPage]);
 
-      setSuppliers(
-        (supplierRes.rows || []).filter(
-          (s) => String(s.isActive || "TRUE").toUpperCase() !== "FALSE"
-        )
-      );
-      setRows(
-        (rmRes.rows || []).filter(
-          (r) => String(r.status || "").toUpperCase() !== "DELETED"
-        )
-      );
+  async function loadBootstrap({ preserveStatus = false } = {}) {
+    try {
+      const res = await apiCall({ fn: "rm.entryBootstrap" });
+      if (!res || res.ok !== true) throw new Error(res?.error || "RM entry setup failed");
+      setSuppliers(res.suppliers || []);
+      setRmMaterials(res.materials || []);
+      return true;
+    } catch (err) {
+      if (!preserveStatus) setStatus(err.message);
+      return false;
+    }
+  }
+
+  async function loadHistory({ preserveStatus = false } = {}) {
+    try {
+      const res = await apiCall({
+        fn: "rm.historySummary",
+        periodMonth: `${year}-${month}`,
+        page: historyPage,
+        pageSize: 50,
+        showDeleted: "NO",
+      });
+      if (!res || res.ok !== true) throw new Error(res?.error || "RM history failed to load");
+      setRows(res.rows || []);
+      setHistoryMeta(res.pagination || { page: 1, totalPages: 1, totalRows: 0 });
+      setHistoryTotals(res.totals || null);
       return true;
     } catch (err) {
       if (!preserveStatus) setStatus(err.message);
@@ -168,7 +188,7 @@ export default function RMInward() {
       try {
         const rows = JSON.parse(value);
         parsed = Array.isArray(rows) ? rows : [];
-      } catch (err) {
+      } catch {
         parsed = String(value)
           .split("+")
           .map((part) => {
@@ -365,7 +385,7 @@ export default function RMInward() {
       const successMessage = `RM inward saved successfully: ${res.inwardId}`;
       setStatus(successMessage);
       setSaveState("saved");
-      await loadData({ preserveStatus: true });
+      await loadHistory({ preserveStatus: true });
       clearForm({ preserveStatus: true, preserveSaveState: true, force: true });
       successTimerRef.current = setTimeout(() => {
         setSaveState("idle");
@@ -462,16 +482,18 @@ export default function RMInward() {
     if (!confirmed) return;
 
     try {
-      await apiCall({
-        fn: "rm.update",
-        ...row,
-        inwardId: row.inwardId,
-        status: "DELETED",
+      await runSafeAction({
+        lockRef: historyActionLockRef,
+        action: "RM inward delete",
+        request: () => apiCall({ fn: "rm.update", ...row, inwardId: row.inwardId, status: "DELETED" }),
+        onStart: () => { setHistoryAction(`DELETE:${row.inwardId}`); setStatus("Deleting receiving record..."); },
+        onSuccess: () => setStatus(`Receiving record deleted: ${row.inwardId}`),
+        onError: (err) => setStatus(err.message),
+        onFinish: () => setHistoryAction(""),
       });
-      setStatus("Receiving record deleted");
-      loadData();
-    } catch (err) {
-      alert(err.message);
+      await loadHistory({ preserveStatus: true });
+    } catch {
+      return;
     }
   }
 
@@ -480,7 +502,11 @@ export default function RMInward() {
     const lines = cleanLines(editMaterialLines());
     if (lines.length === 0) return alert("Add at least one material line");
     try {
-      const res = await apiCall({
+      await runSafeAction({
+        lockRef: historyActionLockRef,
+        action: "RM inward update",
+        validate: (res) => { if (String(res.id || "") !== String(editingRow.inwardId)) throw new Error("RM inward update did not confirm the record ID."); },
+        request: () => apiCall({
         fn: "rm.update",
         ...editingRow,
         date: dateForInput(editingRow.date),
@@ -491,18 +517,16 @@ export default function RMInward() {
         materialSummary: materialSummary(lines),
         quantityKg: totalQuantity(lines),
         netWeight: totalQuantity(lines),
+        }),
+        onStart: () => { setHistoryAction(`UPDATE:${editingRow.inwardId}`); setStatus("Updating receiving record..."); },
+        onSuccess: () => setStatus(`Receiving record updated: ${editingRow.inwardId}`),
+        onError: (err) => setStatus(err.message),
+        onFinish: () => setHistoryAction(""),
       });
-
-      if (res.ok === false) {
-        alert(res.error || "Update failed");
-        return;
-      }
-
       setEditingRow(null);
-      setStatus("Receiving record updated");
-      loadData();
-    } catch (err) {
-      alert(err.message);
+      await loadHistory({ preserveStatus: true });
+    } catch {
+      return;
     }
   }
 
@@ -512,10 +536,10 @@ export default function RMInward() {
       .sort((a, b) => String(dateForInput(b.date)).localeCompare(String(dateForInput(a.date))));
   }, [rows, month, year]);
 
-  const totalQty = filteredRows.reduce((sum, row) => sum + n(row.netWeight || row.quantityKg), 0);
-  const qcPending = filteredRows.filter((row) => String(row.qcStatus || "PENDING").toUpperCase() === "PENDING").length;
-  const qcApproved = filteredRows.filter((row) => String(row.qcStatus || "").toUpperCase() === "APPROVED").length;
-  const invoiceValue = filteredRows.reduce((sum, row) => sum + n(row.invoiceTotal), 0);
+  const totalQty = historyTotals ? n(historyTotals.totalQuantityKg) : filteredRows.reduce((sum, row) => sum + n(row.netWeight || row.quantityKg), 0);
+  const qcPending = historyTotals ? n(historyTotals.qcPending) : filteredRows.filter((row) => String(row.qcStatus || "PENDING").toUpperCase() === "PENDING").length;
+  const qcApproved = historyTotals ? n(historyTotals.qcApproved) : filteredRows.filter((row) => String(row.qcStatus || "").toUpperCase() === "APPROVED").length;
+  const invoiceValue = historyTotals ? n(historyTotals.invoiceTotal) : filteredRows.reduce((sum, row) => sum + n(row.invoiceTotal), 0);
   const commercialTotals = calculateCommercialTotals(form, materialLines);
   const saveButtonText = isSaving ? "Saving..." : saveState === "saved" ? "Saved" : "Save RM Inward";
 
@@ -593,6 +617,7 @@ export default function RMInward() {
             required
             allowAddNew
             defaults={{ supplierType: "RAW_MATERIAL" }}
+            providedItems={suppliers}
           />
         </Field>
 
@@ -644,6 +669,7 @@ export default function RMInward() {
                       onChange={(e) => updateLine(index, "material", e)}
                       placeholder="Select RM material"
                       style={inputStyle}
+                      items={rmMaterials}
                     />
                   </td>
                   <td style={td}>
@@ -805,6 +831,11 @@ export default function RMInward() {
         onEdit={editRow}
         onDelete={deleteRow}
       />
+      <div style={paginationWrap}>
+        <button type="button" disabled={historyPage <= 1 || Boolean(historyAction)} onClick={() => setHistoryPage((p) => Math.max(1, p - 1))} style={smallButton}>Previous</button>
+        <span>Page {historyMeta.page || 1} of {historyMeta.totalPages || 1} · {historyMeta.totalRows || 0} records</span>
+        <button type="button" disabled={historyPage >= (historyMeta.totalPages || 1) || Boolean(historyAction)} onClick={() => setHistoryPage((p) => p + 1)} style={smallButton}>Next</button>
+      </div>
 
       {editingRow && (
         <div style={modalOverlay}>
@@ -866,6 +897,7 @@ export default function RMInward() {
                             onChange={(e) => updateEditLine(index, "material", e)}
                             placeholder="Select RM material"
                             style={inputStyle}
+                            items={rmMaterials}
                           />
                         </td>
                         <td style={td}>
@@ -951,8 +983,10 @@ export default function RMInward() {
             </div>
 
             <div style={modalButtons}>
-              <button type="button" onClick={() => setEditingRow(null)} style={cancelButton}>Cancel</button>
-              <button type="button" onClick={saveEdit} style={modalSaveButton}>Save Changes</button>
+              <button type="button" disabled={Boolean(historyAction)} onClick={() => setEditingRow(null)} style={cancelButton}>Cancel</button>
+              <button type="button" disabled={Boolean(historyAction)} onClick={saveEdit} style={modalSaveButton}>
+                {historyAction.startsWith("UPDATE:") ? "Updating..." : "Save Changes"}
+              </button>
             </div>
           </div>
         </div>
@@ -1012,3 +1046,5 @@ const modal = { background: "white", width: "min(980px,92vw)", maxHeight: "90vh"
 const modalButtons = { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 };
 const cancelButton = { background: "#64748b", color: "white", border: "none", padding: "10px 16px", borderRadius: 8, cursor: "pointer", fontWeight: 800 };
 const modalSaveButton = { ...saveButton, padding: "10px 16px" };
+const paginationWrap = { display: "flex", justifyContent: "center", alignItems: "center", gap: 12, margin: "12px 0 20px", fontSize: 13, fontWeight: 700 };
+const smallButton = { background: "#f8fafc", color: "#334155", border: "1px solid #cbd5e1", padding: "8px 12px", borderRadius: 8, cursor: "pointer", fontWeight: 700 };

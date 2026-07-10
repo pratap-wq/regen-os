@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiCall } from "../api/api";
 import FormSection from "../components/FormSection";
 import ManufacturingInputTable from "../components/ManufacturingInputTable";
@@ -6,9 +6,9 @@ import ManufacturingOutputTable from "../components/ManufacturingOutputTable";
 import FactoryDropdown from "../components/FactoryDropdown";
 import { KpiCard, PageLayout } from "../components/factoryDesignSystem";
 import { generateExtrusionBatchId } from "../utils/idGenerator";
-import { buildInventoryLots } from "../utils/inventoryLots";
 import { buildAvailabilityMap, materialKey } from "../utils/materialInventory";
 import { dropdownFlagForContext } from "../services/productionMaterialMaster";
+import { createStableTransactionId, withRequestTimeout } from "../utils/requestSafety";
 
 export default function Production() {
   const today = new Date().toISOString().split("T")[0];
@@ -80,77 +80,49 @@ export default function Production() {
   const [sorterOutputRows, setSorterOutputRows] = useState([blankOutputRow()]);
   const [extrusionOutputRows, setExtrusionOutputRows] = useState([blankOutputRow()]);
 
-  const [rmRows, setRmRows] = useState([]);
-  const [grinderRows, setGrinderRows] = useState([]);
-  const [washRows, setWashRows] = useState([]);
-  const [sortingRows, setSortingRows] = useState([]);
   const [extrusionRows, setExtrusionRows] = useState([]);
-  const [dispatchRows, setDispatchRows] = useState([]);
   const [materialRows, setMaterialRows] = useState([]);
+  const [machineRows, setMachineRows] = useState([]);
+  const [inventoryRows, setInventoryRows] = useState([]);
 
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [saveStep, setSaveStep] = useState("");
+  const saveLockRef = useRef(false);
+  const transactionIdsRef = useRef({});
 
   useEffect(() => {
     loadMasters();
   }, []);
 
-  async function safeList(fn) {
+  async function loadMasters({ preserveOutputRows = false } = {}) {
     try {
-      const res = await apiCall({ fn });
-      return res.rows || [];
-    } catch (err) {
-      console.log(fn, err);
-      return [];
-    }
-  }
-
-  async function loadMasters() {
-    try {
-      const [
-        rmData,
-        grinderData,
-        washData,
-        sortingData,
-        extrusionData,
-        dispatchData,
-        materialData,
-      ] = await Promise.all([
-        safeList("rm.list"),
-        safeList("grinder.list"),
-        safeList("wash.list"),
-        safeList("sorting.list"),
-        safeList("extrusion.list"),
-        safeList("dispatch.list"),
-        safeList("materialMaster.list"),
-      ]);
-
-      setRmRows(rmData);
-      setGrinderRows(grinderData);
-      setWashRows(washData);
-      setSortingRows(sortingData);
-      setExtrusionRows(extrusionData);
-      setDispatchRows(dispatchData);
+      const res = await withRequestTimeout(apiCall({ fn: "production.entryBootstrap" }), 30000);
+      if (!res || res.ok !== true) throw new Error(res?.error || "Production entry setup failed");
+      const materialData = res.materials || [];
+      setMachineRows(res.machines || []);
+      setExtrusionRows(res.extrusionRefs || []);
+      setInventoryRows(res.inventoryRows || []);
       setMaterialRows(materialData);
-      setGrinderOutputRows(defaultOutputRowsFor(materialData, "GRINDER"));
-      setWashOutputRows(defaultOutputRowsFor(materialData, "WASH"));
-      setSorterOutputRows(defaultOutputRowsFor(materialData, "SORTING"));
-      setExtrusionOutputRows(defaultOutputRowsFor(materialData, "EXTRUSION"));
+      if (!preserveOutputRows) {
+        setGrinderOutputRows(defaultOutputRowsFor(materialData, "GRINDER"));
+        setWashOutputRows(defaultOutputRowsFor(materialData, "WASH"));
+        setSorterOutputRows(defaultOutputRowsFor(materialData, "SORTING"));
+        setExtrusionOutputRows(defaultOutputRowsFor(materialData, "EXTRUSION"));
+      }
     } catch (err) {
       setMessage(err.message);
     }
   }
 
   const inventoryLots = useMemo(() => {
-    return buildInventoryLots({
-      rmRows,
-      grinderRows,
-      washRows,
-      sortingRows,
-      extrusionRows,
-      dispatchRows,
-    });
-  }, [rmRows, grinderRows, washRows, sortingRows, extrusionRows, dispatchRows]);
+    return inventoryRows.map((row) => ({
+      lotId: row.materialCode || row.materialName,
+      material: row.materialName,
+      availableKg: Number(row.qtyKg || 0),
+      sourceType: "INVENTORY_LEDGER",
+    }));
+  }, [inventoryRows]);
 
   const availableInventoryByMaterial = useMemo(() => {
     return buildAvailabilityMap(inventoryLots);
@@ -433,24 +405,37 @@ export default function Production() {
     return String(form.date || today).slice(0, 7);
   }
 
-  function assertStageSaved(res, label) {
-    if (!res || res.ok === false) {
-      throw new Error(res?.error || `${label} save failed.`);
+  function assertStageSaved(res, label, idField) {
+    if (!res || res.ok !== true) throw new Error(res?.error || `${label} save failed.`);
+    if (!res[idField]) throw new Error(`${label} save failed: backend did not return ${idField}.`);
+    if (res.ledgerPosted !== true || res.ledger?.warnings?.length) {
+      const detail = res.ledger?.warnings?.join("; ") || res.failedStep || "ledger write was not confirmed";
+      throw new Error(`${label} inventory posting failed: ${detail}`);
     }
-
-    if (res.ledger?.warnings?.length) {
-      throw new Error(`${label} inventory posting failed: ${res.ledger.warnings.join("; ")}`);
-    }
-
     return res;
+  }
+
+  function failSave(message) {
+    setMessage(message);
+    setSaveStep("");
+    setSaving(false);
+    saveLockRef.current = false;
+  }
+
+  async function saveStage(payload, label, idField) {
+    setSaveStep(`Saving ${label}...`);
+    const res = await withRequestTimeout(apiCall(payload), 30000);
+    return assertStageSaved(res, label, idField);
   }
 
   async function submit(e) {
     e.preventDefault();
-    if (saving) return;
+    if (saveLockRef.current) return;
 
+    saveLockRef.current = true;
     setSaving(true);
-    setMessage("");
+    setSaveStep("Validating production entry...");
+    setMessage("Validating production entry...");
 
     try {
       let grinderBatchId = "";
@@ -468,25 +453,20 @@ export default function Production() {
       const finalSorterRows = cleanSorterRows();
       const sorterTotalKg = sorterFeedTotalKg();
       const finalSorterOutputRows = cleanOutputRows(sorterOutputRows);
+      const transactionIds = transactionIdsRef.current;
 
       if (grinderTotalKg > 0 || grinderOutputKg > 0) {
         if (finalGrinderRows.length === 0 || grinderTotalKg <= 0) {
-          setMessage("Grinder: add at least one bucket input material with consume quantity.");
-          setSaving(false);
-          return;
+          return failSave("Grinder: add at least one bucket input material with consume quantity.");
         }
 
         if (grinderRegrindOutputKg <= 0) {
-          setMessage(`Grinder: add ${grinderRegrindMaterial} output quantity.`);
-          setSaving(false);
-          return;
+          return failSave(`Grinder: add ${grinderRegrindMaterial} output quantity.`);
         }
 
         const grinderValidation = validateMaterialRows(grinderFeedRows, "Grinder");
         if (grinderValidation) {
-          setMessage(grinderValidation);
-          setSaving(false);
-          return;
+          return failSave(grinderValidation);
         }
 
         const fgOutput = finalGrinderOutputRows.find((row) =>
@@ -494,13 +474,12 @@ export default function Production() {
         );
 
         if (fgOutput) {
-          setMessage("Grinder cannot create finished goods grades. Send output to Wash as White Regrind (Unwashed).");
-          setSaving(false);
-          return;
+          return failSave("Grinder cannot create finished goods grades. Send output to Wash as White Regrind (Unwashed).");
         }
 
-        const grinder = assertStageSaved(await apiCall({
+        const grinder = await saveStage({
           fn: "grinder.add",
+          grinderBatchId: transactionIds.grinder || (transactionIds.grinder = createStableTransactionId("GB", form.date, form.shift)),
           date: form.date,
           shift: form.shift,
           periodMonth: productionPeriodMonth(),
@@ -523,27 +502,24 @@ export default function Production() {
           downtimeReason: form.downtimeReason,
           remarks: form.remarks,
           createdBy: "Production Screen",
-        }), "Grinder");
+        }, "Grinder", "grinderBatchId");
 
         grinderBatchId = grinder.grinderBatchId || "";
       }
 
       if (washTotalKg > 0 || washOutputKg > 0) {
         if (finalWashRows.length === 0 || washTotalKg <= 0) {
-          setMessage("Wash: add at least one input material with consume quantity.");
-          setSaving(false);
-          return;
+          return failSave("Wash: add at least one input material with consume quantity.");
         }
 
         const washValidation = validateMaterialRows(washFeedRows, "Wash");
         if (washValidation) {
-          setMessage(washValidation);
-          setSaving(false);
-          return;
+          return failSave(washValidation);
         }
 
-        const wash = assertStageSaved(await apiCall({
+        const wash = await saveStage({
           fn: "wash.add",
+          washBatchId: transactionIds.wash || (transactionIds.wash = createStableTransactionId("WB", form.date, form.shift)),
           sourceGrinderBatchId: grinderBatchId,
           date: form.date,
           shift: form.shift,
@@ -574,27 +550,24 @@ export default function Production() {
           remarks: form.remarks,
           createdBy: "Production Screen",
           
-        }), "Wash");
+        }, "Wash", "washBatchId");
 
         washBatchId = wash.washBatchId || "";
       }
 
       if (sorterTotalKg > 0 || sorterOutputKg > 0) {
         if (finalSorterRows.length === 0 || sorterTotalKg <= 0) {
-          setMessage("Colour Sorter: add at least one input material with consume quantity.");
-          setSaving(false);
-          return;
+          return failSave("Colour Sorter: add at least one input material with consume quantity.");
         }
 
         const sortingValidation = validateMaterialRows(sorterFeedRows, "Colour Sorter");
         if (sortingValidation) {
-          setMessage(sortingValidation);
-          setSaving(false);
-          return;
+          return failSave(sortingValidation);
         }
 
-        const sorting = assertStageSaved(await apiCall({
+        const sorting = await saveStage({
           fn: "sorting.add",
+          sortingBatchId: transactionIds.sorting || (transactionIds.sorting = createStableTransactionId("SB", form.date, form.shift)),
           sourceWashBatchId: washBatchId,
           date: form.date,
           shift: form.shift,
@@ -618,7 +591,7 @@ export default function Production() {
           remarks: form.remarks,
           createdBy: "Production Screen",
           
-        }), "Colour Sorter");
+        }, "Colour Sorter", "sortingBatchId");
 
         sortingBatchId = sorting.sortingBatchId || "";
       }
@@ -630,22 +603,16 @@ export default function Production() {
 
       if (totalFeedKg > 0 || extrusionTotalOutput > 0) {
         if (finalFeedRows.length === 0) {
-          setMessage("Add at least one inventory lot in extruder feed.");
-          setSaving(false);
-          return;
+          return failSave("Add at least one inventory lot in extruder feed.");
         }
 
         const extrusionValidation = validateMaterialRows(feedRows, "Extrusion");
         if (extrusionValidation) {
-          setMessage(extrusionValidation);
-          setSaving(false);
-          return;
+          return failSave(extrusionValidation);
         }
 
         if (!extrusionGrade) {
-          setMessage("Add at least one extrusion output material.");
-          setSaving(false);
-          return;
+          return failSave("Add at least one extrusion output material.");
         }
 
         const finalExtrusionBatchId = generateExtrusionBatchId(
@@ -654,16 +621,15 @@ export default function Production() {
           extrusionGrade,
           extrusionRows
         );
+        transactionIds.extrusion = transactionIds.extrusion || finalExtrusionBatchId;
 
         if (!finalExtrusionBatchId) {
-          setMessage("Production Batch ID could not be generated.");
-          setSaving(false);
-          return;
+          return failSave("Production Batch ID could not be generated.");
         }
 
-        assertStageSaved(await apiCall({
+        await saveStage({
           fn: "extrusion.add",
-          extrusionBatchId: finalExtrusionBatchId,
+          extrusionBatchId: transactionIds.extrusion,
           date: form.date,
           shift: form.shift,
           periodMonth: productionPeriodMonth(),
@@ -701,7 +667,7 @@ export default function Production() {
           status: "READY_FOR_DISPATCH",
           createdBy: "Production Screen",
           
-        }), "Extrusion");
+        }, "Extrusion", "extrusionBatchId");
       }
 
       if (
@@ -711,18 +677,20 @@ export default function Production() {
         totalFeedKg <= 0 &&
         extrusionTotalOutput <= 0
       ) {
-        setMessage("Enter grinder, wash, sorting or extrusion data before saving.");
-        setSaving(false);
-        return;
+        return failSave("Enter grinder, wash, sorting or extrusion data before saving.");
       }
 
       setMessage("Shift production entry saved successfully.");
-      await loadMasters();
       resetForm();
+      transactionIdsRef.current = {};
+      setSaveStep("");
+      loadMasters({ preserveOutputRows: true });
     } catch (err) {
-      setMessage(err.message);
+      setMessage(err.message || "Production save failed");
     } finally {
       setSaving(false);
+      setSaveStep("");
+      saveLockRef.current = false;
     }
   }
 
@@ -789,6 +757,7 @@ export default function Production() {
             onChange={onChange}
             placeholder="Select Machine"
             defaults={{ processType: "GRINDER" }}
+            providedItems={machineRows}
             filter={(item) => {
               const process = String(item.processType || item.machineType || "").toUpperCase();
               return !process || process.includes("GRIND");
@@ -803,6 +772,7 @@ export default function Production() {
             materialPlaceholder="Select Bucket Material"
             quantityLabel="Consume Qty"
             stage="GRINDER"
+            materialOptions={materialRows}
           />
 
           <ManufacturingOutputTable
@@ -811,6 +781,7 @@ export default function Production() {
             setRows={setGrinderOutputRows}
             materialPlaceholder="Select Output Material"
             stage="GRINDER"
+            materialOptions={materialRows}
           />
 
           <ManufacturingSummary
@@ -845,6 +816,7 @@ export default function Production() {
             onChange={onChange}
             placeholder="Select Machine"
             defaults={{ processType: "WASH" }}
+            providedItems={machineRows}
             filter={(item) => {
               const process = String(item.processType || item.machineType || "").toUpperCase();
               return !process || process.includes("WASH");
@@ -859,6 +831,7 @@ export default function Production() {
             materialPlaceholder="Select Input Material"
             quantityLabel="Consume Qty"
             stage="WASH"
+            materialOptions={materialRows}
           />
 
           <ManufacturingOutputTable
@@ -867,6 +840,7 @@ export default function Production() {
             setRows={setWashOutputRows}
             materialPlaceholder="Select Output Material"
             stage="WASH"
+            materialOptions={materialRows}
           />
 
           <ManufacturingSummary
@@ -890,6 +864,7 @@ export default function Production() {
             onChange={onChange}
             placeholder="Select Machine"
             defaults={{ processType: "SORTING" }}
+            providedItems={machineRows}
             filter={(item) => {
               const process = String(item.processType || item.machineType || "").toUpperCase();
               return !process || process.includes("SORT");
@@ -904,6 +879,7 @@ export default function Production() {
             materialPlaceholder="Select Input Material"
             quantityLabel="Consume Qty"
             stage="SORTING"
+            materialOptions={materialRows}
           />
 
           <ManufacturingOutputTable
@@ -912,6 +888,7 @@ export default function Production() {
             setRows={setSorterOutputRows}
             materialPlaceholder="Select Output Material"
             stage="SORTING"
+            materialOptions={materialRows}
           />
 
           <ManufacturingSummary
@@ -935,6 +912,7 @@ export default function Production() {
             onChange={onChange}
             placeholder="Select Machine"
             defaults={{ processType: "EXTRUSION" }}
+            providedItems={machineRows}
             filter={(item) => {
               const process = String(item.processType || item.machineType || "").toUpperCase();
               return !process || process.includes("EXTRUSION") || process.includes("EXTRUDER");
@@ -949,6 +927,7 @@ export default function Production() {
             materialPlaceholder="Select Feed Material"
             quantityLabel="Consume Qty"
             stage="EXTRUSION"
+            materialOptions={materialRows}
           />
 
           <Field label="Recovery / Rework %" value={recoveryMaterialPercent} readOnly />
@@ -962,6 +941,7 @@ export default function Production() {
             setRows={setExtrusionOutputRows}
             materialPlaceholder="Select Output Material"
             stage="EXTRUSION"
+            materialOptions={materialRows}
           />
 
           <ManufacturingSummary
@@ -1007,7 +987,7 @@ export default function Production() {
 
         <div style={{ marginTop: 25 }}>
           <button type="submit" disabled={saving} style={saveButton}>
-            {saving ? "Saving..." : "Save Shift Production Entry"}
+            {saving ? (saveStep || "Saving...") : "Save Shift Production Entry"}
           </button>
         </div>
       </form>
@@ -1124,6 +1104,7 @@ function FactorySelectField({
   filter,
   approvalRequired = false,
   defaults,
+  providedItems,
 }) {
   return (
     <FactoryDropdown
@@ -1138,6 +1119,7 @@ function FactorySelectField({
       allowAddNew
       approvalRequired={approvalRequired}
       defaults={defaults}
+      providedItems={providedItems}
     />
   );
 }

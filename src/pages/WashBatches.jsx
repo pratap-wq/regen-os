@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiCall } from "../api/api";
 import DataTable from "../components/DataTable";
 import FormSection from "../components/FormSection";
+import { createStableTransactionId, requireSuccessfulResponse, withRequestTimeout } from "../utils/requestSafety";
 
 export default function WashBatches() {
 
@@ -109,6 +110,8 @@ export default function WashBatches() {
 
   const [message, setMessage] =
     useState("");
+  const [writeAction, setWriteAction] = useState("");
+  const writeLockRef = useRef(false);
 
   useEffect(() => {
 
@@ -358,6 +361,12 @@ export default function WashBatches() {
   async function submit(e) {
 
     e.preventDefault();
+    if (writeLockRef.current) return;
+    writeLockRef.current = true;
+    setWriteAction(editing ? "UPDATE" : "SAVE");
+    setMessage(editing ? "Updating..." : "Saving...");
+    const washBatchId = form.washBatchId || createStableTransactionId("WB", form.date, form.shift);
+    if (!form.washBatchId) setForm((current) => ({ ...current, washBatchId }));
 
     try {
 
@@ -366,30 +375,34 @@ export default function WashBatches() {
       if (editing) {
 
         res =
-          await apiCall({
+          await withRequestTimeout(apiCall({
 
             fn:
               "wash.update",
 
             ...form,
+            washBatchId,
 
-          });
+          }));
 
       } else {
 
         res =
-          await apiCall({
+          await withRequestTimeout(apiCall({
 
             fn:
               "wash.add",
 
             ...form,
+            washBatchId,
 
-          });
+          }));
 
       }
 
-      if (res.ok) {
+      requireSuccessfulResponse(res, editing ? "" : "washBatchId", editing ? "Wash update" : "Wash save");
+      if (editing && res.ledgerPosted !== true) throw new Error(res.error || "Wash update did not confirm inventory posting.");
+      if (!editing && res.ledgerPosted !== true) throw new Error("Wash save did not confirm inventory posting.");
 
         setMessage(
           editing
@@ -407,14 +420,15 @@ export default function WashBatches() {
 
         loadRows();
 
-      }
-
     } catch (err) {
 
       setMessage(
         err.message
       );
 
+    } finally {
+      writeLockRef.current = false;
+      setWriteAction("");
     }
 
   }
@@ -458,9 +472,13 @@ export default function WashBatches() {
 
     if (!ok) return;
 
+    if (writeLockRef.current) return;
+    writeLockRef.current = true;
+    setWriteAction(`DELETE:${row.washBatchId}`);
+    setMessage("Deleting...");
     try {
 
-      await apiCall({
+      const res = await withRequestTimeout(apiCall({
 
         fn:
           "wash.update",
@@ -471,7 +489,8 @@ export default function WashBatches() {
         status:
           "DELETED",
 
-      });
+      }));
+      requireSuccessfulResponse(res, "", "Wash delete");
 
       loadRows();
 
@@ -481,6 +500,9 @@ export default function WashBatches() {
         err.message
       );
 
+    } finally {
+      writeLockRef.current = false;
+      setWriteAction("");
     }
 
   }
@@ -1108,10 +1130,11 @@ export default function WashBatches() {
 
           <button
             type="submit"
+            disabled={Boolean(writeAction)}
             style={buttonStyle}
           >
 
-            {editing
+            {writeAction === "SAVE" ? "Saving..." : writeAction === "UPDATE" ? "Updating..." : editing
               ? "Update Batch"
               : "Save Batch"}
 

@@ -13,11 +13,13 @@ export default function ProductionMaterialSelect({
   placeholder = "Select Material",
   style,
   required,
+  items: providedItems,
 }) {
   const [items, setItems] = useState([]);
   const normalizedValue = normalizeProductionMaterialName(value);
 
   useEffect(() => {
+    if (Array.isArray(providedItems)) return undefined;
     let active = true;
     listProductionMaterialMaster({ stage, direction }).then((rows) => {
       if (active) setItems(rows);
@@ -25,13 +27,15 @@ export default function ProductionMaterialSelect({
     return () => {
       active = false;
     };
-  }, [stage, direction]);
+  }, [stage, direction, providedItems]);
+
+  const sourceItems = Array.isArray(providedItems) ? providedItems : items;
 
   const options = useMemo(() => {
     const values = [];
     const seen = new Set();
 
-    items.forEach((item) => {
+    sourceItems.filter((item) => productionMaterialAllowedForSelect(item, stage, direction)).forEach((item) => {
       const label = item.canonicalName || item.materialName || item.name || "";
       if (!label || seen.has(label)) return;
       seen.add(label);
@@ -39,7 +43,7 @@ export default function ProductionMaterialSelect({
     });
 
     return values;
-  }, [items, normalizedValue]);
+  }, [sourceItems, stage, direction]);
 
   function emit(nextValue) {
     if (typeof onChange === "function") {
@@ -68,4 +72,25 @@ export default function ProductionMaterialSelect({
       ))}
     </select>
   );
+}
+
+function productionMaterialAllowedForSelect(item, stage, direction) {
+  const status = String(item.status || "ACTIVE").toUpperCase();
+  if (status !== "ACTIVE") return false;
+  const s = String(stage || "").toUpperCase();
+  const d = String(direction || "").toUpperCase();
+  const flags = {
+    RM_INWARD: "appearsInRMInward",
+    GRINDER_INPUT: "appearsInGrinderInput",
+    GRINDER_OUTPUT: "appearsInGrinderOutput",
+    WASH_INPUT: "appearsInWashInput",
+    WASH_OUTPUT: "appearsInWashOutput",
+    SORTING_INPUT: "appearsInSorterInput",
+    SORTING_OUTPUT: "appearsInSorterOutput",
+    EXTRUSION_INPUT: "appearsInExtrusionInput",
+    EXTRUSION_OUTPUT: "appearsInExtrusionOutput",
+  };
+  const key = s === "RM_INWARD" ? "RM_INWARD" : `${s}_${d}`;
+  const flag = flags[key];
+  return !flag || ["YES", "TRUE", "Y", "1", "ON"].includes(String(item[flag] || "").toUpperCase());
 }

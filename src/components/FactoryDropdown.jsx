@@ -17,38 +17,33 @@ export default function FactoryDropdown({
   filter,
   label,
   allowAddNew = false,
+  providedItems,
 }) {
   const listId = useId();
   const navigate = useNavigate();
   const [items, setItems] = useState([]);
   const [inputValue, setInputValue] = useState(value || "");
-  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    loadItems();
-  }, [masterType]);
+    if (Array.isArray(providedItems)) return undefined;
+    let active = true;
+    listFactoryMaster(masterType)
+      .then((rows) => { if (active) setItems(rows); })
+      .catch((err) => console.log(err));
+    return () => { active = false; };
+  }, [masterType, providedItems]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setInputValue(value || "");
   }, [value]);
 
-  async function loadItems() {
-    setLoading(true);
-
-    try {
-      const rows = await listFactoryMaster(masterType);
-      setItems(rows);
-    } catch (err) {
-      console.log(err);
-    } finally {
-      setLoading(false);
-    }
-  }
+  const sourceItems = Array.isArray(providedItems) ? providedItems : items;
 
   const visibleItems = useMemo(() => {
     const term = inputValue.trim().toLowerCase();
 
-    return items
+    return sourceItems
       .filter((item) => (filter ? filter(item) : true))
       .filter((item) => String(item.status || "").toUpperCase() !== "DISABLED")
       .filter((item) => String(item.status || "").toUpperCase() !== "INACTIVE")
@@ -56,7 +51,7 @@ export default function FactoryDropdown({
       .filter((item) => String(item.status || "").toUpperCase() !== "ARCHIVED")
       .filter((item) => !term || itemLabel(item).toLowerCase().includes(term))
       .slice(0, 250);
-  }, [items, inputValue, filter]);
+  }, [sourceItems, inputValue, filter]);
 
   function emit(item) {
     const selectedValue = itemLabel(item);
@@ -91,7 +86,7 @@ export default function FactoryDropdown({
     const nextValue = e.target.value;
     setInputValue(nextValue);
 
-    const exact = items.find((item) => itemLabel(item) === nextValue);
+    const exact = sourceItems.find((item) => itemLabel(item) === nextValue);
 
     if (exact) {
       emit(exact);
@@ -103,7 +98,7 @@ export default function FactoryDropdown({
 
   function onBlur() {
     const cleanValue = String(inputValue || "").trim().toLowerCase();
-    const exact = items.find((item) => itemLabel(item).toLowerCase() === cleanValue);
+    const exact = sourceItems.find((item) => itemLabel(item).toLowerCase() === cleanValue);
 
     if (exact) emit(exact);
   }
@@ -128,7 +123,7 @@ export default function FactoryDropdown({
           value={inputValue}
           onChange={onInputChange}
           onBlur={onBlur}
-          placeholder={loading ? "Loading..." : placeholder}
+          placeholder={placeholder}
           required={required}
           style={{ ...baseInput, ...style, flex: 1 }}
         />

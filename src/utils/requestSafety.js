@@ -29,3 +29,38 @@ export function requireSuccessfulResponse(response, requiredId = "", action = "R
   }
   return response;
 }
+
+export async function runSafeAction({
+  lockRef,
+  request,
+  action = "Request",
+  requiredId = "",
+  timeoutMs = 30000,
+  timeoutMessage = REQUEST_TIMEOUT_MESSAGE,
+  validate,
+  onStart,
+  onSuccess,
+  onError,
+  onFinish,
+}) {
+  if (lockRef?.current) return null;
+  if (lockRef) lockRef.current = true;
+  onStart?.();
+
+  try {
+    const response = requireSuccessfulResponse(
+      await withRequestTimeout(request(), timeoutMs, timeoutMessage),
+      requiredId,
+      action
+    );
+    if (validate) validate(response);
+    onSuccess?.(response);
+    return response;
+  } catch (error) {
+    onError?.(error);
+    throw error;
+  } finally {
+    if (lockRef) lockRef.current = false;
+    onFinish?.();
+  }
+}

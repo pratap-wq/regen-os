@@ -10,6 +10,7 @@ export default function ManufacturingInputTable({
   quantityLabel = "Consume Qty",
   stage = "",
   showRemarks = true,
+  materialOptions,
 }) {
   const availability = buildAvailabilityMap(inventoryLots);
 
@@ -81,6 +82,7 @@ export default function ManufacturingInputTable({
                     style={input}
                     stage={stage}
                     direction="INPUT"
+                    items={materialOptions}
                   />
                 </td>
 

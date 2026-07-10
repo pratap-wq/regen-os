@@ -48,7 +48,6 @@ export default function StoresInward() {
 
   const [rows, setRows] = useState([]);
   const [items, setItems] = useState([]);
-  const [issueRows, setIssueRows] = useState([]);
   const [stockMap, setStockMap] = useState({});
   const [lastStockMovement, setLastStockMovement] = useState(null);
   const [status, setStatus] = useState("");
@@ -107,7 +106,6 @@ export default function StoresInward() {
       );
 
       setRows(cleanInwardRows);
-      setIssueRows(cleanIssueRows);
       setStockMap(buildStockMap(cleanInwardRows, cleanIssueRows));
 
       const mergedMap = {};
@@ -279,6 +277,7 @@ export default function StoresInward() {
         inwardId,
         totalAmount: calcAmount(form.qty, form.rate),
       })), "inwardId", "Stores inward save");
+      if (res.ledgerPosted !== true) throw new Error("Stores inward save did not confirm inventory posting.");
 
       setStatus(`Stores inward saved successfully: ${res.inwardId}`);
       setSaveState("saved");
@@ -344,6 +343,7 @@ export default function StoresInward() {
   }
 
   async function saveEdit() {
+    if (saveLockRef.current) return;
     if (!editingRow) return;
     if (!editingRow.itemName) return alert("Item name is required");
     if (!editingRow.qty) return alert("Qty is required");
@@ -358,20 +358,16 @@ export default function StoresInward() {
     }
 
     try {
+      saveLockRef.current = true;
       setSavingEdit(true);
 
-      const res = await apiCall({
+      requireSuccessfulResponse(await withRequestTimeout(apiCall({
         fn: "storesInward.update",
         ...editingRow,
         storesInwardId: idValue,
         inwardId: idValue,
         totalAmount: calcAmount(editingRow.qty, editingRow.rate),
-      });
-
-      if (res.ok === false) {
-        alert(res.error || "Update failed");
-        return;
-      }
+      })), "", "Stores inward update");
 
       setStatus("Stores inward updated");
       setEditingRow(null);
@@ -380,10 +376,12 @@ export default function StoresInward() {
       alert(err.message);
     } finally {
       setSavingEdit(false);
+      saveLockRef.current = false;
     }
   }
 
   async function deleteRow(row) {
+    if (saveLockRef.current) return;
     const idValue = getStoresInwardId(row);
 
     if (!idValue) {
@@ -397,24 +395,24 @@ export default function StoresInward() {
     if (!ok) return;
 
     try {
-      const res = await apiCall({
+      saveLockRef.current = true;
+      setSavingEdit(true);
+      requireSuccessfulResponse(await withRequestTimeout(apiCall({
         fn: "storesInward.update",
         ...row,
         storesInwardId: idValue,
         inwardId: idValue,
         status: "DELETED",
         inwardStatus: "DELETED",
-      });
-
-      if (res.ok === false) {
-        alert(res.error || "Delete failed");
-        return;
-      }
+      })), "", "Stores inward delete");
 
       setStatus("Stores inward deleted");
       loadData();
     } catch (err) {
       alert(err.message);
+    } finally {
+      setSavingEdit(false);
+      saveLockRef.current = false;
     }
   }
 

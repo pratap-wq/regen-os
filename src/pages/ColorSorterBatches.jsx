@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiCall } from "../api/api";
 import DataTable from "../components/DataTable";
 import FormSection from "../components/FormSection";
+import { createStableTransactionId, requireSuccessfulResponse, withRequestTimeout } from "../utils/requestSafety";
 
 export default function ColorSorterBatches() {
 
@@ -24,6 +25,8 @@ export default function ColorSorterBatches() {
 
   const [editingId, setEditingId] =
     useState(null);
+  const [writeAction, setWriteAction] = useState("");
+  const writeLockRef = useRef(false);
 
   const blankForm = {
 
@@ -368,6 +371,12 @@ export default function ColorSorterBatches() {
   async function submit(e) {
 
     e.preventDefault();
+    if (writeLockRef.current) return;
+    writeLockRef.current = true;
+    setWriteAction(editingId ? "UPDATE" : "SAVE");
+    setStatus(editingId ? "Updating..." : "Saving...");
+    const sortingBatchId = form.sortingBatchId || createStableTransactionId("SB", form.date, form.shift);
+    if (!form.sortingBatchId) setForm((current) => ({ ...current, sortingBatchId }));
 
     try {
 
@@ -376,30 +385,33 @@ export default function ColorSorterBatches() {
       if (editingId) {
 
         res =
-          await apiCall({
+          await withRequestTimeout(apiCall({
 
             fn:
               "sorting.update",
 
             ...form,
+            sortingBatchId,
 
-          });
+          }));
 
       } else {
 
         res =
-          await apiCall({
+          await withRequestTimeout(apiCall({
 
             fn:
               "sorting.add",
 
             ...form,
+            sortingBatchId,
 
-          });
+          }));
 
       }
 
-      if (res.ok) {
+      requireSuccessfulResponse(res, editingId ? "" : "sortingBatchId", editingId ? "Sorting update" : "Sorting save");
+      if (res.ledgerPosted !== true) throw new Error("Sorting save did not confirm inventory posting.");
 
         setStatus(
 
@@ -419,14 +431,15 @@ export default function ColorSorterBatches() {
 
         loadData();
 
-      }
-
     } catch (err) {
 
       setStatus(
         err.message
       );
 
+    } finally {
+      writeLockRef.current = false;
+      setWriteAction("");
     }
 
   }
@@ -442,8 +455,13 @@ export default function ColorSorterBatches() {
 
     if (!confirmed)
       return;
+    if (writeLockRef.current) return;
+    writeLockRef.current = true;
+    setWriteAction(`DELETE:${row.sortingBatchId}`);
+    setStatus("Deleting...");
 
-    await apiCall({
+    try {
+    const res = await withRequestTimeout(apiCall({
 
       fn:
         "sorting.update",
@@ -454,9 +472,16 @@ export default function ColorSorterBatches() {
       status:
         "DELETED",
 
-    });
+    }));
+    requireSuccessfulResponse(res, "", "Sorting delete");
 
-    loadData();
+    await loadData();
+    } catch (err) {
+      setStatus(err.message);
+    } finally {
+      writeLockRef.current = false;
+      setWriteAction("");
+    }
 
   }
 
@@ -1061,12 +1086,13 @@ export default function ColorSorterBatches() {
 
           <button
             type="submit"
+            disabled={Boolean(writeAction)}
             style={saveButton(
               editingId
             )}
           >
 
-            {editingId
+            {writeAction === "SAVE" ? "Saving..." : writeAction === "UPDATE" ? "Updating..." : editingId
               ? "Update Batch"
               : "Save Batch"}
 

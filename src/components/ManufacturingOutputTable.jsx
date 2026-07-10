@@ -6,6 +6,7 @@ export default function ManufacturingOutputTable({
   title = "Output Materials",
   materialPlaceholder = "Select Output Material",
   stage = "",
+  materialOptions,
 }) {
   function updateRow(index, key, value) {
     setRows(
@@ -60,6 +61,7 @@ export default function ManufacturingOutputTable({
                   style={input}
                   stage={stage}
                   direction="OUTPUT"
+                  items={materialOptions}
                 />
               </td>
 

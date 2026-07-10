@@ -2393,6 +2393,35 @@ function materialAliasKey_(value) {
   return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
+const REGENOS_APPROVED_LEGACY_INVENTORY_ALIAS_MAP_ = {
+  "MIXED PPCP BUCKETS": "White Buckets",
+  "WHITE PPCP BUCKETS": "White Buckets",
+  "MIXED BUCKETS": "White Buckets",
+  "WHITE BUCKET": "White Buckets",
+};
+
+function canonicalLegacyMaterialForInventory_(value) {
+  const text = String(value || "").trim().replace(/\s+/g, " ");
+  if (!text) return "";
+  return REGENOS_APPROVED_LEGACY_INVENTORY_ALIAS_MAP_[materialAliasKey_(text)] || text;
+}
+
+function isApprovedLegacyInventoryAlias_(value) {
+  return Object.prototype.hasOwnProperty.call(
+    REGENOS_APPROVED_LEGACY_INVENTORY_ALIAS_MAP_,
+    materialAliasKey_(value)
+  );
+}
+
+function rejectLegacyInventoryAliasWrite_(value, label) {
+  if (isApprovedLegacyInventoryAlias_(value)) {
+    throw new Error(
+      (label || "Material") +
+        " must use canonical Material_Master material: White Buckets"
+    );
+  }
+}
+
 function materialAliasRowsFromDefaults_() {
   return MATERIAL_ALIAS_MAP_DEFAULTS.map(function(row, index) {
     return {
@@ -2897,6 +2926,12 @@ function approvedV1MaterialAlias_(value) {
 }
 
 function assertProductionMaterialAllowed_(value, stage, direction, label) {
+  if (isApprovedLegacyInventoryAlias_(value)) {
+    throw new Error(
+      (label || "Production material") +
+        " must use canonical Material_Master material: White Buckets"
+    );
+  }
   const result = productionMaterialValidationResult_(value, stage, direction, label);
   if (!result.canonicalName) return "";
 
@@ -6713,7 +6748,8 @@ function getProductionEntryBootstrap() {
   getRowsAsObjects("Inventory_Ledger").forEach(function(row) {
     const status = String(row.status || "ACTIVE").toUpperCase();
     if (isDeleted_(row) || ["INACTIVE", "DISABLED", "ARCHIVED", "VOID", "VOIDED", "REVERSED", "CANCELLED", "REJECTED"].indexOf(status) !== -1) return;
-    const material = [row.materialId, row.materialCode, row.itemName, row.materialName]
+    const historicalName = canonicalLegacyMaterialForInventory_(row.itemName || row.materialName);
+    const material = [row.materialId, row.materialCode, historicalName]
       .map(compactInventoryMaterialKey_)
       .map(function(key) { return materialIndex[key]; })
       .filter(function(match) { return match; })[0];
@@ -10028,7 +10064,7 @@ function fgLedgerBalanceByGrade_() {
     .filter(function(row) { return !isDeleted_(row); })
     .filter(function(row) { return String(row.itemType || "").toUpperCase() === "FG"; })
     .forEach(function(row) {
-      const grade = normalizeDispatchFgGrade_(row.itemName || row.material || row.grade);
+      const grade = normalizeDispatchFgGrade_(canonicalLegacyMaterialForInventory_(row.itemName || row.material || row.grade));
       if (!grade) return;
       byGrade[grade] = (byGrade[grade] || 0) + num(row.qtyIn) - num(row.qtyOut);
     });
@@ -10054,7 +10090,7 @@ function fgLedgerBalanceForGrades_(grades) {
   rows.forEach(function(row) {
     if (isDeleted_(row)) return;
     if (String(row.itemType || "").toUpperCase() !== "FG") return;
-    const grade = normalizeDispatchGrade_(row.itemName || row.material || row.grade);
+    const grade = normalizeDispatchGrade_(canonicalLegacyMaterialForInventory_(row.itemName || row.material || row.grade));
     if (!wanted[grade]) return;
     byGrade[grade] = (byGrade[grade] || 0) + num(row.qtyIn) - num(row.qtyOut);
   });
@@ -10734,8 +10770,8 @@ function getDispatchFgAvailability() {
     const rawGrade = [
       row.materialCode,
       row.materialId,
-      row.itemName,
-      row.materialName,
+      canonicalLegacyMaterialForInventory_(row.itemName),
+      canonicalLegacyMaterialForInventory_(row.materialName),
       row.grade,
     ].map(function(value) {
       return String(value || "").trim().toUpperCase();
@@ -11722,14 +11758,15 @@ function getInventoryLedgerBalance(){
 
     rows.forEach(r=>{
 
-        const key=(r.materialId || "")+"|"+r.itemType+"|"+r.itemName;
+        const itemName = canonicalLegacyMaterialForInventory_(r.itemName || r.materialName || r.material || r.grade);
+        const key=String(r.itemType || "")+"|"+compactInventoryMaterialKey_(itemName);
 
         if(!balance[key]){
 
             balance[key]={
                 itemType:r.itemType,
                 materialId:r.materialId || "",
-                itemName:r.itemName,
+                itemName:itemName,
                 qty:0
             };
 
@@ -11810,7 +11847,8 @@ function getInventoryLiveSummary() {
     if (sourceCategory === "STORE") return;
 
     const qtyKg = num(row.qtyIn) - num(row.qtyOut);
-    const material = [row.materialId, row.materialCode, row.itemName, row.materialName]
+    const historicalName = canonicalLegacyMaterialForInventory_(row.itemName || row.materialName);
+    const material = [row.materialId, row.materialCode, historicalName]
       .map(compactInventoryMaterialKey_)
       .filter(function(key) { return key; })
       .map(function(key) { return materialIndex[key]; })
@@ -11821,7 +11859,7 @@ function getInventoryLiveSummary() {
       return;
     }
 
-    const rawName = String(row.itemName || row.materialName || row.materialCode || "").trim();
+    const rawName = canonicalLegacyMaterialForInventory_(row.itemName || row.materialName || row.materialCode);
     if (!rawName) return;
     const manualKey = compactInventoryMaterialKey_(rawName) + "|" + (sourceCategory || "UNKNOWN");
     if (!manualBalances[manualKey]) {
@@ -11943,7 +11981,7 @@ function getInventoryLedgerLiveBalance(data = {}) {
   });
 
   ledgerRows.forEach(function(row) {
-    const rawName = String(row.itemName || row.material || row.grade || "").trim();
+    const rawName = canonicalLegacyMaterialForInventory_(row.itemName || row.material || row.grade);
     const itemType = normalizeMaterialCategoryForLedger_(row.itemType);
     const qtyIn = num(row.qtyIn);
     const qtyOut = num(row.qtyOut);
@@ -13718,7 +13756,7 @@ function buildCleanMonthCloseMaterialView_(periodMonth, periodReceived) {
   ledgerRows.forEach((row) => {
     const rawType = String(row.itemType || "").toUpperCase();
 
-    const clean = materialFlowCleanName_(row.itemName || row.materialName || row.materialCode || "");
+    const clean = canonicalLegacyMaterialForInventory_(materialFlowCleanName_(row.itemName || row.materialName || row.materialCode || ""));
     const normalized = materialFlowNormalizeMaterial_(clean, row.itemType);
     const material = matchMonthCloseMaterial_(row, normalized, masterIndex);
     const qty = num(row.qtyIn) - num(row.qtyOut);
@@ -14059,7 +14097,7 @@ function monthCloseOperationalStockStats_(periodMonth, masterIndex) {
   collectJuneAdjustmentMoves_(moves, periodMonth);
 
   moves.forEach((move) => {
-    const normalized = materialFlowNormalizeMaterial_(move.originalName, move.category);
+    const normalized = materialFlowNormalizeMaterial_(canonicalLegacyMaterialForInventory_(move.originalName), move.category);
     monthCloseAddMovementSourceSummary_(movementSourceSummary, move, false);
     const material = matchMonthCloseMaterial_(
       {
@@ -15083,7 +15121,7 @@ function diagnoseJuneDirectFlow_(periodMonth, movements) {
 function materialFlowBalancesFromLedger_(rows, periodMonth) {
   const balances = {};
   rows.filter((row) => materialFlowRowInPeriod_(row, periodMonth)).forEach((row) => {
-    const normalized = materialFlowNormalizeMaterial_(row.itemName, row.itemType);
+    const normalized = materialFlowNormalizeMaterial_(canonicalLegacyMaterialForInventory_(row.itemName), row.itemType);
     if (!materialFlowIsManufacturingCategory_(normalized.category)) return;
     balances[normalized.name] = (balances[normalized.name] || 0) + num(row.qtyIn) - num(row.qtyOut);
   });
@@ -15092,7 +15130,7 @@ function materialFlowBalancesFromLedger_(rows, periodMonth) {
 
 function isJuneManufacturingLedgerRow_(row, periodMonth) {
   if (!materialFlowRowInPeriod_(row, periodMonth)) return false;
-  const normalized = materialFlowNormalizeMaterial_(row.itemName, row.itemType);
+  const normalized = materialFlowNormalizeMaterial_(canonicalLegacyMaterialForInventory_(row.itemName), row.itemType);
   return materialFlowIsManufacturingCategory_(normalized.category);
 }
 
@@ -15942,7 +15980,7 @@ function ledgerBalancesForItems_(rows, itemNames) {
 
   rows.forEach((row) => {
     const itemType = String(row.itemType || "").toUpperCase();
-    const itemName = normalizeFgMaterialName_(row.itemName);
+    const itemName = normalizeFgMaterialName_(canonicalLegacyMaterialForInventory_(row.itemName));
     if (itemType !== "FG" || !wanted[itemName]) return;
     wanted[itemName].qtyIn += num(row.qtyIn);
     wanted[itemName].qtyOut += num(row.qtyOut);
@@ -16411,9 +16449,14 @@ function inventoryReconciliationAliasCandidate_(legacyName, material, defaults) 
   const canonicalKey = materialAliasKey_(canonicalName);
   if (!legacyKey || !canonicalKey || legacyKey === canonicalKey) return null;
 
-  const bucketApprovalNames = ["WHITE PPCP BUCKETS", "MIXED PPCP BUCKETS", "MIXED BUCKETS", "MIXED BUCKET"];
-  if (canonicalKey === "WHITE BUCKETS" && bucketApprovalNames.indexOf(legacyKey) !== -1) {
-    return { material, confidence: "MEDIUM", score: 220, reason: "Related historical bucket name; explicit approval is required before treating it as White Buckets." };
+  const approvedCanonical = canonicalLegacyMaterialForInventory_(legacyName);
+  if (approvedCanonical !== String(legacyName || "").trim() && materialAliasKey_(approvedCanonical) === canonicalKey) {
+    return {
+      material,
+      confidence: "HIGH",
+      score: 340,
+      reason: "Approved historical inventory alias; new entries must use the canonical Material_Master name.",
+    };
   }
 
   const alias = (defaults || []).filter(function(row) {
@@ -18538,6 +18581,8 @@ function ensureInventoryAdjustmentSheet_() {
 function addInventoryAdjustment(data = {}) {
   ensureInventoryAdjustmentSheet_();
 
+  rejectLegacyInventoryAliasWrite_(data.itemCode || data.material, "Adjustment material");
+
   const periodMonth =
     data.periodMonth || getPeriodMonth(data.date || todayYmd());
 
@@ -18751,6 +18796,11 @@ function approveInventoryAdjustment(data = {}) {
 
 function approveMonthCloseInventoryAdjustment(data = {}) {
   ensureInventoryAdjustmentSheet_();
+  try {
+    rejectLegacyInventoryAliasWrite_(data.itemCode || data.material, "Month Close material");
+  } catch (err) {
+    return output({ ok: false, error: err.message || "Month Close material must use canonical Material_Master material" });
+  }
 
   const periodMonth =
     data.periodMonth || data.closeMonth || getPeriodMonth(data.date || todayYmd());
@@ -18992,6 +19042,17 @@ function getPhysicalCount(data = {}) {
 function savePhysicalCount(data = {}) {
   ensurePhysicalCountsSheet_();
 
+  const physicalLines = data.materialPhysicalLinesJson || data.materialPhysicalLines || "";
+  if (physicalLines) {
+    let parsedLines = physicalLines;
+    if (typeof parsedLines === "string") {
+      try { parsedLines = JSON.parse(parsedLines); } catch (err) { parsedLines = []; }
+    }
+    (Array.isArray(parsedLines) ? parsedLines : []).forEach(function(line) {
+      rejectLegacyInventoryAliasWrite_(line && (line.materialCode || line.itemCode || line.materialName || line.material), "Month Close material");
+    });
+  }
+
   const periodMonth = data.periodMonth || getPeriodMonth(todayYmd());
   validateMonthLock(periodMonth);
 
@@ -19012,7 +19073,7 @@ function savePhysicalCount(data = {}) {
     qcSignoff: data.qcSignoff || "",
     ceoSignoff: data.ceoSignoff || "",
     remarks: data.remarks || "",
-    materialPhysicalLinesJson: data.materialPhysicalLinesJson || data.materialPhysicalLines || "",
+    materialPhysicalLinesJson: physicalLines,
     savedBy: data.savedBy || data.ceoSignoff || "System",
     savedAt: new Date(),
     status: "ACTIVE",

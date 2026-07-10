@@ -135,6 +135,8 @@ function doGet(e) {
     // Dispatch
     if (p.fn === "dispatch.add") return addDispatch(p);
     if (p.fn === "dispatch.list") return listMaster("Dispatches");
+    if (p.fn === "dispatch.historySummary") return getDispatchHistorySummary(p);
+    if (p.fn === "dispatch.get") return getDispatchRecord(p);
     if (p.fn === "dispatch.fgAvailability") return getDispatchFgAvailability();
     if (p.fn === "dispatch.update") return updateDispatch(p);
     if (p.fn === "dispatch.debugSavePreview") return debugDispatchSavePreview(p);
@@ -684,6 +686,8 @@ function debugRoutes() {
       "extrusion.update",
       "dispatch.add",
       "dispatch.list",
+      "dispatch.historySummary",
+      "dispatch.get",
       "dispatch.fgAvailability",
       "dispatch.update",
       "storesMaster.add",
@@ -9949,7 +9953,7 @@ function validateDispatchAvailabilityFast_(data = {}, lineRows, existingRow) {
 }
 
 function voidDispatchLedgerRows_(dispatchId, reason) {
-  if (!dispatchId) return 0;
+  if (!dispatchId) return { count: 0, previousRows: [] };
 
   const sh = getSheet("Inventory_Ledger");
   ensureHeaders_("Inventory_Ledger", inventoryLedgerHeaders_().concat([
@@ -9968,28 +9972,44 @@ function voidDispatchLedgerRows_(dispatchId, reason) {
   const voidedAtCol = headers.indexOf("voidedAt");
   const voidReasonCol = headers.indexOf("voidReason");
   let voided = 0;
+  const previousRows = [];
 
+  try {
   for (let r = 1; r < values.length; r += 1) {
     const status = statusCol >= 0 ? String(values[r][statusCol] || "").toUpperCase() : "";
     const module = moduleCol >= 0 ? String(values[r][moduleCol] || "").toUpperCase() : "";
     const targetRef = targetRefCol >= 0 ? String(values[r][targetRefCol] || "") : "";
 
-    if (status === "DELETED" || module !== "DISPATCH" || targetRef !== String(dispatchId)) continue;
+    if (["DELETED", "VOID", "VOIDED", "REVERSED", "CANCELLED", "INACTIVE"].indexOf(status) !== -1 || module !== "DISPATCH" || targetRef !== String(dispatchId)) continue;
 
-    if (statusCol >= 0) sh.getRange(r + 1, statusCol + 1).setValue("DELETED");
+    const nextValues = values[r].slice();
+    previousRows.push({ rowNumber: r + 1, values: values[r].slice() });
+    if (statusCol >= 0) nextValues[statusCol] = "DELETED";
     if (remarksCol >= 0) {
       const oldRemarks = String(values[r][remarksCol] || "");
-      sh.getRange(r + 1, remarksCol + 1).setValue(
-        oldRemarks ? oldRemarks + " | Voided: " + reason : "Voided: " + reason
-      );
+      nextValues[remarksCol] = oldRemarks ? oldRemarks + " | Voided: " + reason : "Voided: " + reason;
     }
-    if (voidedByCol >= 0) sh.getRange(r + 1, voidedByCol + 1).setValue("Dispatch Update");
-    if (voidedAtCol >= 0) sh.getRange(r + 1, voidedAtCol + 1).setValue(new Date());
-    if (voidReasonCol >= 0) sh.getRange(r + 1, voidReasonCol + 1).setValue(reason || "Dispatch changed");
+    if (voidedByCol >= 0) nextValues[voidedByCol] = "Dispatch Update";
+    if (voidedAtCol >= 0) nextValues[voidedAtCol] = new Date();
+    if (voidReasonCol >= 0) nextValues[voidReasonCol] = reason || "Dispatch changed";
+    sh.getRange(r + 1, 1, 1, headers.length).setValues([nextValues]);
     voided += 1;
   }
+  } catch (err) {
+    restoreDispatchLedgerRows_(previousRows);
+    throw err;
+  }
 
-  return voided;
+  return { count: voided, previousRows };
+}
+
+function restoreDispatchLedgerRows_(rows) {
+  if (!rows || !rows.length) return 0;
+  const sh = getSheet("Inventory_Ledger");
+  rows.forEach(function(row) {
+    sh.getRange(row.rowNumber, 1, 1, row.values.length).setValues([row.values]);
+  });
+  return rows.length;
 }
 
 function postDispatchLedgerRows_(dispatchId, date, lineRows, data) {
@@ -10210,6 +10230,103 @@ function debugDispatchLedger(data = {}) {
     reasonStockCardValue: activeLedgerRows.length
       ? "Dispatch ledger rows found. E-grade card should reflect fgBalanceAfterThisDispatch after inventoryLedger.balance refresh."
       : "No active Inventory_Ledger rows found for this dispatchId; dispatch.add ledger posting or repair must be checked.",
+  });
+}
+
+function getDispatchRecord(data = {}) {
+  const startedAt = Date.now();
+  const dispatchId = String(data.dispatchId || "").trim();
+  if (!dispatchId) {
+    return output({ ok: false, error: "dispatch.get requires dispatchId", elapsedMs: Date.now() - startedAt });
+  }
+
+  const match = findSheetObjectRowById_("Dispatches", "dispatchId", dispatchId);
+  if (!match) {
+    return output({ ok: false, dispatchId, error: "Dispatch not found: " + dispatchId, elapsedMs: Date.now() - startedAt });
+  }
+
+  return output({
+    ok: true,
+    dispatchId,
+    row: match.object,
+    elapsedMs: Date.now() - startedAt,
+  });
+}
+
+function getDispatchHistorySummary(data = {}) {
+  const startedAt = Date.now();
+  const periodMonth = normalizeMonthClosePeriod_(data.periodMonth || todayYmd().slice(0, 7));
+  const customer = String(data.customer || "").trim().toUpperCase();
+  const customerUnit = String(data.customerUnit || "").trim().toUpperCase();
+  const grade = normalizeDispatchGrade_(data.grade || "");
+  const search = String(data.search || "").trim().toLowerCase();
+  const showDeleted = normalizeYesNo(data.showDeleted, "NO") === "YES";
+  const pageSize = Math.max(1, Math.min(num(data.pageSize) || 50, 200));
+  const requestedPage = Math.max(1, num(data.page) || 1);
+
+  let rows = getRowsAsObjects("Dispatches")
+    .filter(function(row) { return showDeleted || !isDeleted_(row); })
+    .filter(function(row) { return normalizeMonthClosePeriod_(row.date) === periodMonth; })
+    .filter(function(row) {
+      return !customer || String(row.customerName || "").trim().toUpperCase() === customer;
+    })
+    .filter(function(row) {
+      return !customerUnit || String(row.customerUnit || "").trim().toUpperCase() === customerUnit;
+    })
+    .filter(function(row) {
+      if (!grade) return true;
+      try {
+        return num(dispatchQtyByGradeFromRow_(row)[grade]) > 0;
+      } catch (err) {
+        return normalizeDispatchGrade_(row.grade || row.material) === grade;
+      }
+    });
+
+  if (search) {
+    rows = rows.filter(function(row) {
+      return [
+        row.dispatchId, row.customerName, row.customerUnit, row.grade, row.material,
+        row.invoiceNo, row.vehicleNo, row.driverName, row.remarks, row.dispatchStatus, row.status,
+      ].some(function(value) { return String(value || "").toLowerCase().indexOf(search) !== -1; });
+    });
+  }
+
+  rows.sort(function(a, b) {
+    const byDate = String(normalizeDateOnly_(b.date || "")).localeCompare(String(normalizeDateOnly_(a.date || "")));
+    if (byDate) return byDate;
+    return String(b.createdAt || b.updatedAt || "").localeCompare(String(a.createdAt || a.updatedAt || ""));
+  });
+
+  const totals = { dispatchedKg: 0, dispatchValue: 0, dispatchCount: rows.length };
+  const gradeTotals = { E1: 0, E2: 0, E3: 0, E4: 0, E5: 0 };
+  rows.forEach(function(row) {
+    totals.dispatchedKg += num(row.quantityKg);
+    totals.dispatchValue += num(row.dispatchValue) || num(row.quantityKg) * num(row.ratePerKg);
+    try {
+      const byGrade = dispatchQtyByGradeFromRow_(row);
+      Object.keys(gradeTotals).forEach(function(key) { gradeTotals[key] += num(byGrade[key]); });
+    } catch (err) {
+      const rowGrade = normalizeDispatchGrade_(row.grade || row.material);
+      if (gradeTotals[rowGrade] !== undefined) gradeTotals[rowGrade] += num(row.quantityKg);
+    }
+  });
+  totals.dispatchedKg = round2(totals.dispatchedKg);
+  totals.dispatchValue = round2(totals.dispatchValue);
+  Object.keys(gradeTotals).forEach(function(key) { gradeTotals[key] = round2(gradeTotals[key]); });
+
+  const totalRows = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+  const page = Math.min(requestedPage, totalPages);
+  const start = (page - 1) * pageSize;
+
+  return output({
+    ok: true,
+    periodMonth,
+    elapsedMs: Date.now() - startedAt,
+    totals,
+    gradeTotals,
+    rows: rows.slice(start, start + pageSize),
+    pagination: { page, pageSize, totalRows, totalPages },
   });
 }
 
@@ -10444,110 +10561,145 @@ function addDispatch(data = {}) {
 }
 
 function updateDispatch(data = {}) {
-  ensureDispatchHeaders_();
+  const startedAt = Date.now();
+  const timings = { validation: 0, rowLookup: 0, oldLedgerVoid: 0, ledgerWrite: 0, operationalWrite: 0, total: 0 };
+  let failedStep = "validation";
+  let match = null;
+  let voidResult = { count: 0, previousRows: [] };
+  let replacementLedgerAttempted = false;
 
-  if (!data.dispatchId) {
-    return output({ ok: false, error: "Missing dispatchId" });
-  }
+  try {
+    ensureDispatchHeaders_();
+    const dispatchId = String(data.dispatchId || "").trim();
+    if (!dispatchId) throw new Error("Missing dispatchId");
 
-  const existingDispatch = getRowById_("Dispatches", "dispatchId", data.dispatchId);
-  if (!existingDispatch) {
-    return output({ ok: false, error: "Dispatch not found: " + data.dispatchId });
-  }
+    failedStep = "rowLookup";
+    let stepStarted = Date.now();
+    match = findSheetObjectRowById_("Dispatches", "dispatchId", dispatchId);
+    timings.rowLookup = Date.now() - stepStarted;
+    if (!match) throw new Error("Dispatch not found: " + dispatchId);
 
-  const date = normalizeDateOnly_(data.date || todayYmd());
-  const sourceId = data.sourceExtrusionBatchId || data.linkedFgBatchId || "";
-  const isDeleted =
-    String(data.status || "").toUpperCase() === "DELETED" ||
-    String(data.dispatchStatus || "").toUpperCase() === "DELETED";
-  const dispatchLines = isDeleted
-    ? data.dispatchLines || existingDispatch.dispatchLines || ""
-    : normalizeDispatchLines_(data);
-  const lineRows = isDeleted ? [] : parseDispatchLines_(dispatchLines);
-  const headerGrade = isDeleted
-    ? data.grade || existingDispatch.grade || ""
-    : lineRows.map(function(line) { return dispatchLineGrade_(line, data.grade || data.material); }).filter(Boolean).join(" | ");
-  validateOperationalWrite_(
-    { ...data, date },
-    existingDispatch
-  );
+    const existingDispatch = match.object;
+    const next = Object.assign({}, existingDispatch, data, { dispatchId });
+    const isDeleted =
+      String(next.status || "").toUpperCase() === "DELETED" ||
+      String(next.dispatchStatus || "").toUpperCase() === "DELETED";
+    const date = normalizeDateOnly_(next.date || existingDispatch.date || todayYmd());
+    const sourceId = next.sourceExtrusionBatchId || next.linkedFgBatchId || "";
+    const dispatchLines = isDeleted ? existingDispatch.dispatchLines || next.dispatchLines || "" : normalizeDispatchLines_(next);
+    const lineRows = isDeleted ? [] : parseDispatchLines_(dispatchLines);
+    const headerGrade = isDeleted
+      ? existingDispatch.grade || next.grade || ""
+      : lineRows.map(function(line) { return dispatchLineGrade_(line, next.grade || next.material); }).filter(Boolean).join(" | ");
 
-  if (!isDeleted) {
-    validateDispatchAvailability_(data);
-    validateDispatchFgRates_(data, lineRows, date);
-  }
-  const financials = isDeleted
-    ? { ratePerKg: num(data.ratePerKg), dispatchValue: num(data.dispatchValue), freightPerKg: num(data.freightPerKg), freightAmount: num(data.freightAmount), rateSource: data.rateSource || "" }
-    : dispatchFinancials_(data, lineRows, date);
-
-  updateById("Dispatches", "dispatchId", data.dispatchId, {
-    sourceExtrusionBatchId: sourceId,
-    sourceSupplier: data.sourceSupplier || "",
-    availableFGQty: num(data.availableFGQty),
-    date,
-    customerName: data.customerName || "",
-    customerUnit: data.customerUnit || "",
-    invoiceNo: data.invoiceNo || "",
-    vehicleNo: data.vehicleNo || "",
-    driverName: data.driverName || "",
-    grade: isDeleted ? headerGrade : headerGrade || normalizeDispatchFgGrade_(data.grade || data.material),
-    lotNo: data.lotNo || sourceId,
-    quantityKg: num(data.quantityKg),
-    noOfBags: num(data.noOfBags),
-    ratePerKg: financials.ratePerKg,
-    dispatchValue: financials.dispatchValue,
-    freightPerKg: financials.freightPerKg,
-    freightAmount: financials.freightAmount,
-    rateSource: financials.rateSource,
-    dispatchLocation: data.dispatchLocation || "",
-    remarks: data.remarks || "",
-    dispatchStatus: isDeleted ? "DELETED" : data.dispatchStatus || "DISPATCHED",
-    status: isDeleted ? "DELETED" : data.status || "ACTIVE",
-    linkedFgBatchId: sourceId,
-    transporterName: data.transporterName || "",
-    ewayBillNo: data.ewayBillNo || "",
-    dispatchLines,
-    productionDate: normalizeDateOnly_(data.productionDate || date),
-    productionShift: data.productionShift || "",
-    updatedAt: new Date(),
-  });
-
-  const ledgerVoided = voidDispatchLedgerRows_(data.dispatchId, isDeleted ? "Dispatch deleted" : "Dispatch updated");
-  let ledgerRows = 0;
-  if (!isDeleted) {
-    try {
-      ledgerRows = postDispatchLedgerRows_(data.dispatchId, date, lineRows, data);
-    } catch (err) {
-      updateById("Dispatches", "dispatchId", data.dispatchId, {
-        status: "LEDGER_ERROR",
-        dispatchStatus: "LEDGER_ERROR",
-        remarks: (data.remarks || "") + " | Ledger error: " + (err.message || err),
-        updatedAt: new Date(),
-      });
-      return output({
-        ok: false,
-        dispatchId: data.dispatchId,
-        dispatchValue: financials.dispatchValue,
-        ledgerPosted: false,
-        ledgerVoided,
-        ledgerError: err.message || String(err),
-        error: "Dispatch updated but ledger reposting failed: " + (err.message || err),
-        message: "Dispatch ledger reposting failed. Form was not cleared.",
-      });
+    failedStep = "validation";
+    stepStarted = Date.now();
+    validateOperationalWrite_(Object.assign({}, next, { date }), existingDispatch);
+    if (!isDeleted) {
+      if (!lineRows.length) throw new Error("Dispatch update requires at least one FG grade line.");
+      validateDispatchAvailabilityFast_(next, lineRows, existingDispatch);
+      validateDispatchFgRates_(next, lineRows, date);
     }
-  }
+    const financials = isDeleted
+      ? {
+          ratePerKg: num(existingDispatch.ratePerKg), dispatchValue: num(existingDispatch.dispatchValue),
+          freightPerKg: num(existingDispatch.freightPerKg), freightAmount: num(existingDispatch.freightAmount),
+          rateSource: existingDispatch.rateSource || "",
+        }
+      : dispatchFinancials_(next, lineRows, date);
+    timings.validation = Date.now() - stepStarted;
 
-  return output({
-    ok: true,
-    dispatchId: data.dispatchId,
-    dispatchValue: financials.dispatchValue,
-    ledgerPosted: isDeleted ? false : ledgerRows > 0,
-    ledgerRows,
-    ledgerVoided,
-    message: isDeleted
-      ? "Dispatch deleted and ledger rows voided."
-      : "Dispatch updated successfully: " + data.dispatchId,
-  });
+    const quantityKg = isDeleted
+      ? num(existingDispatch.quantityKg)
+      : lineRows.reduce(function(sum, line) { return sum + dispatchLineQty_(line, next.quantityKg); }, 0);
+    const patch = {
+      sourceExtrusionBatchId: sourceId,
+      sourceSupplier: next.sourceSupplier || "",
+      availableFGQty: num(next.availableFGQty),
+      date,
+      customerName: next.customerName || "",
+      customerUnit: next.customerUnit || "",
+      invoiceNo: next.invoiceNo || "",
+      vehicleNo: next.vehicleNo || "",
+      driverName: next.driverName || "",
+      grade: isDeleted ? headerGrade : headerGrade || normalizeDispatchFgGrade_(next.grade || next.material),
+      lotNo: next.lotNo || headerGrade || sourceId,
+      quantityKg,
+      noOfBags: num(next.noOfBags),
+      ratePerKg: financials.ratePerKg,
+      dispatchValue: financials.dispatchValue,
+      freightPerKg: financials.freightPerKg,
+      freightAmount: financials.freightAmount,
+      rateSource: financials.rateSource,
+      dispatchLocation: next.dispatchLocation || "",
+      remarks: next.remarks || "",
+      dispatchStatus: isDeleted ? "DELETED" : next.dispatchStatus || "DISPATCHED",
+      status: isDeleted ? "DELETED" : next.status || "ACTIVE",
+      linkedFgBatchId: sourceId,
+      transporterName: next.transporterName || "",
+      ewayBillNo: next.ewayBillNo || "",
+      dispatchLines,
+      productionDate: normalizeDateOnly_(next.productionDate || date),
+      productionShift: next.productionShift || "",
+      updatedAt: new Date(),
+    };
+
+    failedStep = "oldLedgerVoid";
+    stepStarted = Date.now();
+    voidResult = voidDispatchLedgerRows_(dispatchId, isDeleted ? "Dispatch deleted" : "Dispatch updated");
+    timings.oldLedgerVoid = Date.now() - stepStarted;
+    if (voidResult.count <= 0) throw new Error("No active Dispatch ledger movement was found to void safely.");
+
+    let ledgerRows = 0;
+    if (!isDeleted) {
+      failedStep = "ledgerWrite";
+      stepStarted = Date.now();
+      replacementLedgerAttempted = true;
+      ledgerRows = postDispatchLedgerRows_(dispatchId, date, lineRows, next);
+      timings.ledgerWrite = Date.now() - stepStarted;
+      if (ledgerRows <= 0) throw new Error("No replacement Dispatch ledger movement was posted.");
+    }
+
+    failedStep = "operationalWrite";
+    stepStarted = Date.now();
+    applySheetObjectPatch_(match, patch);
+    timings.operationalWrite = Date.now() - stepStarted;
+    timings.total = Date.now() - startedAt;
+
+    return output({
+      ok: true,
+      dispatchId,
+      dispatchValue: financials.dispatchValue,
+      ledgerPosted: isDeleted ? false : ledgerRows > 0,
+      ledgerRows,
+      ledgerVoided: voidResult.count > 0,
+      ledgerVoidedCount: voidResult.count,
+      elapsedMs: timings.total,
+      timings,
+      message: isDeleted
+        ? "Dispatch deleted. FG inventory was restored by voiding its ledger movement."
+        : "Dispatch updated successfully: " + dispatchId,
+    });
+  } catch (err) {
+    if (replacementLedgerAttempted && data.dispatchId) {
+      try { voidDispatchLedgerRows_(data.dispatchId, "Voided after failed Dispatch update"); } catch (ignore) {}
+    }
+    if (voidResult.previousRows && voidResult.previousRows.length) {
+      try { restoreDispatchLedgerRows_(voidResult.previousRows); } catch (ignore) {}
+    }
+    timings.total = Date.now() - startedAt;
+    return output({
+      ok: false,
+      dispatchId: data.dispatchId || "",
+      ledgerPosted: false,
+      ledgerVoided: false,
+      failedStep,
+      elapsedMs: timings.total,
+      timings,
+      error: (err.message || String(err)) + " (failed step: " + failedStep + ")",
+      message: "Dispatch change failed at " + failedStep + ". Existing dispatch and ledger were preserved where possible.",
+    });
+  }
 }
 
 function patchOldDispatchData() {

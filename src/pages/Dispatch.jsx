@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 
@@ -13,6 +13,39 @@ import { materialKey } from "../utils/materialInventory";
 const DISPATCH_API_DEBUG =
   import.meta.env.DEV ||
   String(import.meta.env.VITE_REGEN_DEBUG || "").toLowerCase() === "true";
+
+const MONTH_OPTIONS = [
+  ["01", "Jan"], ["02", "Feb"], ["03", "Mar"], ["04", "Apr"],
+  ["05", "May"], ["06", "Jun"], ["07", "Jul"], ["08", "Aug"],
+  ["09", "Sep"], ["10", "Oct"], ["11", "Nov"], ["12", "Dec"],
+].map(([value, label]) => ({ value, label }));
+
+function yearOptions() {
+  const current = new Date().getFullYear();
+  return Array.from({ length: 7 }, (_, index) => String(current - 3 + index));
+}
+
+function showingRange(pagination) {
+  const total = Number(pagination?.totalRows || 0);
+  if (!total) return "Showing 0 records.";
+  const page = Number(pagination?.page || 1);
+  const size = Number(pagination?.pageSize || 50);
+  const start = (page - 1) * size + 1;
+  const end = Math.min(page * size, total);
+  return `Showing ${start}-${end} of ${total} records.`;
+}
+
+function buildCustomerUnitOptions(customerName, customerRows, customerUnitRows) {
+  const selectedCustomer = String(customerName || "").trim().toUpperCase();
+  const unitValues = customerUnitRows
+    .filter((row) => !["DISABLED", "INACTIVE", "DELETED", "ARCHIVED", "MERGED"].includes(String(row.status || "ACTIVE").toUpperCase()))
+    .filter((row) => !selectedCustomer || String(row.customerName || row.customer || "").trim().toUpperCase() === selectedCustomer)
+    .map((row) => row.unitName || row.name || row.customerUnit || "");
+  const legacyValues = customerRows
+    .filter((row) => !selectedCustomer || String(row.customerName || row.name || "").trim().toUpperCase() === selectedCustomer)
+    .map((row) => row.customerUnit || row.unit || "");
+  return [...new Set([...unitValues, ...legacyValues].filter(Boolean))].sort();
+}
 
 async function timedDispatchApiCall(payload) {
   const startedAt = Date.now();
@@ -84,19 +117,31 @@ export default function Dispatch() {
   const [status, setStatus] = useState("");
   const [saveDebug, setSaveDebug] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [editingRow, setEditingRow] = useState(null);
   const [form, setForm] = useState(blankForm);
   const [dispatchLines, setDispatchLines] = useState([{ ...blankLine }]);
+  const [month, setMonth] = useState(today.slice(5, 7));
+  const [year, setYear] = useState(today.slice(0, 4));
+  const [customerFilter, setCustomerFilter] = useState("");
+  const [unitFilter, setUnitFilter] = useState("");
+  const [gradeFilter, setGradeFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyTotals, setHistoryTotals] = useState({ dispatchedKg: 0, dispatchValue: 0, dispatchCount: 0 });
+  const [historyPagination, setHistoryPagination] = useState({ page: 1, pageSize: 50, totalRows: 0, totalPages: 1 });
+  const [editRecord, setEditRecord] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+  const [editLoading, setEditLoading] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteSaving, setDeleteSaving] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const writeLockRef = useRef(false);
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  async function loadData() {
+  async function loadReferenceData() {
     try {
-      const [dispatch, fgAvailability, customers, customerUnits, fgRates, materials] = await Promise.all([
-        timedDispatchApiCall({ fn: "dispatch.list" }),
+      const [fgAvailability, customers, customerUnits, fgRates, materials] = await Promise.all([
         timedDispatchApiCall({ fn: "dispatch.fgAvailability" }),
         timedDispatchApiCall({ fn: "factoryMaster.list", masterType: "customer" }),
         timedDispatchApiCall({ fn: "factoryMaster.list", masterType: "customerUnit" }),
@@ -108,7 +153,6 @@ export default function Dispatch() {
         throw new Error(fgAvailability?.error || "Failed loading FG availability from Inventory Ledger.");
       }
 
-      setRows(dispatch.rows || []);
       setFgAvailabilityRows(fgAvailability.grades || []);
       setCustomerRows(customers.rows || []);
       setCustomerUnitRows(customerUnits.rows || []);
@@ -120,6 +164,56 @@ export default function Dispatch() {
       setStatus(err.message);
       return false;
     }
+  }
+
+  useEffect(() => {
+    const timer = setTimeout(() => loadReferenceData(), 0);
+    return () => clearTimeout(timer);
+  }, []);
+
+  async function loadFgAvailability() {
+    const res = await timedDispatchApiCall({ fn: "dispatch.fgAvailability" });
+    if (!res || res.ok !== true) throw new Error(res?.error || "Failed loading FG availability.");
+    setFgAvailabilityRows(res.grades || []);
+    return res;
+  }
+
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const res = await timedDispatchApiCall({
+        fn: "dispatch.historySummary",
+        periodMonth: `${year}-${month}`,
+        customer: customerFilter,
+        customerUnit: unitFilter,
+        grade: gradeFilter,
+        search,
+        page,
+        pageSize: 50,
+        showDeleted: "NO",
+      });
+      if (!res || res.ok !== true) throw new Error(res?.error || "Dispatch history failed to load.");
+      setRows(res.rows || []);
+      setHistoryTotals(res.totals || { dispatchedKg: 0, dispatchValue: 0, dispatchCount: 0 });
+      setHistoryPagination(res.pagination || { page: 1, pageSize: 50, totalRows: 0, totalPages: 1 });
+      if (res.pagination?.page && Number(res.pagination.page) !== page) setPage(Number(res.pagination.page));
+      return true;
+    } catch (err) {
+      setStatus(err.message);
+      return false;
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [customerFilter, gradeFilter, month, page, search, setPage, unitFilter, year]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => loadHistory(), 250);
+    return () => clearTimeout(timer);
+  }, [loadHistory]);
+
+  async function refreshDispatchData() {
+    const results = await Promise.allSettled([loadHistory(), loadFgAvailability()]);
+    return results.every((result) => result.status === "fulfilled" && result.value !== false);
   }
 
   function dateForInput(value) {
@@ -134,14 +228,6 @@ export default function Dispatch() {
     if (isNaN(d.getTime())) return text.slice(0, 10);
 
     return d.toISOString().split("T")[0];
-  }
-
-  function makeDispatchId(productionDate, shift) {
-    const baseDate = productionDate || today;
-    const datePart = String(baseDate).replaceAll("-", "");
-    const shiftPart = String(shift || "NA").toUpperCase();
-
-    return `DISP-${datePart}-${shiftPart}`;
   }
 
   function parseLines(row) {
@@ -204,7 +290,8 @@ export default function Dispatch() {
   );
 
   const fgStockRows = useMemo(() => {
-    return fgGrades.map((grade) => {
+    return fgAvailabilityRows.map((availabilityRow) => {
+      const grade = normalizeFgGrade(availabilityRow.grade);
       const row = materialInventory.find((x) => normalizeFgGrade(x.material) === grade);
       return {
         grade,
@@ -213,9 +300,7 @@ export default function Dispatch() {
         selected: normalizeFgGrade(form.material || form.grade || "") === grade,
       };
     });
-  }, [materialInventory, form.material, form.grade]);
-
-  const totalFgAvailableKg = fgStockRows.reduce((sum, row) => sum + Number(row.availableKg || 0), 0);
+  }, [fgAvailabilityRows, materialInventory, form.material, form.grade]);
 
   function getLineTotal(lines = dispatchLines) {
     return lines.reduce((s, r) => s + Number(r.dispatchQtyKg || 0), 0);
@@ -330,9 +415,9 @@ export default function Dispatch() {
     return index >= 0 ? index + 1 : 0;
   }
 
-  function rateForGrade(material) {
+  function rateForGrade(material, sourceForm = form) {
     const grade = normalizeFgGrade(material);
-    const rateRow = lookupFgRate(grade, form.customerName, form.date);
+    const rateRow = lookupFgRate(grade, sourceForm.customerName, sourceForm.date);
     return Number(rateRow?.ratePerKg || 0);
   }
 
@@ -397,18 +482,14 @@ export default function Dispatch() {
   }
 
   const customerUnitOptions = useMemo(() => {
-    const selectedCustomer = String(form.customerName || "").trim().toUpperCase();
-    const unitValues = customerUnitRows
-      .filter((row) => !["DISABLED", "INACTIVE", "DELETED", "ARCHIVED", "MERGED"].includes(String(row.status || "ACTIVE").toUpperCase()))
-      .filter((row) => !selectedCustomer || String(row.customerName || row.customer || "").trim().toUpperCase() === selectedCustomer)
-      .map((row) => row.unitName || row.name || row.customerUnit || "");
-    const legacyValues = customerRows
-      .filter((row) => !selectedCustomer || String(row.customerName || row.name || "").trim().toUpperCase() === selectedCustomer)
-      .map((row) => row.customerUnit || row.unit || "");
-    const values = [...unitValues, ...legacyValues]
-      .filter(Boolean);
-    return [...new Set(values)].sort();
+    return buildCustomerUnitOptions(form.customerName, customerRows, customerUnitRows);
   }, [customerRows, customerUnitRows, form.customerName]);
+  const historyUnitOptions = useMemo(() => {
+    return buildCustomerUnitOptions(customerFilter, customerRows, customerUnitRows);
+  }, [customerRows, customerUnitRows, customerFilter]);
+  const editUnitOptions = useMemo(() => {
+    return buildCustomerUnitOptions(editForm?.customerName || "", customerRows, customerUnitRows);
+  }, [customerRows, customerUnitRows, editForm?.customerName]);
 
   function buildGradeDispatchLines(material, quantityKg) {
     const grade = normalizeFgGrade(material);
@@ -490,13 +571,13 @@ export default function Dispatch() {
           grade: material,
           sourceExtrusionBatchId: "",
           linkedFgBatchId: "",
-          dispatchId: editingRow?.dispatchId || "",
+          dispatchId: form.dispatchId || "",
         },
         cleanLines
       );
 
       const debugSummary = {
-        dispatchId: editingRow?.dispatchId || finalForm.dispatchId || "Auto-generated on save",
+        dispatchId: finalForm.dispatchId || "Auto-generated on save",
         grade: material,
         quantityKg: Number(finalForm.quantityKg || 0),
         ratePerKg: rate,
@@ -506,16 +587,10 @@ export default function Dispatch() {
       };
       setSaveDebug(debugSummary);
 
-      const saveRequest = editingRow?.dispatchId
-        ? apiCall({
-            fn: "dispatch.update",
-            ...finalForm,
-            dispatchId: editingRow.dispatchId,
-          })
-        : apiCall({
-            fn: "dispatch.add",
-            ...finalForm,
-          });
+      const saveRequest = apiCall({
+        fn: "dispatch.add",
+        ...finalForm,
+      });
 
       const res = await withTimeout(
         saveRequest,
@@ -529,13 +604,12 @@ export default function Dispatch() {
         return;
       }
 
-      const savedDispatchId = res.dispatchId || finalForm.dispatchId || editingRow?.dispatchId;
+      const savedDispatchId = res.dispatchId || finalForm.dispatchId;
       setStatus(res.message || `Dispatch saved successfully: ${savedDispatchId}`);
-      setEditingRow(null);
       setForm(blankForm);
       setDispatchLines([{ ...blankLine }]);
       setStatus(res.message || `Dispatch saved successfully: ${savedDispatchId}`);
-      loadData().then((reloaded) => {
+      refreshDispatchData().then((reloaded) => {
         if (!reloaded) {
           setStatus(`Dispatch saved successfully: ${savedDispatchId}, but refresh failed. Please reopen Dispatch before entering another dispatch.`);
         }
@@ -572,106 +646,157 @@ export default function Dispatch() {
     return "";
   }
 
-  function editRow(row) {
-    const parsed = parseLines(row);
-
-    const productionDate =
-      dateForInput(row.productionDate) || dateForInput(row.date) || "";
-
-    const productionShift = row.productionShift || "";
-
-    const normalizedLines = parsed.map((line) => ({
-      ...line,
-      productionDate: dateForInput(line.productionDate) || productionDate || "",
-      productionShift: line.productionShift || productionShift || "",
-    }));
-    const material = normalizeFgGrade(row.material || row.grade || normalizedLines[0]?.grade || "");
-
-    setEditingRow(row);
-    setDispatchLines(normalizedLines);
-
-    const updated = autoCalculate(
-      {
+  async function editRow(row) {
+    if (writeLockRef.current) return;
+    setEditRecord({ dispatchId: row.dispatchId });
+    setEditForm(null);
+    setEditError("");
+    setEditLoading(true);
+    try {
+      const res = await withTimeout(
+        apiCall({ fn: "dispatch.get", dispatchId: row.dispatchId }),
+        30000,
+        "Request timed out. Check the backend deployment and try again."
+      );
+      if (!res || res.ok !== true || !res.row) throw new Error(res?.error || "Dispatch record could not be loaded.");
+      const record = res.row;
+      const parsed = parseLines(record);
+      const productionDate = dateForInput(record.productionDate) || dateForInput(record.date) || "";
+      const productionShift = record.productionShift || "";
+      const material = normalizeFgGrade(record.material || record.grade || parsed[0]?.grade || "");
+      const normalizedLines = parsed.map((line) => ({
+        ...line,
+        grade: normalizeFgGrade(line.grade || line.material || material),
+        material: normalizeFgGrade(line.material || line.grade || material),
+        productionDate: dateForInput(line.productionDate) || productionDate,
+        productionShift: line.productionShift || productionShift,
+      }));
+      let updated = autoCalculate({
         ...blankForm,
-        ...row,
-        date: dateForInput(row.date) || today,
+        ...record,
+        date: dateForInput(record.date) || today,
         material,
         grade: material,
         productionDate,
         productionShift,
-        dispatchId:
-          row.dispatchId || makeDispatchId(productionDate, productionShift),
-      },
-      normalizedLines
-    );
-
-    setForm(updated);
-
-    window.scrollTo({
-      top: 0,
-      behavior: "smooth",
-    });
+        dispatchId: record.dispatchId,
+      }, normalizedLines, { preserveQuantityText: true });
+      updated = applyAutoRate(updated);
+      setEditRecord(record);
+      setEditForm(updated);
+    } catch (err) {
+      setEditError(err.message);
+    } finally {
+      setEditLoading(false);
+    }
   }
 
-  async function deleteRow(row) {
-    const confirmed = window.confirm("Delete dispatch?");
-    if (!confirmed) return;
+  function onEditChange(e) {
+    if (!editForm) return;
+    let updated = { ...editForm, [e.target.name]: e.target.value };
+    if (e.target.name === "customerName") updated.customerUnit = "";
+    if (e.target.name === "material") {
+      updated.material = normalizeFgGrade(e.target.value);
+      updated.grade = updated.material;
+    }
+    const material = normalizeFgGrade(updated.material || updated.grade);
+    const lines = [{
+      ...blankLine,
+      grade: material,
+      material,
+      itemType: "FG",
+      lotNo: material,
+      dispatchQtyKg: String(updated.quantityKg ?? ""),
+      remarks: "Dispatched from FG grade inventory",
+    }];
+    updated = autoCalculate(updated, lines, { preserveQuantityText: true });
+    if (["material", "customerName", "date"].includes(e.target.name)) updated = applyAutoRate(updated);
+    setEditForm(updated);
+  }
 
-    if (writeLockRef.current) return;
+  async function saveDispatchEdit() {
+    if (!editForm || writeLockRef.current) return;
+    const material = normalizeFgGrade(editForm.material || editForm.grade);
+    const quantityKg = Number(editForm.quantityKg || 0);
+    if (!material) return setEditError("Select FG grade.");
+    if (quantityKg <= 0) return setEditError("Enter dispatch quantity.");
+    const rate = rateForGrade(material, editForm);
+    if (rate <= 0) return setEditError(`Missing FG Rates selling rate for ${material}.`);
+
+    const lines = [{
+      ...blankLine,
+      grade: material,
+      material,
+      itemType: "FG",
+      lotNo: material,
+      dispatchQtyKg: String(editForm.quantityKg),
+      remarks: "Dispatched from FG grade inventory",
+    }];
+    const finalForm = autoCalculate({ ...editForm, material, grade: material }, lines);
     writeLockRef.current = true;
-    setSaving(true);
-    setStatus("Deleting dispatch...");
+    setEditSaving(true);
+    setEditError("");
     try {
-      const res = await withTimeout(apiCall({
-        fn: "dispatch.update",
-        ...row,
-        dispatchId: row.dispatchId,
-        dispatchStatus: "DELETED",
-        status: "DELETED",
-      }), 30000, "Request timed out. Check whether the record was saved before retrying.");
-
-      if (res.ok === false) {
-        setStatus(res.error || "Delete failed");
-        return;
-      }
-
-      setStatus("Dispatch deleted");
-      await loadData();
+      const res = await withTimeout(
+        apiCall({ fn: "dispatch.update", ...finalForm, dispatchId: editForm.dispatchId }),
+        30000,
+        "Request timed out. Check whether the dispatch was updated before retrying."
+      );
+      const responseError = validateDispatchSaveResponse(res);
+      if (responseError) throw new Error(responseError);
+      setStatus(res.message || `Dispatch updated successfully: ${res.dispatchId}`);
+      await refreshDispatchData();
+      setEditRecord(null);
+      setEditForm(null);
     } catch (err) {
-      setStatus(err.message);
+      setEditError(err.message);
     } finally {
-      setSaving(false);
+      setEditSaving(false);
+      writeLockRef.current = false;
+    }
+  }
+
+  function requestDelete(row) {
+    if (writeLockRef.current) return;
+    setDeleteTarget(row);
+    setDeleteError("");
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget || writeLockRef.current) return;
+    writeLockRef.current = true;
+    setDeleteSaving(true);
+    setDeleteError("");
+    try {
+      const res = await withTimeout(
+        apiCall({
+          fn: "dispatch.update",
+          dispatchId: deleteTarget.dispatchId,
+          dispatchStatus: "DELETED",
+          status: "DELETED",
+        }),
+        30000,
+        "Request timed out. Check whether the dispatch was deleted before retrying."
+      );
+      if (!res || res.ok !== true) throw new Error(res?.error || "Dispatch delete failed.");
+      if (!res.dispatchId || res.ledgerVoided !== true) throw new Error("Dispatch delete did not confirm ledger restoration.");
+      setStatus(res.message || `Dispatch deleted: ${res.dispatchId}`);
+      await refreshDispatchData();
+      setDeleteTarget(null);
+    } catch (err) {
+      setDeleteError(err.message);
+    } finally {
+      setDeleteSaving(false);
       writeLockRef.current = false;
     }
   }
 
   function clearForm() {
-    setEditingRow(null);
     setForm(blankForm);
     setDispatchLines([{ ...blankLine }]);
     setSaveDebug(null);
     setStatus("Ready for new dispatch");
   }
-
-  const activeRows = rows.filter(
-    (r) =>
-      String(r.dispatchStatus || "").toUpperCase() !== "DELETED" &&
-      String(r.status || "").toUpperCase() !== "DELETED"
-  );
-
-  const totalDispatch = activeRows.reduce(
-    (sum, r) => sum + Number(r.quantityKg || 0),
-    0
-  );
-
-  const totalSales = activeRows.reduce(
-    (sum, r) =>
-      sum + Number(r.dispatchValue || Number(r.quantityKg || 0) * Number(r.ratePerKg || 0)),
-    0
-  );
-
-  const avgRealization =
-    totalDispatch > 0 ? (totalSales / totalDispatch).toFixed(2) : "0.00";
 
   const currentDispatchQty = getLineTotal(dispatchLines);
   const operatorDispatchQty = Number(form.quantityKg || 0) || currentDispatchQty;
@@ -687,55 +812,14 @@ export default function Dispatch() {
       ? ((operatorDispatchQty / truckCapacityKg) * 100).toFixed(1)
       : "";
 
-  const customerSummary = useMemo(() => {
-    const map = {};
-
-    activeRows.forEach((r) => {
-      const customer = r.customerName || "Unknown";
-
-      if (!map[customer]) {
-        map[customer] = {
-          customer,
-          qty: 0,
-          value: 0,
-        };
-      }
-
-      map[customer].qty += Number(r.quantityKg || 0);
-      map[customer].value +=
-        Number(r.dispatchValue || Number(r.quantityKg || 0) * Number(r.ratePerKg || 0));
-    });
-
-    return Object.values(map)
-      .sort((a, b) => b.qty - a.qty)
-      .slice(0, 5);
-  }, [activeRows]);
-
   return (
     <PageLayout
       title="Dispatch Workflow"
       subtitle="Dispatch consumes material inventory. Operators select material and quantity; traceability is allocated internally."
     >
 
-      <div className="factory-kpi-grid">
-        <KpiCard title="Dispatch Qty" value={`${totalDispatch.toFixed(0)} Kg`} />
-        <KPI title="Sales" value={formatRs(totalSales)} />
-        <KPI title="Avg Realization" value={`Rs. ${avgRealization}`} />
-        <KpiCard title="FG Available" value={`${totalFgAvailableKg.toFixed(0)} Kg`} tone="neutral" />
-        <KpiCard
-          title="Selected Available"
-          value={`${Number(selectedInventory?.availableKg || 0).toFixed(0)} Kg`}
-          tone={selectedInventory ? "positive" : "neutral"}
-        />
-      </div>
-
-      <div style={stockNote}>
-        Available stock as of today
-        {selectedInventory?.source ? ` | Source: ${selectedInventory.source}` : ""}
-      </div>
-
       <div style={sectionCard}>
-        <div style={sectionTitle}>FG Inventory by Grade</div>
+        <div style={sectionTitle}>Available FG Stock</div>
         <div style={fgStockGrid}>
           {fgStockRows.map((row) => (
             <button
@@ -755,6 +839,16 @@ export default function Dispatch() {
         </div>
       </div>
 
+      <div style={stockNote}>Available stock as of today | Source: Inventory_Ledger</div>
+
+      <div style={sectionCard}>
+        <div style={sectionTitle}>Selected Month Summary - {month}/{year}</div>
+        <div className="factory-kpi-grid">
+          <KpiCard title="Total Dispatched" value={`${Number(historyTotals.dispatchedKg || 0).toFixed(0)} Kg`} />
+          <KpiCard title="Total Dispatch Value" value={formatRs(historyTotals.dispatchValue)} tone="neutral" />
+        </div>
+      </div>
+
       {status && <div style={statusStyle}>{status}</div>}
 
       <form
@@ -770,7 +864,7 @@ export default function Dispatch() {
           gap: 16,
         }}
       >
-        <FormSection title={editingRow ? "Edit Dispatch" : "New Dispatch"}>
+        <FormSection title="New Dispatch">
           <Field label="Dispatch Entry Date">
             <input
               type="date"
@@ -791,6 +885,7 @@ export default function Dispatch() {
               required
               stage="DISPATCH"
               direction="INPUT"
+              items={materialRows}
             />
           </Field>
 
@@ -818,7 +913,7 @@ export default function Dispatch() {
           <Field label="Dispatch Code">
             <input
               readOnly
-              value={editingRow?.dispatchId || form.dispatchId || "Auto-generated on save"}
+              value={form.dispatchId || "Auto-generated on save"}
               style={readonlyStyle}
             />
           </Field>
@@ -833,6 +928,7 @@ export default function Dispatch() {
               placeholder="Select Customer"
               style={inputStyle}
               allowAddNew
+              providedItems={customerRows}
             />
           </Field>
 
@@ -1022,8 +1118,8 @@ export default function Dispatch() {
             Clear / New Dispatch
           </button>
 
-          <button type="submit" disabled={saving} style={saving ? disabledButton : editingRow ? updateButton : saveButton}>
-            {saving ? "Saving..." : editingRow ? "Update Dispatch" : "Save Dispatch"}
+          <button type="submit" disabled={saving} style={saving ? disabledButton : saveButton}>
+            {saving ? "Saving dispatch..." : "Save Dispatch"}
           </button>
         </div>
 
@@ -1038,34 +1134,48 @@ export default function Dispatch() {
       </form>
 
       <div style={sectionCard}>
-        <div style={sectionTitle}>Top Customers</div>
-
-        <div style={customerGrid}>
-          {customerSummary.map((c, i) => (
-            <div key={i} style={customerCard}>
-              <div style={{ fontWeight: 700 }}>{c.customer}</div>
-
-              <div
-                style={{
-                  marginTop: 6,
-                  color: "#0f766e",
-                  fontWeight: 700,
-                }}
-              >
-                {Number(c.qty).toFixed(0)} Kg
-              </div>
-
-              <div style={{ color: "#64748b", fontSize: 12, marginTop: 4 }}>
-                {formatRs(c.value)}
-              </div>
-            </div>
-          ))}
+        <div style={sectionTitle}>Dispatch History Filters</div>
+        <div style={historyFilters}>
+          <Field label="Month">
+            <select value={month} onChange={(e) => { setMonth(e.target.value); setPage(1); }} style={inputStyle}>
+              {MONTH_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+          </Field>
+          <Field label="Year">
+            <select value={year} onChange={(e) => { setYear(e.target.value); setPage(1); }} style={inputStyle}>
+              {yearOptions().map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </Field>
+          <Field label="Customer">
+            <select value={customerFilter} onChange={(e) => { setCustomerFilter(e.target.value); setUnitFilter(""); setPage(1); }} style={inputStyle}>
+              <option value="">All Customers</option>
+              {customerRows.map((item) => {
+                const name = item.customerName || item.name || "";
+                return name ? <option key={item.customerId || name} value={name}>{name}</option> : null;
+              })}
+            </select>
+          </Field>
+          <Field label="Customer Unit">
+            <select value={unitFilter} onChange={(e) => { setUnitFilter(e.target.value); setPage(1); }} style={inputStyle}>
+              <option value="">All Units</option>
+              {historyUnitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+            </select>
+          </Field>
+          <Field label="FG Grade">
+            <select value={gradeFilter} onChange={(e) => { setGradeFilter(e.target.value); setPage(1); }} style={inputStyle}>
+              <option value="">All Grades</option>
+              {fgGrades.map((grade) => <option key={grade} value={grade}>{grade}</option>)}
+            </select>
+          </Field>
+          <Field label="Search">
+            <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Dispatch, invoice, vehicle..." style={inputStyle} />
+          </Field>
         </div>
       </div>
 
       <DataTable
-        title="Dispatch History"
-        rows={activeRows}
+        title={historyLoading ? "Dispatch History - Loading..." : "Dispatch History"}
+        rows={rows}
         searchFields={[
           "dispatchId",
           "customerName",
@@ -1090,9 +1200,82 @@ export default function Dispatch() {
           { key: "dispatchValue", label: "Value" },
           { key: "dispatchStatus", label: "Status" },
         ]}
+        hideFilters
         onEdit={editRow}
-        onDelete={deleteRow}
+        onDelete={requestDelete}
       />
+      <div style={paginationBar}>
+        <span>{showingRange(historyPagination)}</span>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" disabled={historyLoading || page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} style={secondaryButton}>Previous</button>
+          <button type="button" disabled={historyLoading || page >= Number(historyPagination.totalPages || 1)} onClick={() => setPage((value) => value + 1)} style={secondaryButton}>Next</button>
+        </div>
+      </div>
+
+      {editRecord && (
+        <div style={modalOverlay}>
+          <div style={modalCard}>
+            <h2 style={{ marginTop: 0 }}>Edit Dispatch</h2>
+            {editLoading && <div style={statusStyle}>Loading dispatch...</div>}
+            {editError && <div style={errorStyle}>{editError}</div>}
+            {editForm && !editLoading && (
+              <div style={modalGrid}>
+                <Field label="Dispatch Date"><input type="date" name="date" value={editForm.date || ""} onChange={onEditChange} style={inputStyle} /></Field>
+                <Field label="Customer">
+                  <select name="customerName" value={editForm.customerName || ""} onChange={onEditChange} style={inputStyle}>
+                    <option value="">Select Customer</option>
+                    {customerRows.map((item) => {
+                      const name = item.customerName || item.name || "";
+                      return name ? <option key={item.customerId || name} value={name}>{name}</option> : null;
+                    })}
+                  </select>
+                </Field>
+                <Field label="Customer Unit">
+                  <select name="customerUnit" value={editForm.customerUnit || ""} onChange={onEditChange} style={inputStyle}>
+                    <option value="">Select Unit</option>
+                    {editUnitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+                  </select>
+                </Field>
+                <Field label="Vehicle No"><input name="vehicleNo" value={editForm.vehicleNo || ""} onChange={onEditChange} style={inputStyle} /></Field>
+                <Field label="FG Grade">
+                  <select name="material" value={editForm.material || ""} onChange={onEditChange} style={inputStyle}>
+                    <option value="">Select Grade</option>
+                    {fgGrades.map((grade) => <option key={grade} value={grade}>{grade}</option>)}
+                  </select>
+                </Field>
+                <Field label="Quantity Kg"><input type="number" min="0" name="quantityKg" value={editForm.quantityKg || ""} onChange={onEditChange} style={inputStyle} /></Field>
+                <Field label="Rate / Kg"><input readOnly value={editForm.ratePerKg || ""} style={readonlyStyle} /></Field>
+                <Field label="Value"><input readOnly value={formatRs(Number(editForm.quantityKg || 0) * Number(editForm.ratePerKg || 0))} style={readonlyStyle} /></Field>
+                <Field label="Status">
+                  <select name="dispatchStatus" value={editForm.dispatchStatus || "DISPATCHED"} onChange={onEditChange} style={inputStyle}>
+                    <option>DISPATCHED</option><option>IN_TRANSIT</option><option>DELIVERED</option>
+                  </select>
+                </Field>
+                <Field label="Remarks"><textarea name="remarks" value={editForm.remarks || ""} onChange={onEditChange} style={textareaStyle} /></Field>
+              </div>
+            )}
+            <div style={modalActions}>
+              <button type="button" disabled={editSaving} onClick={() => { setEditRecord(null); setEditForm(null); }} style={secondaryButton}>Cancel</button>
+              <button type="button" disabled={editLoading || editSaving || !editForm} onClick={saveDispatchEdit} style={saveButton}>{editSaving ? "Saving changes..." : "Save Changes"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div style={modalOverlay}>
+          <div style={confirmCard}>
+            <h2 style={{ marginTop: 0 }}>Delete Dispatch</h2>
+            <p>Delete this dispatch? FG inventory will be restored by voiding its ledger movement.</p>
+            <div><b>{deleteTarget.dispatchId}</b></div>
+            {deleteError && <div style={errorStyle}>{deleteError}</div>}
+            <div style={modalActions}>
+              <button type="button" disabled={deleteSaving} onClick={() => setDeleteTarget(null)} style={secondaryButton}>Cancel</button>
+              <button type="button" disabled={deleteSaving} onClick={confirmDelete} style={deleteButton}>{deleteSaving ? "Deleting..." : "Delete Dispatch"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </PageLayout>
   );
 }
@@ -1102,15 +1285,6 @@ function Field({ label, children }) {
     <div>
       <div style={fieldLabel}>{label}</div>
       {children}
-    </div>
-  );
-}
-
-function KPI({ title, value }) {
-  return (
-    <div style={kpiCard}>
-      <div style={kpiTitle}>{title}</div>
-      <div style={kpiValue}>{value}</div>
     </div>
   );
 }
@@ -1155,38 +1329,6 @@ const hintText = {
   marginTop: 4,
   color: "#64748b",
   fontSize: 12,
-};
-
-const kpiCard = {
-  background: "white",
-  padding: 16,
-  borderRadius: 12,
-  border: "1px solid #e5e7eb",
-};
-
-const kpiTitle = {
-  color: "#64748b",
-  fontSize: 12,
-  marginBottom: 8,
-};
-
-const kpiValue = {
-  fontSize: 22,
-  fontWeight: 700,
-  color: "#005d34",
-};
-
-const customerGrid = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))",
-  gap: 12,
-};
-
-const customerCard = {
-  border: "1px solid #e5e7eb",
-  borderRadius: 10,
-  padding: 12,
-  background: "#f8fafc",
 };
 
 const fgStockGrid = {
@@ -1245,11 +1387,6 @@ const saveButton = {
   fontWeight: 600,
 };
 
-const updateButton = {
-  ...saveButton,
-  background: "#ea580c",
-};
-
 const disabledButton = {
   ...saveButton,
   background: "#94a3b8",
@@ -1305,3 +1442,64 @@ const statusStyle = {
   fontWeight: 600,
   color: "#0f766e",
 };
+
+const historyFilters = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))",
+  gap: 12,
+};
+
+const paginationBar = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 12,
+  margin: "12px 0 20px",
+  fontSize: 13,
+  fontWeight: 700,
+};
+
+const secondaryButton = {
+  background: "#f8fafc",
+  color: "#334155",
+  border: "1px solid #cbd5e1",
+  padding: "9px 14px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const deleteButton = {
+  background: "#dc2626",
+  color: "white",
+  border: "none",
+  padding: "10px 16px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const modalOverlay = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 10000,
+  background: "rgba(15,23,42,0.55)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 20,
+};
+
+const modalCard = {
+  width: "min(900px,96vw)",
+  maxHeight: "90vh",
+  overflowY: "auto",
+  background: "white",
+  borderRadius: 14,
+  padding: 22,
+};
+
+const confirmCard = { ...modalCard, width: "min(520px,96vw)" };
+const modalGrid = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 };
+const modalActions = { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 };
+const errorStyle = { ...statusStyle, color: "#991b1b", background: "#fef2f2", border: "1px solid #fecaca", padding: 10, borderRadius: 8 };

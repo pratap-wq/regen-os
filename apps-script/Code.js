@@ -522,7 +522,8 @@ function updateFactoryCostMaster(data = {}) {
     if (p.fn === "inventoryLedger.add") return addInventoryLedger(p);
     if (p.fn === "inventoryLedger.balance") return getInventoryLedgerBalance();
     if (p.fn === "inventoryLedger.liveBalance") return getInventoryLedgerLiveBalance(p);
-    if (p.fn === "inventory.liveSummary") return getInventoryLiveSummary();
+    if (p.fn === "inventory.liveSummary") return getInventoryLiveSummary(p);
+    if (p.fn === "inventory.ledgerRebuildPreview") return getInventoryLedgerRebuildPreview(p);
     if (p.fn === "inventory.cutoverPreview") return getInventoryCutoverPreview(p);
     if (p.fn === "inventoryLedger.audit") return auditInventoryLedger(p);
     if (p.fn === "inventoryLedger.rebuild") return rebuildInventoryLedger(p);
@@ -541,18 +542,8 @@ function updateFactoryCostMaster(data = {}) {
     if (p.fn === "materialMerge.whiteBuckets.run") return output(runWhitePpcpBucketMerge(p));
     if (p.fn === "trace.batch") return traceBatch(p);
     if (p.fn === "inventory.summary") {
-      return output({
-        ok: true,
-        inventory: calculateInventoryBackend({
-          rmRows: getRowsAsObjects("RM_Inward"),
-          washRows: getRowsAsObjects("Wash_Batches"),
-          sortingRows: getRowsAsObjects("Sorting_Batches"),
-          extrusionRows: getRowsAsObjects("Extrusion_Batches"),
-          dispatchRows: getRowsAsObjects("Dispatches"),
-          storesInwardRows: getRowsAsObjects("Stores_Inward"),
-          storesIssueRows: getRowsAsObjects("Stores_Issue"),
-        }),
-      });
+      const balances = getOperationalInventoryBalances_({ periodMonth: p.periodMonth || "" });
+      return output({ ok: true, source: "Inventory_Ledger", rows: balances.rows, unknownRows: balances.unknownRows });
     }
 // Inventory Adjustments
 if (p.fn === "inventoryAdjustments.add") return addInventoryAdjustment(p);
@@ -720,6 +711,7 @@ function debugRoutes() {
       "inventoryLedger.balance",
       "inventoryLedger.liveBalance",
       "inventory.liveSummary",
+      "inventory.ledgerRebuildPreview",
       "inventory.cutoverPreview",
       "inventoryLedger.audit",
       "inventoryLedger.rebuild",
@@ -1571,6 +1563,7 @@ const REGEN_DB_SCHEMA = {
     "movementType",
     "itemType",
     "materialId",
+    "materialCode",
     "itemName",
     "sourceRef",
     "targetRef",
@@ -1586,6 +1579,7 @@ const REGEN_DB_SCHEMA = {
     "legacyMaterialName",
     "migrationId",
     "migratedAt",
+    "movementIdentity",
   ],
   Material_Buckets: [
     "bucketId",
@@ -6931,52 +6925,14 @@ function generateRmReceivingRef_(dateValue, supplier) {
 }
 
 function postApprovedRmInventory_(inwardId, data = {}, dateValue) {
-  const existing = getRowsAsObjects("Inventory_Ledger").find(function(row) {
-    return (
-      String(row.module || "").toUpperCase() === "RM_INWARD" &&
-      String(row.targetRef || "") === String(inwardId || "") &&
-      String(row.status || "ACTIVE").toUpperCase() !== "DELETED"
-    );
-  });
-
-  if (existing) {
-    return { posted: false, reason: "ALREADY_POSTED", ledgerId: existing.ledgerId || "" };
-  }
-
   const lines = parseRmMaterialLines_(data.materialLines, data.material, data.netWeight || data.quantityKg);
-  let posted = 0;
-  const warnings = [];
-
-  lines.forEach(function(line) {
-    validateInventoryLedgerMaterial_({
-      itemType: "RM",
-      itemName: line.material
-    });
+  const materials = getMaterialMasterRows_();
+  const moves = lines.map(function(line) { return productionLedgerMove_(materials, { material: line.material, qtyKg: line.quantityKg }, "IN"); });
+  const result = appendDeterministicLedgerBatch_({
+    date: dateValue || normalizeDateOnly_(data.date || todayYmd()), stage: "RM_INWARD", recordId: inwardId,
+    sourceRef: data.supplier || inwardId, createdBy: data.createdBy || "Quality", moves,
   });
-
-  lines.forEach(function(line) {
-    try {
-      addInventoryLedger({
-        date: dateValue || normalizeDateOnly_(data.date || todayYmd()),
-        module: "RM_INWARD",
-        movementType: "IN",
-        itemType: "RM",
-        itemName: line.material,
-        sourceRef: data.supplier || "",
-        targetRef: inwardId,
-        qtyIn: line.quantityKg,
-        qtyOut: 0,
-        unit: "Kg",
-        remarks: line.remarks || data.remarks || "",
-        createdBy: data.createdBy || "Quality",
-      });
-      posted += 1;
-    } catch (err) {
-      warnings.push(line.material + ": " + err.message);
-    }
-  });
-
-  return { posted: posted > 0, movements: posted, warnings };
+  return { posted: result.posted > 0 || result.skipped > 0, movements: result.posted, skipped: result.skipped, warnings: [], identities: result.identities };
 }
 
 function getRmEntryBootstrap() {
@@ -7441,25 +7397,18 @@ function getProductionEntryBootstrap() {
   const machines = getRowsAsObjects("Machine_Master").filter(function(row) {
     return !isDeleted_(row) && ["INACTIVE", "DISABLED", "ARCHIVED", "MERGED"].indexOf(String(row.status || "ACTIVE").toUpperCase()) === -1;
   });
-  const rmRows = getRowsAsObjects("RM_Inward");
-  const grinderRows = getRowsAsObjects("Grinder_Batches");
-  const washRows = getRowsAsObjects("Wash_Batches");
-  const sortingRows = getRowsAsObjects("Sorting_Batches");
   const extrusionRows = getRowsAsObjects("Extrusion_Batches");
-  const sources = { rmRows, grinderRows, washRows, sortingRows, extrusionRows };
-  const availability = productionAvailabilityFromOperationalRows_(sources);
-  const flowAudit = productionFlowIntegrityFromRows_(sources);
-  const availabilityIntegrity = productionAvailabilityIntegrity_(availability, flowAudit);
-  const controlledFields = {
-    "White Buckets": "whiteBucketsKg", "White Regrind (Unwashed)": "unwashedRegrindKg",
-    "White Regrind (Washed)": "washedRegrindKg", "White Sorted Regrind": "sortedRegrindKg",
+  const balances = getOperationalInventoryBalances_({ materialRows: materials });
+  const processAvailability = {
+    whiteBucketsKg: num(balances.byMaterialCode.WHITE_BUCKETS && balances.byMaterialCode.WHITE_BUCKETS.balanceKg),
+    unwashedRegrindKg: num(balances.byMaterialCode.WHITE_REGRIND_UNWASHED && balances.byMaterialCode.WHITE_REGRIND_UNWASHED.balanceKg),
+    washedRegrindKg: num(balances.byMaterialCode.WHITE_REGRIND_WASHED && balances.byMaterialCode.WHITE_REGRIND_WASHED.balanceKg),
+    sortedRegrindKg: num(balances.byMaterialCode.WHITE_SORTED_REGRIND && balances.byMaterialCode.WHITE_SORTED_REGRIND.balanceKg),
   };
-  const inventoryLots = availability.inventoryLots.map(function(lot) {
-    const field = controlledFields[lot.material];
-    const integrity = field ? availabilityIntegrity[field] : null;
-    return integrity && integrity.needsReview
-      ? Object.assign({}, lot, { rawAvailableKg: lot.availableKg, availableKg: 0, needsReview: true })
-      : lot;
+  const inventoryLots = balances.rows.filter(function(row) {
+    return row.category !== "STORE";
+  }).map(function(row) {
+    return { lotId: "LEDGER-" + row.materialCode, sourceType: "INVENTORY_LEDGER", material: row.materialName, materialCode: row.materialCode, availableKg: row.balanceKg };
   });
   const extrusionRefs = extrusionRows.map(function(row) {
     return { extrusionBatchId: row.extrusionBatchId || row.batchId || "" };
@@ -7473,9 +7422,7 @@ function getProductionEntryBootstrap() {
       return normalizeMaterialCategoryForLedger_(row.category) === "FG" && materialMasterFlag_(row, ["appearsInExtrusionOutput"]) === "YES";
     }),
     extrusionRefs,
-    processAvailability: availability.processAvailability,
-    processAvailabilityDetails: availability.details,
-    processAvailabilityIntegrity: availabilityIntegrity,
+    processAvailability,
     inventoryLots,
     generatedAt: new Date().toISOString(),
     elapsedMs: Date.now() - startedAt,
@@ -8323,55 +8270,22 @@ function postManufacturingCompositionLedger_(options) {
     ["qtyKg", "quantityKg", "outputQty", "quantity"]
   );
 
-  const result = {
-    inputMovements: 0,
-    outputMovements: 0,
-    warnings: []
+  const materials = getMaterialMasterRows_();
+  const moves = [];
+  inputs.forEach(function(row) { moves.push(productionLedgerMove_(materials, row, "OUT")); });
+  outputs.forEach(function(row) { moves.push(productionLedgerMove_(materials, row, "IN")); });
+  const written = appendDeterministicLedgerBatch_({
+    date: options.date, stage: options.module, recordId: options.targetRef || options.sourceRef,
+    sourceRef: options.sourceRef, createdBy: options.createdBy || "System", moves,
+  });
+  return {
+    inputMovements: inputs.length,
+    outputMovements: outputs.length,
+    postedMovements: written.posted,
+    skippedMovements: written.skipped,
+    warnings: [],
+    identities: written.identities,
   };
-
-  inputs.forEach(function(row) {
-    try {
-      addInventoryLedger({
-        date: options.date,
-        module: options.module,
-        movementType: "OUT",
-        itemName: row.material,
-        sourceRef: options.sourceRef,
-        targetRef: options.targetRef,
-        qtyIn: 0,
-        qtyOut: row.qtyKg,
-        unit: "Kg",
-        remarks: options.module + " input",
-        createdBy: options.createdBy || "System"
-      });
-      result.inputMovements += 1;
-    } catch (err) {
-      result.warnings.push("Input " + row.material + ": " + err.message);
-    }
-  });
-
-  outputs.forEach(function(row) {
-    try {
-      addInventoryLedger({
-        date: options.date,
-        module: options.module,
-        movementType: "IN",
-        itemName: row.material,
-        sourceRef: options.sourceRef,
-        targetRef: options.targetRef,
-        qtyIn: row.qtyKg,
-        qtyOut: 0,
-        unit: "Kg",
-        remarks: options.module + " output",
-        createdBy: options.createdBy || "System"
-      });
-      result.outputMovements += 1;
-    } catch (err) {
-      result.warnings.push("Output " + row.material + ": " + err.message);
-    }
-  });
-
-  return result;
 }
 
 const GRINDER_OUTPUT_MATERIAL = "White Regrind (Unwashed)";
@@ -9683,6 +9597,7 @@ function productionLedgerMove_(materials, line, direction) {
   return {
     direction,
     materialId: material.materialId || "",
+    materialCode: material.materialCode || materialCode_(material.materialName),
     materialName: material.materialName,
     category: normalizeMaterialCategoryForLedger_(material.category),
     qtyKg: num(line.qtyKg),
@@ -9756,26 +9671,12 @@ function productionRecordFallbackOutputs_(stage, row) {
 }
 
 function appendProductionLedgerBatch_(batch) {
-  const sh = getSheet("Inventory_Ledger");
-  ensureHeaders_("Inventory_Ledger", inventoryLedgerHeaders_());
-  const headers = getHeaders(sh);
-  const rows = (batch.moves || []).map(function(move) {
-    const qtyKg = num(move.qtyKg);
-    if (qtyKg <= 0) throw new Error("Production ledger quantities must be positive");
-    const payload = {
-      ledgerId: generateBatchId("LED"), date: batch.date, module: batch.stage,
-      movementType: move.direction, itemType: move.category, materialId: move.materialId,
-      itemName: move.materialName, sourceRef: batch.sourceRef, targetRef: batch.recordId,
-      qtyIn: move.direction === "IN" ? qtyKg : 0,
-      qtyOut: move.direction === "OUT" ? qtyKg : 0,
-      unit: "Kg", remarks: batch.stage + (move.direction === "IN" ? " output" : " input"),
-      status: "ACTIVE", createdBy: batch.createdBy, createdAt: new Date(),
-    };
-    return headers.map(function(header) { return payload[header] !== undefined ? payload[header] : ""; });
+  (batch.moves || []).forEach(function(move) {
+    if (num(move.qtyKg) <= 0) throw new Error("Production ledger quantities must be positive");
   });
-  if (!rows.length) throw new Error("No ledger movements were prepared");
-  sh.getRange(sh.getLastRow() + 1, 1, rows.length, headers.length).setValues(rows);
-  return rows.length;
+  const result = appendDeterministicLedgerBatch_(batch);
+  if (!result.posted && !result.skipped) throw new Error("No ledger movements were prepared");
+  return result.posted || result.skipped;
 }
 
 function voidProductionLedgerRows_(stage, recordId, reason) {
@@ -10847,16 +10748,10 @@ function dispatchQtyByGradeFromRow_(row = {}) {
 
 function fgLedgerBalanceByGrade_() {
   const byGrade = {};
-
-  getRowsAsObjects("Inventory_Ledger")
-    .filter(function(row) { return !isDeleted_(row); })
-    .filter(function(row) { return String(row.itemType || "").toUpperCase() === "FG"; })
-    .forEach(function(row) {
-      const grade = normalizeDispatchFgGrade_(canonicalLegacyMaterialForInventory_(row.itemName || row.material || row.grade));
-      if (!grade) return;
-      byGrade[grade] = (byGrade[grade] || 0) + num(row.qtyIn) - num(row.qtyOut);
-    });
-
+  const balances = getOperationalInventoryBalances_();
+  ["E1", "E2", "E3", "E4", "E5"].forEach(function(grade) {
+    byGrade[grade] = num(balances.byMaterialCode[grade] && balances.byMaterialCode[grade].balanceKg);
+  });
   return byGrade;
 }
 
@@ -10874,13 +10769,9 @@ function fgLedgerBalanceForGrades_(grades) {
 
   if (!Object.keys(wanted).length) return byGrade;
 
-  const rows = getRowsAsObjects("Inventory_Ledger");
-  rows.forEach(function(row) {
-    if (isDeleted_(row)) return;
-    if (String(row.itemType || "").toUpperCase() !== "FG") return;
-    const grade = normalizeDispatchGrade_(canonicalLegacyMaterialForInventory_(row.itemName || row.material || row.grade));
-    if (!wanted[grade]) return;
-    byGrade[grade] = (byGrade[grade] || 0) + num(row.qtyIn) - num(row.qtyOut);
+  const balances = getOperationalInventoryBalances_();
+  Object.keys(wanted).forEach(function(grade) {
+    byGrade[grade] = num(balances.byMaterialCode[grade] && balances.byMaterialCode[grade].balanceKg);
   });
 
   return byGrade;
@@ -11053,28 +10944,19 @@ function restoreDispatchLedgerRows_(rows) {
 }
 
 function postDispatchLedgerRows_(dispatchId, date, lineRows, data) {
-  let posted = 0;
+  const materials = getMaterialMasterRows_();
+  const moves = [];
   (lineRows || []).forEach(function(line) {
     const grade = dispatchLineGrade_(line, data.grade || data.material);
     const qty = dispatchLineQty_(line, data.quantityKg);
     if (!grade || qty <= 0) return;
-    addInventoryLedger({
-      date,
-      module: "DISPATCH",
-      movementType: "OUT",
-      itemType: "FG",
-      itemName: grade,
-      sourceRef: grade,
-      targetRef: dispatchId,
-      qtyIn: 0,
-      qtyOut: qty,
-      unit: "Kg",
-      remarks: data.remarks || "FG dispatched",
-      createdBy: data.createdBy || "System",
-    });
-    posted += 1;
+    moves.push(productionLedgerMove_(materials, { material: grade, qtyKg: qty }, "OUT"));
   });
-  return posted;
+  const result = appendDeterministicLedgerBatch_({
+    date, stage: "DISPATCH", recordId: dispatchId, sourceRef: dispatchId,
+    createdBy: data.createdBy || "System", remarks: data.remarks || "FG dispatched", moves,
+  });
+  return result.posted || result.skipped;
 }
 
 function repairMissingDispatchLedger_(dispatchId, existingDispatch) {
@@ -11544,31 +11426,9 @@ function getDispatchFgAvailability() {
     E5: 0,
   };
 
-  getRowsAsObjects("Inventory_Ledger").forEach(function(row) {
-    const status = String(row.status || "ACTIVE").trim().toUpperCase();
-    if (
-      isDeleted_(row) ||
-      ["INACTIVE", "DISABLED", "ARCHIVED", "VOID", "VOIDED", "REVERSED", "CANCELLED", "REJECTED"].indexOf(status) !== -1
-    ) {
-      return;
-    }
-
-    if (String(row.itemType || "").trim().toUpperCase() !== "FG") return;
-
-    const rawGrade = [
-      row.materialCode,
-      row.materialId,
-      canonicalLegacyMaterialForInventory_(row.itemName),
-      canonicalLegacyMaterialForInventory_(row.materialName),
-      row.grade,
-    ].map(function(value) {
-      return String(value || "").trim().toUpperCase();
-    }).find(function(value) {
-      return /^E[1-5]$/.test(value);
-    });
-    if (!rawGrade) return;
-
-    availability[rawGrade] += num(row.qtyIn) - num(row.qtyOut);
+  const balances = getOperationalInventoryBalances_();
+  Object.keys(availability).forEach(function(grade) {
+    availability[grade] = num(balances.byMaterialCode[grade] && balances.byMaterialCode[grade].balanceKg);
   });
 
   Object.keys(availability).forEach(function(grade) {
@@ -12389,6 +12249,374 @@ function updateStoresIssue(data={}){
 // INVENTORY LEDGER
 // =====================================================
 
+function operationalInventoryLedgerRowActive_(row) {
+  const status = String(row && row.status || "ACTIVE").trim().toUpperCase();
+  return ["VOID", "VOIDED", "DELETED", "REVERSED", "INACTIVE", "DISABLED", "ARCHIVED", "CANCELLED"].indexOf(status) === -1;
+}
+
+function operationalInventoryMaterialIndex_(materialRows) {
+  const byId = {};
+  const byKey = {};
+  (materialRows || []).filter(materialRowIsActive_).forEach(function(material) {
+    if (material.materialId) byId[String(material.materialId)] = material;
+    [material.materialCode, material.materialName].forEach(function(value) {
+      const key = compactInventoryMaterialKey_(value);
+      if (key) byKey[key] = material;
+    });
+  });
+  return { byId, byKey };
+}
+
+function operationalInventoryResolveMaterial_(row, index) {
+  const byId = index && index.byId || {};
+  const byKey = index && index.byKey || {};
+  const id = String(row && row.materialId || "").trim();
+  if (id && byId[id]) return byId[id];
+  const candidates = [row && row.materialCode, row && row.itemName, row && row.materialName]
+    .map(compactInventoryMaterialKey_)
+    .filter(function(key) { return key; });
+  for (let i = 0; i < candidates.length; i += 1) if (byKey[candidates[i]]) return byKey[candidates[i]];
+  return null;
+}
+
+function operationalInventoryPeriodBounds_(periodMonth) {
+  const match = String(periodMonth || "").match(/^(\d{4})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const last = new Date(year, month, 0);
+  return {
+    start: match[1] + "-" + match[2] + "-01",
+    end: year + "-" + String(month).padStart(2, "0") + "-" + String(last.getDate()).padStart(2, "0"),
+  };
+}
+
+function getOperationalInventoryBalances_(options) {
+  const opts = options || {};
+  const materialRows = opts.materialRows || getMaterialMasterRows_();
+  const ledgerRows = opts.ledgerRows || getRowsAsObjects("Inventory_Ledger");
+  const materialIndex = operationalInventoryMaterialIndex_(materialRows);
+  const period = operationalInventoryPeriodBounds_(opts.periodMonth);
+  const asOfDate = String(opts.asOfDate || (period && period.end) || "").slice(0, 10);
+  const byMaterialCode = {};
+  const movementRows = [];
+  const unknownRows = [];
+
+  materialRows.filter(materialRowIsActive_).forEach(function(material) {
+    const materialCode = String(material.materialCode || materialCode_(material.materialName)).trim().toUpperCase();
+    if (!materialCode || byMaterialCode[materialCode]) return;
+    byMaterialCode[materialCode] = {
+      materialId: material.materialId || "",
+      materialCode,
+      materialName: material.materialName || materialCode,
+      category: normalizeMaterialCategoryForLedger_(material.category),
+      qtyIn: 0,
+      qtyOut: 0,
+      balanceKg: 0,
+      openingKg: 0,
+      periodInKg: 0,
+      periodOutKg: 0,
+      movementCount: 0,
+    };
+  });
+
+  ledgerRows.forEach(function(row) {
+    if (!operationalInventoryLedgerRowActive_(row)) return;
+    const date = String(inventoryCutoverRowDate_(row) || "").slice(0, 10);
+    if (asOfDate && date && date > asOfDate) return;
+    const material = operationalInventoryResolveMaterial_(row, materialIndex);
+    const qtyIn = num(row.qtyIn);
+    const qtyOut = num(row.qtyOut);
+    if (!material) {
+      if (Math.abs(qtyIn) + Math.abs(qtyOut) > 0.001) unknownRows.push({
+        ledgerId: row.ledgerId || "", date, module: row.module || "", itemName: row.itemName || row.materialName || "",
+        materialId: row.materialId || "", qtyIn, qtyOut, sourceRef: row.sourceRef || "", targetRef: row.targetRef || "",
+      });
+      return;
+    }
+    const materialCode = String(material.materialCode || materialCode_(material.materialName)).trim().toUpperCase();
+    const balance = byMaterialCode[materialCode];
+    if (!balance) return;
+    balance.qtyIn += qtyIn;
+    balance.qtyOut += qtyOut;
+    balance.balanceKg += qtyIn - qtyOut;
+    balance.movementCount += 1;
+    if (period) {
+      if (date && date < period.start) balance.openingKg += qtyIn - qtyOut;
+      else if (date && date <= period.end) {
+        balance.periodInKg += qtyIn;
+        balance.periodOutKg += qtyOut;
+      }
+    }
+    movementRows.push({
+      ledgerId: row.ledgerId || "", movementIdentity: row.movementIdentity || "", date, module: String(row.module || "").toUpperCase(),
+      movementType: String(row.movementType || "").toUpperCase(), materialId: material.materialId || "", materialCode,
+      materialName: material.materialName || "", category: balance.category, qtyIn, qtyOut,
+      sourceRef: row.sourceRef || "", targetRef: row.targetRef || "", status: row.status || "ACTIVE",
+    });
+  });
+
+  const rows = Object.keys(byMaterialCode).map(function(code) {
+    const row = byMaterialCode[code];
+    Object.keys(row).forEach(function(key) {
+      if (/Kg$|^qty(In|Out)$/.test(key)) row[key] = round2(row[key]);
+    });
+    return row;
+  });
+  return { rows, byMaterialCode, movementRows, unknownRows, activeLedgerRows: movementRows.length };
+}
+
+function ledgerMovementIdentity_(sourceType, sourceId, role, lineIndex, materialCode, direction) {
+  return [sourceType, sourceId, role, Number(lineIndex) + 1, materialCode, direction]
+    .map(function(value) { return String(value || "").trim().toUpperCase().replace(/\s+/g, "_"); })
+    .join("|");
+}
+
+function deterministicLedgerBatchRows_(batch, materialRows) {
+  const materials = materialRows || getMaterialMasterRows_();
+  const counters = { IN: 0, OUT: 0 };
+  return (batch.moves || []).map(function(move) {
+    const direction = String(move.direction || "").toUpperCase();
+    const role = direction === "IN" ? "OUTPUT" : "INPUT";
+    const material = move.materialCode
+      ? resolveMaterialMaster_(move.materialId, move.materialCode)
+      : productionLedgerMove_(materials, { material: move.materialName, qtyKg: move.qtyKg }, direction);
+    const materialCode = String(material.materialCode || materialCode_(material.materialName)).toUpperCase();
+    const lineIndex = counters[direction] || 0;
+    counters[direction] = lineIndex + 1;
+    return {
+      ledgerId: generateBatchId("LED"), date: batch.date, module: batch.stage, movementType: direction,
+      itemType: material.category, materialId: material.materialId, materialCode, itemName: material.materialName,
+      sourceRef: batch.sourceRef || batch.recordId, targetRef: batch.recordId,
+      qtyIn: direction === "IN" ? num(move.qtyKg) : 0, qtyOut: direction === "OUT" ? num(move.qtyKg) : 0,
+      unit: "Kg", remarks: batch.remarks || batch.stage + (direction === "IN" ? " output" : " input"),
+      status: "ACTIVE", createdBy: batch.createdBy || "System", createdAt: new Date(),
+      movementIdentity: ledgerMovementIdentity_(batch.stage, batch.recordId, role, lineIndex, materialCode, direction),
+    };
+  });
+}
+
+function appendDeterministicLedgerBatch_(batch) {
+  const sh = getSheet("Inventory_Ledger");
+  ensureHeaders_("Inventory_Ledger", inventoryLedgerHeaders_());
+  const headers = getHeaders(sh);
+  const existing = {};
+  getRowsAsObjects("Inventory_Ledger").filter(operationalInventoryLedgerRowActive_).forEach(function(row) {
+    if (row.movementIdentity) existing[String(row.movementIdentity)] = true;
+  });
+  const prepared = deterministicLedgerBatchRows_(batch);
+  const rows = prepared.filter(function(row) { return !existing[row.movementIdentity]; });
+  if (rows.length) {
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, headers.length)
+      .setValues(rows.map(function(row) { return headers.map(function(header) { return row[header] !== undefined ? row[header] : ""; }); }));
+  }
+  return { posted: rows.length, skipped: prepared.length - rows.length, identities: prepared.map(function(row) { return row.movementIdentity; }) };
+}
+
+function ledgerPreviewSourceActive_(row, sourceType) {
+  if (!productionAvailabilityActiveRow_(row)) return false;
+  if (sourceType !== "RM_INWARD") return true;
+  return String(row.qcStatus || "").toUpperCase() === "APPROVED" || String(row.status || "").toUpperCase() === "APPROVED";
+}
+
+function ledgerPreviewExpectedBatch_(context, sourceType, sourceId, date, inputs, outputs) {
+  const moves = [];
+  function add(lines, direction) {
+    (lines || []).forEach(function(line) {
+      try {
+        moves.push(productionLedgerMove_(context.materialRows, line, direction));
+      } catch (err) {
+        context.wrongMaterialMovements.push({ sourceType, sourceId, direction, material: line.material || "", quantityKg: num(line.qtyKg), reason: err.message || String(err) });
+      }
+    });
+  }
+  add(inputs, "OUT");
+  add(outputs, "IN");
+  if (!moves.length) {
+    context.sourceTransactionsWithoutLedger.push({ sourceType, sourceId, reason: "No canonical expected movements could be prepared" });
+    return;
+  }
+  deterministicLedgerBatchRows_({ date, stage: sourceType, recordId: sourceId, sourceRef: sourceId, moves }, context.materialRows)
+    .forEach(function(row) {
+      const quantityKg = row.movementType === "IN" ? num(row.qtyIn) : num(row.qtyOut);
+      context.expected.push({
+        movementIdentity: row.movementIdentity, slotIdentity: row.movementIdentity.split("|").filter(function(value, index) { return index !== 4; }).join("|"),
+        sourceType, sourceId, date: normalizeDateOnly_(date || todayYmd()), direction: row.movementType,
+        materialId: row.materialId, materialCode: row.materialCode, materialName: row.itemName,
+        category: row.itemType, quantityKg, qtyIn: num(row.qtyIn), qtyOut: num(row.qtyOut), status: "ACTIVE",
+      });
+    });
+}
+
+function ledgerPreviewBuildExpected_(sources, materialRows) {
+  const context = { materialRows, expected: [], wrongMaterialMovements: [], sourceTransactionsWithoutLedger: [], sourceCounts: {} };
+  function activeRows(name, sourceType) {
+    const rows = (sources[name] || []).filter(function(row) { return ledgerPreviewSourceActive_(row, sourceType); });
+    context.sourceCounts[sourceType] = { total: (sources[name] || []).length, active: rows.length };
+    return rows;
+  }
+
+  activeRows("rmRows", "RM_INWARD").forEach(function(row) {
+    const sourceId = row.inwardId || "";
+    const lines = parseRmMaterialLines_(row.materialLines, row.material, row.quantityKg || row.netWeight).map(function(line) {
+      return { material: line.material, qtyKg: line.quantityKg };
+    });
+    ledgerPreviewExpectedBatch_(context, "RM_INWARD", sourceId, row.date, [], lines);
+  });
+  [
+    ["grinderRows", "GRINDER", "grinderBatchId"], ["washRows", "WASH", "washBatchId"],
+    ["sortingRows", "SORTING", "sortingBatchId"], ["extrusionRows", "EXTRUSION", "extrusionBatchId"],
+  ].forEach(function(config) {
+    activeRows(config[0], config[1]).forEach(function(row) {
+      ledgerPreviewExpectedBatch_(context, config[1], row[config[2]] || row.batchId || "", row.date,
+        productionAvailabilityInputLines_(row, config[1]), productionAvailabilityOutputLines_(row, config[1]));
+    });
+  });
+  activeRows("dispatchRows", "DISPATCH").forEach(function(row) {
+    let lines = parseDispatchLines_(row.dispatchLines || "");
+    if (!lines.length && row.grade && num(row.quantityKg) > 0) lines = [{ grade: row.grade, dispatchQtyKg: row.quantityKg }];
+    const outputs = [];
+    const inputs = lines.map(function(line) {
+      return { material: dispatchLineGrade_(line, row.grade), qtyKg: dispatchLineQty_(line, row.quantityKg) };
+    }).filter(function(line) { return line.material && line.qtyKg > 0; });
+    ledgerPreviewExpectedBatch_(context, "DISPATCH", row.dispatchId || "", row.date, inputs, outputs);
+  });
+  activeRows("adjustmentRows", "INVENTORY_ADJUSTMENT").filter(function(row) {
+    return String(row.status || "").toUpperCase() === "APPROVED";
+  }).forEach(function(row) {
+    const quantityKg = num(row.quantityKg || row.differenceQty);
+    const line = { material: row.itemCode || row.material || row.itemName, qtyKg: Math.abs(quantityKg) };
+    ledgerPreviewExpectedBatch_(context, "INVENTORY_ADJUSTMENT", row.adjustmentId || "", row.date,
+      quantityKg < 0 ? [line] : [], quantityKg > 0 ? [line] : []);
+  });
+  return context;
+}
+
+function ledgerPreviewSourceType_(value) {
+  const sourceType = String(value || "").trim().toUpperCase();
+  if (["SORTER", "COLOR_SORTER", "COLOUR_SORTER"].indexOf(sourceType) !== -1) return "SORTING";
+  if (["INVENTORY_ADJUSTMENTS", "ADJUSTMENT"].indexOf(sourceType) !== -1) return "INVENTORY_ADJUSTMENT";
+  return sourceType;
+}
+
+function ledgerPreviewActualRows_(ledgerRows, materialRows) {
+  const materialIndex = operationalInventoryMaterialIndex_(materialRows);
+  const counters = {};
+  const includedSources = ["RM_INWARD", "GRINDER", "WASH", "SORTING", "EXTRUSION", "DISPATCH", "INVENTORY_ADJUSTMENT", "MONTH_CLOSE"];
+  return (ledgerRows || []).filter(operationalInventoryLedgerRowActive_).filter(function(row) {
+    return includedSources.indexOf(ledgerPreviewSourceType_(row.module)) !== -1;
+  }).map(function(row) {
+    const sourceType = ledgerPreviewSourceType_(row.module);
+    const sourceId = String(row.targetRef || row.sourceRef || "").trim();
+    const direction = String(row.movementType || (num(row.qtyIn) > 0 ? "IN" : "OUT")).trim().toUpperCase();
+    const role = direction === "IN" ? "OUTPUT" : "INPUT";
+    const counterKey = [sourceType, sourceId, role, direction].join("|");
+    const lineIndex = counters[counterKey] || 0;
+    counters[counterKey] = lineIndex + 1;
+    const material = operationalInventoryResolveMaterial_(row, materialIndex);
+    const materialCode = material ? String(material.materialCode || materialCode_(material.materialName)).toUpperCase() : materialCode_(row.itemName || row.materialName || "UNKNOWN");
+    const identity = row.movementIdentity || ledgerMovementIdentity_(sourceType, sourceId, role, lineIndex, materialCode, direction);
+    return {
+      ledgerId: row.ledgerId || "", movementIdentity: identity,
+      slotIdentity: identity.split("|").filter(function(value, index) { return index !== 4; }).join("|"),
+      sourceType, sourceId, direction, materialId: material ? material.materialId : row.materialId || "",
+      materialCode, materialName: material ? material.materialName : row.itemName || row.materialName || "",
+      category: material ? normalizeMaterialCategoryForLedger_(material.category) : normalizeMaterialCategoryForLedger_(row.itemType),
+      quantityKg: direction === "IN" ? num(row.qtyIn) : num(row.qtyOut), qtyIn: num(row.qtyIn), qtyOut: num(row.qtyOut),
+      status: row.status || "ACTIVE", canonical: Boolean(material), sourceRef: row.sourceRef || "", targetRef: row.targetRef || "",
+    };
+  });
+}
+
+function ledgerPreviewBalanceMap_(rows) {
+  const map = {};
+  (rows || []).forEach(function(row) {
+    const code = String(row.materialCode || "UNKNOWN").toUpperCase();
+    if (!map[code]) map[code] = { materialCode: code, materialName: row.materialName || code, qtyIn: 0, qtyOut: 0, balanceKg: 0 };
+    map[code].qtyIn += num(row.qtyIn);
+    map[code].qtyOut += num(row.qtyOut);
+    map[code].balanceKg += num(row.qtyIn) - num(row.qtyOut);
+  });
+  Object.keys(map).forEach(function(code) {
+    map[code].qtyIn = round2(map[code].qtyIn); map[code].qtyOut = round2(map[code].qtyOut); map[code].balanceKg = round2(map[code].balanceKg);
+  });
+  return map;
+}
+
+function getInventoryLedgerRebuildPreview() {
+  const startedAt = Date.now();
+  const materialRows = getMaterialMasterRows_();
+  const sources = {
+    rmRows: getRowsAsObjects("RM_Inward"), grinderRows: getRowsAsObjects("Grinder_Batches"),
+    washRows: getRowsAsObjects("Wash_Batches"), sortingRows: getRowsAsObjects("Sorting_Batches"),
+    extrusionRows: getRowsAsObjects("Extrusion_Batches"), dispatchRows: getRowsAsObjects("Dispatches"),
+    adjustmentRows: getRowsAsObjects("Inventory_Adjustments"),
+  };
+  const actualLedgerSource = getRowsAsObjects("Inventory_Ledger");
+  const expectedContext = ledgerPreviewBuildExpected_(sources, materialRows);
+  const expected = expectedContext.expected;
+  const actual = ledgerPreviewActualRows_(actualLedgerSource, materialRows);
+  const expectedBySlot = {}, actualBySlot = {};
+  expected.forEach(function(row) { expectedBySlot[row.slotIdentity] = row; });
+  actual.forEach(function(row) { if (!actualBySlot[row.slotIdentity]) actualBySlot[row.slotIdentity] = []; actualBySlot[row.slotIdentity].push(row); });
+  const missingMovements = [];
+  const wrongMaterialMovements = expectedContext.wrongMaterialMovements.slice();
+  const wrongQuantityMovements = [];
+  Object.keys(expectedBySlot).forEach(function(slot) {
+    const expectedRow = expectedBySlot[slot];
+    const actualRows = actualBySlot[slot] || [];
+    if (!actualRows.length) { missingMovements.push(expectedRow); return; }
+    const actualRow = actualRows[0];
+    if (actualRow.materialCode !== expectedRow.materialCode) wrongMaterialMovements.push({ expected: expectedRow, actual: actualRow });
+    if (Math.abs(num(actualRow.quantityKg) - num(expectedRow.quantityKg)) > 0.01) wrongQuantityMovements.push({ expected: expectedRow, actual: actualRow });
+  });
+  const extraMovements = actual.filter(function(row) { return !expectedBySlot[row.slotIdentity]; });
+  const duplicateActiveMovements = [];
+  Object.keys(actualBySlot).forEach(function(slot) {
+    if (actualBySlot[slot].length > 1) duplicateActiveMovements.push({ slotIdentity: slot, count: actualBySlot[slot].length, rows: actualBySlot[slot] });
+  });
+  const activeSourceIds = {};
+  Object.keys(sources).forEach(function(key) {
+    (sources[key] || []).forEach(function(row) {
+      if (!productionAvailabilityActiveRow_(row)) return;
+      [row.inwardId, row.grinderBatchId, row.washBatchId, row.sortingBatchId, row.extrusionBatchId, row.dispatchId, row.adjustmentId]
+        .filter(function(value) { return value; }).forEach(function(value) { activeSourceIds[String(value)] = true; });
+    });
+  });
+  const orphanedLedgerMovements = actual.filter(function(row) {
+    return ["RM_INWARD", "GRINDER", "WASH", "SORTING", "EXTRUSION", "DISPATCH", "INVENTORY_ADJUSTMENT", "MONTH_CLOSE"].indexOf(row.sourceType) !== -1 && row.sourceId && !activeSourceIds[row.sourceId];
+  });
+  const actualSourceIds = {};
+  actual.forEach(function(row) { if (row.sourceId) actualSourceIds[row.sourceId] = true; });
+  expected.forEach(function(row) {
+    if (row.sourceId && !actualSourceIds[row.sourceId] && !expectedContext.sourceTransactionsWithoutLedger.some(function(item) { return item.sourceId === row.sourceId; })) {
+      expectedContext.sourceTransactionsWithoutLedger.push({ sourceType: row.sourceType, sourceId: row.sourceId, reason: "No active Inventory_Ledger movement" });
+    }
+  });
+  expectedContext.sourceTransactionsWithoutLedger = expectedContext.sourceTransactionsWithoutLedger.filter(function(item, index, rows) {
+    return rows.findIndex(function(candidate) {
+      return candidate.sourceType === item.sourceType && candidate.sourceId === item.sourceId && candidate.reason === item.reason;
+    }) === index;
+  });
+  const expectedBalances = ledgerPreviewBalanceMap_(expected);
+  const actualBalances = ledgerPreviewBalanceMap_(actual.filter(function(row) { return row.canonical; }));
+  const balanceDifferences = [];
+  const balanceCodes = Object.keys(Object.assign({}, expectedBalances, actualBalances));
+  balanceCodes.forEach(function(code) {
+    const expectedRow = expectedBalances[code] || { balanceKg: 0, qtyIn: 0, qtyOut: 0 };
+    const actualRow = actualBalances[code] || { balanceKg: 0, qtyIn: 0, qtyOut: 0 };
+    const differenceKg = round2(num(actualRow.balanceKg) - num(expectedRow.balanceKg));
+    if (Math.abs(differenceKg) > 0.01) balanceDifferences.push({ materialCode: code, expected: expectedRow, actual: actualRow, differenceKg });
+  });
+  return output({
+    ok: true, readOnly: true, sourceCounts: expectedContext.sourceCounts,
+    actualLedgerRows: actual.length, expectedLedgerRows: expected.length,
+    missingMovements, extraMovements, duplicateActiveMovements, wrongMaterialMovements, wrongQuantityMovements,
+    orphanedLedgerMovements, sourceTransactionsWithoutLedger: expectedContext.sourceTransactionsWithoutLedger,
+    expectedBalances, actualBalances, balanceDifferences, elapsedMs: Date.now() - startedAt,
+  });
+}
+
 function addInventoryLedger(data={}){
 
   const sh=getSheet("Inventory_Ledger");
@@ -12396,7 +12624,7 @@ function addInventoryLedger(data={}){
   ensureHeaders_("Inventory_Ledger",[
       "ledgerId","date",
       "module","movementType",
-      "itemType","materialId","itemName",
+      "itemType","materialId","materialCode","itemName",
       "sourceRef","targetRef",
       "qtyIn","qtyOut",
       "unit","remarks",
@@ -12407,14 +12635,25 @@ function addInventoryLedger(data={}){
       "legacySourceId",
       "legacyMaterialName",
       "migrationId",
-      "migratedAt"
+      "migratedAt","movementIdentity"
   ]);
 
   const material = validateInventoryLedgerMaterial_(data);
 
+  const movementIdentity = data.movementIdentity || ledgerMovementIdentity_(
+    data.module || "LEDGER", data.targetRef || data.sourceRef || data.ledgerId || "UNREFERENCED",
+    String(data.movementType || "").toUpperCase() === "IN" ? "OUTPUT" : "INPUT", data.lineIndex || 0,
+    material.materialCode, data.movementType || ""
+  );
+  const existing = getRowsAsObjects("Inventory_Ledger").find(function(row) {
+    return operationalInventoryLedgerRowActive_(row) && String(row.movementIdentity || "") === movementIdentity;
+  });
+  if (existing) return { posted: false, duplicate: true, ledgerId: existing.ledgerId || "", movementIdentity };
+
+  const ledgerId = data.ledgerId||generateBatchId("LED");
   appendObjectRow(sh,{
 
-      ledgerId:data.ledgerId||generateBatchId("LED"),
+      ledgerId,
 
       date:normalizeDateOnly_(data.date||todayYmd()),
 
@@ -12423,6 +12662,7 @@ function addInventoryLedger(data={}){
 
       itemType:material.category,
       materialId:material.materialId,
+      materialCode:material.materialCode,
       itemName:material.materialName,
 
       sourceRef:data.sourceRef||"",
@@ -12442,10 +12682,11 @@ function addInventoryLedger(data={}){
       legacySourceSheet:data.legacySourceSheet||"",
       legacySourceId:data.legacySourceId||"",
       migrationId:data.migrationId||"",
-      migratedAt:data.migratedAt||""
+      migratedAt:data.migratedAt||"",
+      movementIdentity
 
   });
-
+  return { posted: true, ledgerId, movementIdentity };
 }
 
 function validateInventoryLedgerMaterial_(data = {}) {
@@ -12538,27 +12779,25 @@ function resolveMaterialMaster_(materialId, materialCodeOrName) {
 }
 
 function getInventoryLedgerBalance(){
-    const computed = inventoryCutoverCompute_();
+    const computed = getOperationalInventoryBalances_();
     return output({
         ok: true,
-        cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
         rows: computed.rows.map(function(row) {
           return {
             itemType: row.category,
             materialId: row.materialId,
+            materialCode: row.materialCode,
             itemName: row.materialName,
-            qty: row.operationalBalanceKg,
-            openingMissing: row.openingMissing,
-            approvedOpeningKg: row.approvedOpeningKg,
-            postCutoverInKg: row.postCutoverInKg,
-            postCutoverOutKg: row.postCutoverOutKg,
-            operationalBalanceKg: row.operationalBalanceKg,
+            qty: row.balanceKg,
+            qtyIn: row.qtyIn,
+            qtyOut: row.qtyOut,
           };
         }),
+        unknownRows: computed.unknownRows,
     });
 }
 
-function getInventoryLiveSummary() {
+function getInventoryLiveSummary(data) {
   const startedAt = Date.now();
   const categoryOrder = {
     RM: 1,
@@ -12568,31 +12807,29 @@ function getInventoryLiveSummary() {
     WASTE: 5,
     ADDITIVE: 6,
   };
-  const computed = inventoryCutoverCompute_();
+  const options = data || {};
+  const computed = getOperationalInventoryBalances_({ periodMonth: options.periodMonth || "" });
+  const includeStores = String(options.includeStores || "").toLowerCase() === "true" || options.includeStores === true;
   const rows = computed.rows
+    .filter(function(row) { return includeStores || row.category !== "STORE"; })
     .map(function(row) {
       return {
         materialCode: row.materialCode,
         materialName: row.materialName,
         category: row.category,
-        qtyKg: row.operationalBalanceKg === null ? null : round2(row.operationalBalanceKg),
+        qtyKg: round2(row.balanceKg),
+        openingKg: round2(row.openingKg),
+        periodInKg: round2(row.periodInKg),
+        periodOutKg: round2(row.periodOutKg),
         value: 0,
-        status: row.openingStatus === "OPENING_INSUFFICIENT" ? "OPENING_INSUFFICIENT" : row.openingMissing ? "OPENING_REQUIRED" : row.operationalBalanceKg < 0 ? "RECONCILIATION_REQUIRED" : row.openingStatus,
-        cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
-        approvedOpeningKg: row.approvedOpeningKg,
-        postCutoverInKg: row.postCutoverInKg,
-        postCutoverOutKg: row.postCutoverOutKg,
-        postCutoverAdjustmentKg: row.postCutoverAdjustmentKg,
-        operationalBalanceKg: row.operationalBalanceKg,
-        openingMissing: row.openingMissing,
-        openingStatus: row.openingStatus,
+        status: row.balanceKg < 0 ? "NEGATIVE" : "ACTIVE",
       };
     })
     .sort(function(a, b) {
       return num(categoryOrder[a.category]) - num(categoryOrder[b.category]) ||
         String(a.materialName).localeCompare(String(b.materialName), undefined, { numeric: true });
     });
-  const manualReviewRows = computed.unknownOperationalRows
+  const manualReviewRows = computed.unknownRows
     .map(function(row) {
       return {
         materialCode: "",
@@ -12634,8 +12871,6 @@ function getInventoryLiveSummary() {
     summary,
     rows,
     manualReviewRows,
-    cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
-    openingRequiredCount: rows.filter(function(row) { return row.openingMissing; }).length,
     elapsedMs: Date.now() - startedAt,
   });
 }
@@ -12648,24 +12883,21 @@ function compactInventoryMaterialKey_(value) {
 }
 
 function getInventoryLedgerLiveBalance(data = {}) {
-  const computed = inventoryCutoverCompute_();
+  const computed = getOperationalInventoryBalances_({ periodMonth: data.periodMonth || "" });
   const rows = computed.rows.map(function(row) {
     return {
       material: row.materialName,
       canonicalMaterial: row.materialName,
       category: row.category,
       materialId: row.materialId,
-      qtyIn: row.postCutoverInKg,
-      qtyOut: row.postCutoverOutKg,
-      balanceKg: row.operationalBalanceKg,
-      movementCount: 0,
-      openingMissing: row.openingMissing,
-      openingStatus: row.openingStatus,
-      approvedOpeningKg: row.approvedOpeningKg,
-      cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
+      materialCode: row.materialCode,
+      qtyIn: row.qtyIn,
+      qtyOut: row.qtyOut,
+      balanceKg: row.balanceKg,
+      movementCount: row.movementCount,
     };
   });
-  const manualReviewRows = computed.unknownOperationalRows.map(function(row) {
+  const manualReviewRows = computed.unknownRows.map(function(row) {
     return {
       material: row.itemName,
       canonicalMaterial: "Needs Manual Review",
@@ -12685,11 +12917,9 @@ function getInventoryLedgerLiveBalance(data = {}) {
     ok: true,
     route: "inventoryLedger.liveBalance",
     source: "Inventory_Ledger",
-    cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
     rows,
     manualReviewRows,
     summary,
-    openingRequiredCount: rows.filter(function(row) { return row.openingMissing; }).length,
   });
 }
 
@@ -12946,6 +13176,7 @@ function inventoryLedgerHeaders_() {
     "movementType",
     "itemType",
     "materialId",
+    "materialCode",
     "itemName",
     "sourceRef",
     "targetRef",
@@ -12961,6 +13192,7 @@ function inventoryLedgerHeaders_() {
     "legacyMaterialName",
     "migrationId",
     "migratedAt",
+    "movementIdentity",
   ];
 }
 
@@ -14041,49 +14273,36 @@ function monthCloseControlRoomLedgerContext_(materialRows, ledgerRows, periodMon
     });
   });
 
-  const movements = [];
-  let unknownMovementCount = 0;
-  let unknownMovementKg = 0;
-  ledgerRows.filter(function(row) {
-    const date = inventoryCutoverRowDate_(row);
-    return monthCloseControlRoomRowInPeriod_(row, periodMonth) &&
-      date && date >= REGENOS_INVENTORY_CUTOVER_DATE &&
-      !inventoryCutoverIsOpeningRow_(row) &&
-      !isApprovedLegacyInventoryAlias_(row.itemName || row.materialName);
-  }).forEach(function(row) {
-    const material = [row.materialId, row.materialCode, row.itemName, row.materialName]
-      .map(compactInventoryMaterialKey_)
-      .filter(function(key) { return key; })
-      .map(function(key) { return materialIndex[key]; })
-      .filter(function(match) { return match; })[0];
-    const qtyIn = num(row.qtyIn);
-    const qtyOut = num(row.qtyOut);
-
-    if (!material) {
-      if (Math.abs(qtyIn) + Math.abs(qtyOut) > 0.01) {
-        unknownMovementCount += 1;
-        unknownMovementKg += Math.abs(qtyIn - qtyOut);
-      }
-      return;
-    }
-
-    const category = normalizeMaterialCategoryForLedger_(material.category || row.itemType);
-    movements.push({
-      module: String(row.module || "").trim().toUpperCase(),
-      movementType: String(row.movementType || "").trim().toUpperCase(),
-      materialCode: material.materialCode || "",
-      materialName: material.materialName || row.itemName || "",
-      category,
-      stockKey: monthCloseControlRoomStockKey_(material, category),
-      qtyIn,
-      qtyOut,
-    });
+  const balances = getOperationalInventoryBalances_({ materialRows, ledgerRows, periodMonth });
+  const movements = balances.movementRows.filter(function(row) {
+    return monthCloseControlRoomRowInPeriod_(row, periodMonth);
+  }).map(function(row) {
+    const material = materialIndex[compactInventoryMaterialKey_(row.materialCode)] || {};
+    return {
+      module: row.module, movementType: row.movementType, materialCode: row.materialCode,
+      materialName: row.materialName, category: row.category,
+      stockKey: monthCloseControlRoomStockKey_(material, row.category), qtyIn: row.qtyIn, qtyOut: row.qtyOut,
+    };
   });
+  const stockTotals = {};
+  balances.rows.forEach(function(row) {
+    const material = materialIndex[compactInventoryMaterialKey_(row.materialCode)] || {};
+    const stockKey = monthCloseControlRoomStockKey_(material, row.category);
+    if (!stockKey) return;
+    if (!stockTotals[stockKey]) stockTotals[stockKey] = { openingKg: 0, inKg: 0, outKg: 0, closingKg: 0 };
+    stockTotals[stockKey].openingKg += num(row.openingKg);
+    stockTotals[stockKey].inKg += num(row.periodInKg);
+    stockTotals[stockKey].outKg += num(row.periodOutKg);
+    stockTotals[stockKey].closingKg += num(row.balanceKg);
+  });
+  const unknownMovementKg = balances.unknownRows.reduce(function(sum, row) { return sum + Math.abs(num(row.qtyIn) - num(row.qtyOut)); }, 0);
 
   return {
     materialIndex,
     movements,
-    unknownMovementCount,
+    stockTotals,
+    balances,
+    unknownMovementCount: balances.unknownRows.length,
     unknownMovementKg: round2(unknownMovementKg),
   };
 }
@@ -14288,22 +14507,10 @@ function monthCloseControlRoomAdjustmentContext_(rows) {
 }
 
 function monthCloseControlRoomStockRows_(context) {
-  const totals = {};
-  monthCloseControlRoomStockDefinitions_().forEach(function(definition) {
-    totals[definition.stockKey] = { qtyIn: 0, qtyOut: 0 };
-  });
-  context.ledgerContext.movements.forEach(function(move) {
-    if (!totals[move.stockKey]) return;
-    totals[move.stockKey].qtyIn += num(move.qtyIn);
-    totals[move.stockKey].qtyOut += num(move.qtyOut);
-  });
-
   return monthCloseControlRoomStockDefinitions_().map(function(definition) {
-    const openingKg = context.firstSystemMonth
-      ? 0
-      : monthCloseControlRoomPreviousOpening_(context.previousClose, definition);
-    const movement = totals[definition.stockKey] || { qtyIn: 0, qtyOut: 0 };
-    const systemClosingKg = round2(openingKg + movement.qtyIn - movement.qtyOut);
+    const movement = context.ledgerContext.stockTotals[definition.stockKey] || { openingKg: 0, inKg: 0, outKg: 0, closingKg: 0 };
+    const openingKg = round2(movement.openingKg);
+    const systemClosingKg = round2(movement.closingKg);
     const actualValue = monthCloseControlRoomActualValue_(context.physicalContext, definition);
     const actualKg = actualValue === null ? null : round2(actualValue);
     const differenceKg = actualKg === null ? 0 : round2(actualKg - systemClosingKg);
@@ -14320,8 +14527,8 @@ function monthCloseControlRoomStockRows_(context) {
     return {
       stockType: definition.stockType,
       openingKg: round2(openingKg),
-      inKg: round2(movement.qtyIn),
-      outKg: round2(movement.qtyOut),
+      inKg: round2(movement.inKg),
+      outKg: round2(movement.outKg),
       systemClosingKg,
       actualKg,
       differenceKg,
@@ -19052,6 +19259,7 @@ function setupRegenOSBackend() {
       "movementType",
       "itemType",
       "materialId",
+      "materialCode",
       "itemName",
       "sourceRef",
       "targetRef",
@@ -19067,6 +19275,7 @@ function setupRegenOSBackend() {
       "legacyMaterialName",
       "migrationId",
       "migratedAt",
+      "movementIdentity",
     ],
     Material_Master: [
       "materialId",
@@ -19473,6 +19682,25 @@ function updateInventoryAdjustment(data = {}) {
   );
 }
 
+function postInventoryAdjustmentLedger_(existing, createdBy) {
+  const quantityKg = num(existing.quantityKg || existing.differenceQty);
+  return addInventoryLedger({
+    date: existing.date || todayYmd(),
+    module: "INVENTORY_ADJUSTMENT",
+    movementType: quantityKg >= 0 ? "IN" : "OUT",
+    itemType: existing.itemType || "",
+    itemName: existing.itemCode || existing.material || existing.itemName || "",
+    sourceRef: existing.sourceRef || existing.adjustmentId || "",
+    targetRef: existing.adjustmentId || "",
+    qtyIn: quantityKg > 0 ? quantityKg : 0,
+    qtyOut: quantityKg < 0 ? Math.abs(quantityKg) : 0,
+    unit: "Kg",
+    remarks: "Approved adjustment: " + (existing.adjustmentType || "") + " | " + (existing.reason || ""),
+    createdBy: createdBy || "System",
+    movementIdentity: ledgerMovementIdentity_("INVENTORY_ADJUSTMENT", existing.adjustmentId, quantityKg >= 0 ? "OUTPUT" : "INPUT", 0, materialCode_(existing.itemCode || existing.material || existing.itemName), quantityKg >= 0 ? "IN" : "OUT"),
+  });
+}
+
 function approveInventoryAdjustment(data = {}) {
   ensureInventoryAdjustmentSheet_();
 
@@ -19500,10 +19728,12 @@ function approveInventoryAdjustment(data = {}) {
 
     const status = String(existing.status || "").toUpperCase();
     if (status === "APPROVED") {
+      const repaired = postInventoryAdjustmentLedger_(existing, data.approvedBy || data.createdBy || "System");
       return output({
         ok: true,
         adjustmentId: data.adjustmentId,
         alreadyApproved: true,
+        ledgerPosted: repaired.posted === true || repaired.duplicate === true,
         message: "Adjustment was already approved",
       });
     }
@@ -19518,6 +19748,8 @@ function approveInventoryAdjustment(data = {}) {
       itemName: existing.itemCode || existing.material || existing.itemName || ""
     });
 
+    const ledger = postInventoryAdjustmentLedger_(existing, data.approvedBy || data.createdBy || "System");
+
     updateById("Inventory_Adjustments", "adjustmentId", data.adjustmentId, {
       status: "APPROVED",
       approvedBy: data.approvedBy || data.createdBy || "System",
@@ -19525,28 +19757,10 @@ function approveInventoryAdjustment(data = {}) {
       updatedAt: new Date(),
     });
 
-    addInventoryLedger({
-      date: existing.date || todayYmd(),
-      module: "INVENTORY_ADJUSTMENT",
-      movementType: num(existing.quantityKg) >= 0 ? "IN" : "OUT",
-      itemType: existing.itemType || "",
-      itemName: existing.itemCode || "",
-      sourceRef: existing.sourceRef || "",
-      targetRef: existing.adjustmentId || "",
-      qtyIn: num(existing.quantityKg) > 0 ? num(existing.quantityKg) : 0,
-      qtyOut: num(existing.quantityKg) < 0 ? Math.abs(num(existing.quantityKg)) : 0,
-      unit: "Kg",
-      remarks:
-        "Approved adjustment: " +
-        (existing.adjustmentType || "") +
-        " | " +
-        (existing.reason || ""),
-      createdBy: data.approvedBy || data.createdBy || "System",
-    });
-
     return output({
       ok: true,
       adjustmentId: data.adjustmentId,
+      ledgerPosted: ledger.posted === true || ledger.duplicate === true,
       message: "Adjustment approved and posted to inventory ledger",
     });
   } finally {

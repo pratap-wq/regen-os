@@ -8,6 +8,8 @@
     "build": "vite build",
     "test:dispatch-pricing": "node scripts/dispatch-pricing-test.mjs",
     "test:production-ledger": "node scripts/production-ledger-integrity-test.mjs",
+    "test:production-history-edit": "node scripts/production-ledger-integrity-test.mjs",
+    "test:ledger-rebuild-preview": "node scripts/ledger-rebuild-preview-test.mjs",
     "test:production-availability": "node scripts/production-availability-test.mjs",
     "test:production-flow-integrity": "node scripts/production-flow-integrity-test.mjs",
     "test:inventory-alias": "node scripts/inventory-legacy-alias-test.mjs",

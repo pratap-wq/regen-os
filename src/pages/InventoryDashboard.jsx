@@ -4,172 +4,61 @@ import { apiCall } from "../api/api";
 export default function InventoryDashboard() {
   const now = new Date();
 
-  const [rmRows, setRmRows] = useState([]);
-  const [washRows, setWashRows] = useState([]);
-  const [sortingRows, setSortingRows] = useState([]);
-  const [extrusionRows, setExtrusionRows] = useState([]);
-  const [dispatchRows, setDispatchRows] = useState([]);
-  const [storesInwardRows, setStoresInwardRows] = useState([]);
-  const [storesIssueRows, setStoresIssueRows] = useState([]);
+  const [inventoryRows, setInventoryRows] = useState([]);
+  const [loadError, setLoadError] = useState("");
 
   const [month, setMonth] = useState(
     String(now.getMonth() + 1).padStart(2, "0")
   );
   const [year, setYear] = useState(String(now.getFullYear()));
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  async function safeLoad(fn) {
+  async function loadData() {
     try {
-      const res = await apiCall({ fn });
-      return res.rows || [];
+      setLoadError("");
+      const res = await apiCall({ fn: "inventory.liveSummary", periodMonth: `${year}-${month}`, includeStores: true });
+      if (!res || res.ok !== true) throw new Error(res?.error || "Inventory could not be loaded");
+      setInventoryRows(res.rows || []);
     } catch (err) {
-      console.log(fn, err);
-      return [];
+      setLoadError(err.message || "Inventory could not be loaded");
+      setInventoryRows([]);
     }
   }
 
-  async function loadData() {
-    const [rm, wash, sorting, extrusion, dispatch, storesInward, storesIssue] =
-      await Promise.all([
-        safeLoad("rm.list"),
-        safeLoad("wash.list"),
-        safeLoad("sorting.list"),
-        safeLoad("extrusion.list"),
-        safeLoad("dispatch.list"),
-        safeLoad("storesInward.list"),
-        safeLoad("storesIssue.list"),
-      ]);
-
-    setRmRows(rm);
-    setWashRows(wash);
-    setSortingRows(sorting);
-    setExtrusionRows(extrusion);
-    setDispatchRows(dispatch);
-    setStoresInwardRows(storesInward);
-    setStoresIssueRows(storesIssue);
-  }
-
-  function inSelectedMonth(row) {
-    const d = new Date(row.date || row.createdAt || "");
-    if (isNaN(d.getTime())) return false;
-
-    return (
-      String(d.getFullYear()) === year &&
-      String(d.getMonth() + 1).padStart(2, "0") === month
-    );
-  }
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadData();
+  // Loading is intentionally keyed only by the selected accounting period.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [month, year]);
 
   const data = useMemo(() => {
-    const rm = rmRows.filter(
-      (r) => String(r.status || "").toUpperCase() !== "DELETED"
-    );
-    const wash = washRows.filter(inSelectedMonth);
-    const sorting = sortingRows.filter(inSelectedMonth);
-    const extrusion = extrusionRows.filter(inSelectedMonth);
-    const dispatch = dispatchRows.filter(inSelectedMonth);
-    const storesInward = storesInwardRows.filter(inSelectedMonth);
-    const storesIssue = storesIssueRows.filter(inSelectedMonth);
-
-    const rmPurchased = sum(rm.filter(inSelectedMonth), "netWeight");
-    const rmConsumed = sum(wash, "inputWeightKg");
-
-    const washedOutput = sum(wash, "washedOutputKg");
-    const sortingInput = sum(sorting, "inputWeightKg");
-
-    const sortingAccepted =
-      sum(sorting, "acceptedQtyKg") ||
-      sum(sorting, "whiteSortedKg") +
-        sum(sorting, "allMixSortedKg") +
-        sum(sorting, "whiteGreyKg");
-
-    const extrusionInput = sum(extrusion, "inputWeightKg");
-    const fgProduced = sum(extrusion, "fgOutputKg");
-    const fgDispatched = sum(dispatch, "quantityKg");
-
-    const rmStock = rmPurchased - rmConsumed;
-    const washedStock = washedOutput - sortingInput;
-    const sortingStock = sortingAccepted - extrusionInput;
-    const fgStock = fgProduced - fgDispatched;
-
-    const rmValue = rm
-      .filter(inSelectedMonth)
-      .reduce(
-        (s, r) => s + Number(r.netWeight || 0) * Number(r.ratePerKg || 0),
-        0
-      );
-
-    const avgRmRate = rmPurchased > 0 ? rmValue / rmPurchased : 0;
-    const fgEstimatedValue = fgStock * avgRmRate;
-
-    const storeMap = {};
-
-    storesInward.forEach((r) => {
-      const item = r.itemName || "Unknown";
-
-      if (!storeMap[item]) {
-        storeMap[item] = {
-          itemName: item,
-          category: r.category || "",
-          inwardQty: 0,
-          issueQty: 0,
-          balanceQty: 0,
-          value: 0,
-          minLevel: Number(r.minLevel || 10),
-        };
-      }
-
-      storeMap[item].inwardQty += Number(r.qty || 0);
-      storeMap[item].value += Number(r.totalAmount || 0);
-    });
-
-    storesIssue.forEach((r) => {
-      const item = r.itemName || "Unknown";
-
-      if (!storeMap[item]) {
-        storeMap[item] = {
-          itemName: item,
-          category: r.category || "",
-          inwardQty: 0,
-          issueQty: 0,
-          balanceQty: 0,
-          value: 0,
-          minLevel: 10,
-        };
-      }
-
-      storeMap[item].issueQty += Number(r.qty || 0);
-    });
-
-    const stores = Object.values(storeMap).map((r) => {
-      const balanceQty = r.inwardQty - r.issueQty;
-      const avgRate = r.inwardQty > 0 ? r.value / r.inwardQty : 0;
-      const balanceValue = balanceQty * avgRate;
-
-      let status = "OK";
-      if (balanceQty <= r.minLevel) status = "CRITICAL";
-      else if (balanceQty <= r.minLevel * 1.5) status = "LOW";
-
-      return {
-        ...r,
-        balanceQty,
-        avgRate,
-        balanceValue,
-        status,
-      };
-    });
+    const sumCategory = (category, field) => inventoryRows.filter((row) => row.category === category).reduce((total, row) => total + Number(row[field] || 0), 0);
+    const byCode = Object.fromEntries(inventoryRows.map((row) => [row.materialCode, row]));
+    const rmPurchased = sumCategory("RM", "periodInKg");
+    const rmConsumed = sumCategory("RM", "periodOutKg");
+    const rmStock = sumCategory("RM", "qtyKg");
+    const washed = byCode.WHITE_REGRIND_WASHED || {};
+    const sorted = byCode.WHITE_SORTED_REGRIND || {};
+    const washedOutput = Number(washed.periodInKg || 0);
+    const washedStock = Number(washed.qtyKg || 0);
+    const sortingAccepted = Number(sorted.periodInKg || 0);
+    const sortingStock = Number(sorted.qtyKg || 0);
+    const fgProduced = sumCategory("FG", "periodInKg");
+    const fgDispatched = sumCategory("FG", "periodOutKg");
+    const fgStock = sumCategory("FG", "qtyKg");
+    const stores = inventoryRows.filter((row) => row.category === "STORE").map((row) => ({
+      itemName: row.materialName,
+      category: row.category,
+      inwardQty: Number(row.periodInKg || 0),
+      issueQty: Number(row.periodOutKg || 0),
+      balanceQty: Number(row.qtyKg || 0),
+      minLevel: 0,
+      status: Number(row.qtyKg || 0) < 0 ? "CRITICAL" : "OK",
+    }));
 
     const criticalItems = stores.filter((r) => r.status === "CRITICAL");
     const lowItems = stores.filter((r) => r.status === "LOW");
-    const storesValue = stores.reduce(
-      (s, r) => s + Number(r.balanceValue || 0),
-      0
-    );
-
-    const totalInventoryValue =
-      rmStock * avgRmRate + fgEstimatedValue + storesValue;
+    const storesValue = stores.reduce((s, r) => s + Number(r.balanceQty || 0), 0);
 
     return {
       rmPurchased,
@@ -182,26 +71,15 @@ export default function InventoryDashboard() {
       fgProduced,
       fgDispatched,
       fgStock,
-      rmValue,
-      avgRmRate,
-      fgEstimatedValue,
+      avgRmRate: 0,
+      fgEstimatedValue: 0,
       stores,
       criticalItems,
       lowItems,
       storesValue,
-      totalInventoryValue,
+      totalInventoryValue: inventoryRows.length,
     };
-  }, [
-    rmRows,
-    washRows,
-    sortingRows,
-    extrusionRows,
-    dispatchRows,
-    storesInwardRows,
-    storesIssueRows,
-    month,
-    year,
-  ]);
+  }, [inventoryRows]);
 
   return (
     <div style={page}>
@@ -246,28 +124,30 @@ export default function InventoryDashboard() {
         </div>
       </div>
 
+      {loadError && <div style={{ color: "#991b1b", marginBottom: 16 }}>{loadError}</div>}
+
       <div style={kpiGrid}>
         <KPI title="RM Stock" value={`${ton(data.rmStock)} T`} />
         <KPI title="Washed Stock" value={`${ton(data.washedStock)} T`} />
         <KPI title="Sorting Stock" value={`${ton(data.sortingStock)} T`} />
         <KPI title="FG Stock" value={`${ton(data.fgStock)} T`} />
         <KPI title="Critical Stores" value={data.criticalItems.length} color="#dc2626" />
-        <KPI title="Inventory Value" value={`₹ ${cr(data.totalInventoryValue)} Cr`} />
+        <KPI title="Materials Tracked" value={data.totalInventoryValue} />
       </div>
 
       <div style={twoCol}>
         <Panel title="RM Flow">
-          <Metric label="Purchased" value={`${ton(data.rmPurchased)} T`} />
-          <Metric label="Consumed" value={`${ton(data.rmConsumed)} T`} />
+          <Metric label="Ledger IN" value={`${ton(data.rmPurchased)} T`} />
+          <Metric label="Ledger OUT" value={`${ton(data.rmConsumed)} T`} />
           <Metric label="Closing RM" value={`${ton(data.rmStock)} T`} />
-          <Metric label="Avg RM Rate" value={`₹ ${data.avgRmRate.toFixed(2)}/kg`} />
+          <Metric label="Source" value="Inventory Ledger" />
         </Panel>
 
         <Panel title="FG Flow">
-          <Metric label="Produced" value={`${ton(data.fgProduced)} T`} />
-          <Metric label="Dispatched" value={`${ton(data.fgDispatched)} T`} />
+          <Metric label="Ledger IN" value={`${ton(data.fgProduced)} T`} />
+          <Metric label="Ledger OUT" value={`${ton(data.fgDispatched)} T`} />
           <Metric label="Closing FG" value={`${ton(data.fgStock)} T`} />
-          <Metric label="Estimated FG Value" value={`₹ ${lakh(data.fgEstimatedValue)} L`} />
+          <Metric label="Source" value="Inventory Ledger" />
         </Panel>
       </div>
 
@@ -276,14 +156,14 @@ export default function InventoryDashboard() {
           <Metric label="Stores Items" value={data.stores.length} />
           <Metric label="Low Stock Items" value={data.lowItems.length} color="#d97706" />
           <Metric label="Critical Items" value={data.criticalItems.length} color="#dc2626" />
-          <Metric label="Stores Value" value={`₹ ${lakh(data.storesValue)} L`} />
+          <Metric label="Stores Closing Qty" value={data.storesValue.toFixed(2)} />
         </Panel>
 
         <Panel title="Inventory Health">
           <Status label="RM Stock" ok={data.rmStock > 0} />
           <Status label="FG Stock" ok={data.fgStock >= 0} />
           <Status label="Stores" ok={data.criticalItems.length === 0} />
-          <Status label="Working Capital Lock" ok={data.totalInventoryValue > 0} />
+          <Status label="Ledger Materials" ok={data.totalInventoryValue > 0} />
         </Panel>
       </div>
 
@@ -328,20 +208,8 @@ export default function InventoryDashboard() {
   );
 }
 
-function sum(rows, key) {
-  return rows.reduce((s, r) => s + Number(r[key] || 0), 0);
-}
-
 function ton(kg) {
   return (Number(kg || 0) / 1000).toFixed(1);
-}
-
-function cr(value) {
-  return (Number(value || 0) / 10000000).toFixed(2);
-}
-
-function lakh(value) {
-  return (Number(value || 0) / 100000).toFixed(1);
 }
 
 function KPI({ title, value, color = "#0f766e" }) {

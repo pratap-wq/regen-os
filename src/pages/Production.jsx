@@ -90,7 +90,6 @@ export default function Production() {
     washedRegrindKg: 0,
     sortedRegrindKg: 0,
   });
-  const [processAvailabilityIntegrity, setProcessAvailabilityIntegrity] = useState({});
 
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -111,7 +110,6 @@ export default function Production() {
       setExtrusionRows(res.extrusionRefs || []);
       setInventoryLots(res.inventoryLots || []);
       setProcessAvailability(res.processAvailability || {});
-      setProcessAvailabilityIntegrity(res.processAvailabilityIntegrity || {});
       setMaterialRows(materialData);
       if (!preserveOutputRows) {
         setGrinderOutputRows(defaultOutputRowsFor(materialData, "GRINDER"));
@@ -130,13 +128,11 @@ export default function Production() {
 
   function availabilityCard(field, label) {
     const availableKg = Number(processAvailability?.[field] || 0);
-    const integrity = processAvailabilityIntegrity?.[field] || {};
     return (
       <KpiCard
         title={`${label} Available`}
-        value={integrity.needsReview ? "Availability Needs Review" : `${availableKg.toFixed(0)} Kg`}
-        helper={integrity.needsReview ? integrity.reason : "Available for production entry"}
-        tone={integrity.needsReview ? "warning" : "neutral"}
+        value={`${availableKg.toFixed(0)} Kg`}
+        tone={availableKg < 0 ? "warning" : "neutral"}
       />
     );
   }

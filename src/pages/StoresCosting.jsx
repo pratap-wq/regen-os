@@ -16,10 +16,6 @@ export default function StoresCosting() {
   );
   const [year, setYear] = useState(String(now.getFullYear()));
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
   async function safeLoad(fn) {
     try {
       const res = await apiCall({ fn });
@@ -47,6 +43,10 @@ export default function StoresCosting() {
       setStatus(err.message);
     }
   }
+
+  useEffect(() => {
+    loadData();
+  }, []);
 
   function inSelectedMonth(row) {
     const d = new Date(row.date || row.createdAt || "");

@@ -717,15 +717,6 @@ const statusStyle = {
   fontWeight: 700,
 };
 
-const noteStyle = {
-  background: "#fff7ed",
-  border: "1px solid #fed7aa",
-  padding: 15,
-  borderRadius: 10,
-  marginTop: 20,
-  color: "#7c2d12",
-};
-
 const modalOverlay = {
   position: "fixed",
   inset: 0,

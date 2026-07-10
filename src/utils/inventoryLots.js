@@ -8,7 +8,6 @@ export function buildInventoryLots({
   washRows = [],
   sortingRows = [],
   extrusionRows = [],
-  dispatchRows = [],
 }) {
   const lots = [];
   const GRINDER_OUTPUT_MATERIAL = "White Regrind (Unwashed)";

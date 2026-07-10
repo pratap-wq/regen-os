@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   addFactoryMaster,
   disableFactoryMaster,
@@ -23,6 +23,16 @@ const typeDefaults = {
 
 const emptyDefaults = {};
 
+function initialMasterForm(masterType, defaults, item, defaultStatus) {
+  return {
+    ...(typeDefaults[masterType] || {}),
+    ...(defaults || {}),
+    ...(item || {}),
+    name: item?.name || "",
+    status: item?.status || defaultStatus,
+  };
+}
+
 export default function FactoryMasterModal({
   masterType,
   title,
@@ -34,25 +44,14 @@ export default function FactoryMasterModal({
   onClose,
   onSaved,
 }) {
-  const [form, setForm] = useState({});
-  const [mode, setMode] = useState(item ? "edit" : "add");
+  const [form, setForm] = useState(() =>
+    initialMasterForm(masterType, defaults, item, defaultStatus)
+  );
+  const mode = item ? "edit" : "add";
   const [mergeIntoId, setMergeIntoId] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const saveLockRef = useRef(false);
-
-  useEffect(() => {
-    setForm({
-      ...(typeDefaults[masterType] || {}),
-      ...(defaults || {}),
-      ...(item || {}),
-      name: item?.name || "",
-      status: item?.status || defaultStatus,
-    });
-    setMode(item ? "edit" : "add");
-    setMergeIntoId("");
-    setMessage("");
-  }, [item, masterType, defaults, defaultStatus]);
 
   const mergeTargets = useMemo(
     () => items.filter((x) => x.id && x.id !== item?.id),
@@ -153,7 +152,7 @@ export default function FactoryMasterModal({
             <h3 style={{ margin: 0 }}>{title || "Factory Master"}</h3>
             <div style={subtle}>Add, edit, disable or merge without leaving this transaction.</div>
           </div>
-          <button type="button" onClick={onClose} disabled={saving} style={ghostButton}>×</button>
+          <button type="button" onClick={onClose} disabled={saving} style={ghostButton} aria-label="Close">×</button>
         </div>
 
         <div style={grid}>

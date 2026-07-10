@@ -169,10 +169,6 @@ function doGet(e) {
     if (p.fn === "factoryCostMaster.add") return addFactoryCostMaster(p);
     if (p.fn === "factoryCostMaster.list") return listMaster("Factory_Cost_Master");
     if (p.fn === "factoryCostMaster.update") return updateFactoryCostMaster(p);
-   // Factory Cost Master
-if (p.fn === "factoryCostMaster.add") return addFactoryCostMaster(p);
-if (p.fn === "factoryCostMaster.list") return listMaster("Factory_Cost_Master");
-if (p.fn === "factoryCostMaster.update") return updateFactoryCostMaster(p);
 
     // Stores / Consumables
     if (p.fn === "storesMaster.add") return addStoresMaster(p);
@@ -449,54 +445,6 @@ function validateMonthClosePayload_(data) {
     error: blockers.length ? "Month cannot be closed: " + blockers.slice(0, 5).join("; ") : "",
   };
 }
-function addFactoryCostMaster(data = {}) {
-  const sh = getSheet("Factory_Cost_Master");
-
-  ensureHeaders_("Factory_Cost_Master", [
-    "costId",
-    "periodMonth",
-    "costHead",
-    "amount",
-    "allocationType",
-    "remarks",
-    "status",
-    "createdBy",
-    "createdAt",
-  ]);
-
-  const costId = data.costId || generateBatchId("FCM");
-  validateOperationalWrite_(data);
-
-  appendObjectRow(sh, {
-    costId,
-    periodMonth: data.periodMonth || getPeriodMonth(todayYmd()),
-    costHead: data.costHead || "",
-    amount: num(data.amount),
-    allocationType: data.allocationType || "FIXED",
-    remarks: data.remarks || "",
-    status: data.status || "ACTIVE",
-    createdBy: data.createdBy || "System",
-    createdAt: new Date(),
-  });
-
-  return output({ ok: true, costId });
-}
-
-function updateFactoryCostMaster(data = {}) {
-  validateOperationalWrite_(
-    data,
-    getRowById_("Factory_Cost_Master", "costId", data.costId)
-  );
-
-  return updateById("Factory_Cost_Master", "costId", data.costId, {
-    periodMonth: data.periodMonth || "",
-    costHead: data.costHead || "",
-    amount: num(data.amount),
-    allocationType: data.allocationType || "",
-    remarks: data.remarks || "",
-    status: data.status || "",
-  });
-}
     // Quality
     if (p.fn === "quality.rm.add") return addRmQuality(p);
     if (p.fn === "quality.rm.list") return listMaster("RM_Quality");
@@ -529,7 +477,6 @@ function updateFactoryCostMaster(data = {}) {
     if (p.fn === "inventoryLedger.audit") return auditInventoryLedger(p);
     if (p.fn === "inventoryLedger.rebuild") return rebuildInventoryLedger(p);
     if (p.fn === "materialNormalization.preview") return output(previewSpreadsheetMaterialNormalization(p));
-    if (p.fn === "health.check") return output(buildHealthCheck_(p));
     if (p.fn === "systemHealth.deepCheck") return output(systemHealthConnectivity(p));
     if (p.fn === "systemHealth.connectivity") return output(systemHealthConnectivity(p));
     if (p.fn === "materialFlow.auditJune2026") return auditJuneMaterialFlowV1(p);

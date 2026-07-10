@@ -1,4 +1,4 @@
-import { dispatchRevenue } from "./dispatchPricing";
+import { dispatchRevenue } from "./dispatchPricing.js";
 
 export function calculateMonthClose({
   rmRows = [],
@@ -349,10 +349,6 @@ function isBatteryMaterial(label) {
 
 function isAdditiveMaterial(label) {
   return /MASTER\s*BATCH|MASTERBATCH|ANTIOXIDANT|ANTI\s*OXIDANT|MFI\s*MODIFIER|TIO2|TI\s*O2|ADDITIVE/.test(String(label || "").toUpperCase());
-}
-
-function isExcludedFromRecycledRm(label) {
-  return isVirginMaterial(label) || isBatteryMaterial(label) || isAdditiveMaterial(label);
 }
 
 function materialLabel(value) {

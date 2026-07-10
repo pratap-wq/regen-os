@@ -38,12 +38,6 @@ export default function AlertCenter() {
     setStoresIssueRows,
   ] = useState([]);
 
-  useEffect(() => {
-
-    loadData();
-
-  }, []);
-
   async function safeLoad(
     fnName
   ) {
@@ -136,6 +130,12 @@ export default function AlertCenter() {
 
   }
 
+  useEffect(() => {
+
+    loadData();
+
+  }, []);
+
   const inventory =
     useMemo(() => {
 
@@ -165,17 +165,6 @@ export default function AlertCenter() {
       storesIssueRows,
 
     ]);
-
-  useEffect(() => {
-
-    generateAlerts();
-
-  }, [
-
-    inventory,
-    settings,
-
-  ]);
 
   function generateAlerts() {
 
@@ -340,6 +329,17 @@ export default function AlertCenter() {
     );
 
   }
+
+  useEffect(() => {
+
+    generateAlerts();
+
+  }, [
+
+    inventory,
+    settings,
+
+  ]);
 
   return (
 

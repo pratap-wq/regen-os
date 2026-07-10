@@ -19,7 +19,9 @@ function readList(masterType, suffix) {
 function writeList(masterType, suffix, values) {
   try {
     localStorage.setItem(storageKey(masterType, suffix), JSON.stringify(values));
-  } catch {}
+  } catch {
+    return;
+  }
 }
 
 export function getRecentMasterItems(masterType) {
@@ -180,22 +182,6 @@ function normalizeMasterRows(masterType, rows = []) {
   });
 }
 
-function mergeMasterRows(primaryRows = [], fallbackRows = []) {
-  const map = new Map();
-
-  [...primaryRows, ...fallbackRows].forEach((row) => {
-    const key = String(row.name || row.materialName || row.code || "").trim().toUpperCase();
-    if (!key || map.has(key)) return;
-    map.set(key, row);
-  });
-
-  return Array.from(map.values()).sort((a, b) =>
-    String(a.name || "").localeCompare(String(b.name || ""), undefined, {
-      numeric: true,
-    })
-  );
-}
-
 function collapseBucketMaterialRows(rows = []) {
   const map = new Map();
   rows.forEach((row) => {
@@ -237,12 +223,4 @@ function canonicalBucketMaterialName(value) {
     return "White Buckets";
   }
   return String(value || "").trim();
-}
-
-function materialCode(value) {
-  return String(value || "")
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
 }

@@ -254,6 +254,7 @@ export default function FactoryMasters() {
 
       {(adding || editing) && (
         <FactoryMasterModal
+          key={`${selectedKey}:${editing?.id || "new"}`}
           masterType={selectedKey}
           title={`${editing ? "Edit" : "Add"} ${selectedConfig.label}`}
           item={editing}

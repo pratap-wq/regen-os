@@ -57,13 +57,13 @@ vm.runInContext(
 
 const liveSummary = evaluate("getInventoryLiveSummary()");
 const liveWhiteBuckets = liveSummary.rows.find((row) => row.materialName === "White Buckets");
-assert.equal(liveWhiteBuckets.qtyKg, null);
-assert.equal(liveWhiteBuckets.status, "OPENING_REQUIRED");
+assert.equal(liveWhiteBuckets.qtyKg, -120);
+assert.equal(liveWhiteBuckets.status, "NEGATIVE");
 assert.equal(liveSummary.manualReviewRows.length, 2);
 
 const ledgerBalance = evaluate("getInventoryLedgerBalance()");
 const ledgerWhiteBuckets = ledgerBalance.rows.find((row) => row.itemName === "White Buckets");
-assert.equal(ledgerWhiteBuckets.qty, null);
+assert.equal(ledgerWhiteBuckets.qty, -120);
 
 const cutoverPreview = evaluate("getInventoryCutoverPreview({})");
 const previewWhiteBuckets = cutoverPreview.rows.find((row) => row.materialName === "White Buckets");

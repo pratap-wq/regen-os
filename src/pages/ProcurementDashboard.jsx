@@ -8,14 +8,14 @@ export default function ProcurementDashboard() {
   const [month, setMonth] = useState(String(now.getMonth() + 1).padStart(2, "0"));
   const [year, setYear] = useState(String(now.getFullYear()));
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
   async function loadData() {
     const res = await apiCall({ fn: "rm.list" });
     setRows((res.rows || []).filter((r) => String(r.status || "").toUpperCase() !== "DELETED"));
   }
+
+  useEffect(() => {
+    loadData();
+  }, []);
 
   function n(v) {
     return Number(v || 0);
@@ -100,7 +100,7 @@ export default function ProcurementDashboard() {
           avgContamination,
           avgRecovery,
           effectiveCost,
-          grade: gradeSupplier(avgRecovery, avgContamination, effectiveCost),
+          grade: gradeSupplier(avgRecovery, avgContamination),
         };
       })
       .sort((a, b) => a.effectiveCost - b.effectiveCost);
@@ -252,7 +252,7 @@ export default function ProcurementDashboard() {
   );
 }
 
-function gradeSupplier(recovery, contamination, effectiveCost) {
+function gradeSupplier(recovery, contamination) {
   if (recovery >= 90 && contamination <= 3) return "Very Good";
   if (recovery >= 85 && contamination <= 6) return "Good";
   if (recovery >= 78 && contamination <= 10) return "Average";

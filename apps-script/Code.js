@@ -111,6 +111,7 @@ function doGet(e) {
     if (p.fn === "production.historySummary") return getProductionHistorySummary(p);
     if (p.fn === "production.historyRecord") return getProductionHistoryRecord(p);
     if (p.fn === "productionLedger.audit") return auditProductionLedger(p);
+    if (p.fn === "productionLedger.repairDeletedSources") return repairDeletedProductionLedgerSources(p);
     if (p.fn === "production.flowIntegrityAudit") return getProductionFlowIntegrityAudit(p);
     if (p.fn === "inventory.reconciliationPreview") return getInventoryReconciliationPreview(p);
     if (p.fn === "production.entryBootstrap") return getProductionEntryBootstrap(p);
@@ -666,6 +667,7 @@ function debugRoutes() {
       "production.historySummary",
       "production.historyRecord",
       "productionLedger.audit",
+      "productionLedger.repairDeletedSources",
       "production.flowIntegrityAudit",
       "inventory.reconciliationPreview",
       "production.entryBootstrap",
@@ -17627,6 +17629,166 @@ function auditProductionLedger(data = {}) {
         : "No negative manufacturing material balances found in the selected scope.",
     },
   });
+}
+
+function productionLedgerDeletedSourceIndex_() {
+  const configs = [
+    { sheetName: "Grinder_Batches", idFields: ["grinderBatchId", "batchId"], modules: ["GRINDER"] },
+    { sheetName: "Wash_Batches", idFields: ["washBatchId", "batchId"], modules: ["WASH"] },
+    { sheetName: "Sorting_Batches", idFields: ["sortingBatchId", "batchId"], modules: ["SORTING", "COLOR_SORTER", "COLOUR_SORTER", "COLOUR SORTER"] },
+    { sheetName: "Extrusion_Batches", idFields: ["extrusionBatchId", "batchId"], modules: ["EXTRUSION"] },
+  ];
+  const index = {};
+  const deletedSources = [];
+
+  configs.forEach(function(config) {
+    getRowsAsObjects(config.sheetName).forEach(function(row) {
+      if (String(row.status || "").trim().toUpperCase() !== "DELETED") return;
+      const sourceId = config.idFields.map(function(field) { return String(row[field] || "").trim(); })
+        .filter(Boolean)[0] || "";
+      if (!sourceId) return;
+      config.modules.forEach(function(moduleName) { index[moduleName + "|" + sourceId] = true; });
+      deletedSources.push({ sheetName: config.sheetName, sourceId });
+    });
+  });
+
+  return { index, deletedSources };
+}
+
+function productionLedgerDeletedSourceMatch_(row, deletedSourceIndex) {
+  if (!productionLedgerRowActive_(row)) return false;
+  const moduleName = String(row.module || "").trim().toUpperCase();
+  const sourceId = productionLedgerRecordId_(row);
+  return Boolean(sourceId && deletedSourceIndex[moduleName + "|" + sourceId]);
+}
+
+function productionLedgerDeletedSourceCandidates_(ledgerRows, deletedSourceIndex) {
+  return ledgerRows.filter(function(row) {
+    return productionLedgerDeletedSourceMatch_(row, deletedSourceIndex);
+  });
+}
+
+function productionLedgerDeletedSourceSummary_(candidates) {
+  const sourceIds = {};
+  let qtyIn = 0;
+  let qtyOut = 0;
+  candidates.forEach(function(row) {
+    const sourceId = productionLedgerRecordId_(row);
+    if (sourceId) sourceIds[sourceId] = true;
+    qtyIn += num(row.qtyIn);
+    qtyOut += num(row.qtyOut);
+  });
+  return {
+    ledgerRowsMatched: candidates.length,
+    sourceRecordsMatched: Object.keys(sourceIds).length,
+    sourceIds: Object.keys(sourceIds).sort(),
+    qtyInKg: round2(qtyIn),
+    qtyOutKg: round2(qtyOut),
+    netInventoryImpactKg: round2(qtyIn - qtyOut),
+    ledgerIds: candidates.map(function(row) { return row.ledgerId || ""; }).filter(Boolean).slice(0, 200),
+  };
+}
+
+function repairDeletedProductionLedgerSources(data = {}) {
+  const startedAt = Date.now();
+  const dryRun = data.dryRun === undefined
+    ? true
+    : String(data.dryRun).trim().toLowerCase() !== "false";
+  const requiredConfirmation = "VOID_DELETED_PRODUCTION_LEDGER_ROWS";
+  if (!dryRun && String(data.confirmation || "") !== requiredConfirmation) {
+    return output({
+      ok: false,
+      route: "productionLedger.repairDeletedSources",
+      dryRun: false,
+      error: "Exact confirmation is required before voiding ledger rows.",
+      requiredConfirmation,
+    });
+  }
+
+  const lock = LockService.getScriptLock();
+  if (!dryRun && !lock.tryLock(30000)) {
+    return output({ ok: false, route: "productionLedger.repairDeletedSources", dryRun: false, error: "Another RegenOS write is in progress." });
+  }
+
+  try {
+    const deleted = productionLedgerDeletedSourceIndex_();
+    const ledgerSheet = getSheet("Inventory_Ledger");
+    const values = ledgerSheet.getDataRange().getValues();
+    const headers = values.length ? values[0].map(function(value) { return String(value || "").trim(); }) : [];
+    const ledgerRows = values.slice(1).map(function(valuesRow, index) {
+      const row = { __sheetRow: index + 2 };
+      headers.forEach(function(header, columnIndex) { row[header] = valuesRow[columnIndex]; });
+      return row;
+    });
+    const candidates = productionLedgerDeletedSourceCandidates_(ledgerRows, deleted.index);
+    const summary = productionLedgerDeletedSourceSummary_(candidates);
+
+    if (dryRun) {
+      return output({
+        ok: true,
+        route: "productionLedger.repairDeletedSources",
+        readOnly: true,
+        dryRun: true,
+        generatedAt: new Date().toISOString(),
+        deletedOperationalSourceCount: deleted.deletedSources.length,
+        summary,
+        rows: candidates.slice(0, 200).map(productionLedgerAuditRow_),
+        requiredConfirmation,
+        message: candidates.length
+          ? "Dry run complete. Matching ledger rows can be safely voided after confirmation."
+          : "Dry run complete. No active ledger rows reference deleted production sources.",
+        elapsedMs: Date.now() - startedAt,
+      });
+    }
+
+    if (!candidates.length) {
+      return output({
+        ok: true,
+        route: "productionLedger.repairDeletedSources",
+        dryRun: false,
+        idempotent: true,
+        backupSheetName: "",
+        summary,
+        message: "No active ledger rows reference deleted production sources. Nothing changed.",
+        elapsedMs: Date.now() - startedAt,
+      });
+    }
+
+    ensureHeaders_("Inventory_Ledger", inventoryLedgerHeaders_());
+    const refreshedHeaders = getHeaders(ledgerSheet);
+    const statusColumn = refreshedHeaders.indexOf("status") + 1;
+    const remarksColumn = refreshedHeaders.indexOf("remarks") + 1;
+    if (!statusColumn || !remarksColumn) throw new Error("Inventory_Ledger status/remarks columns are missing");
+
+    const backupSheetName = backupInventoryLedger_(getSpreadsheet_(), ledgerSheet);
+    const repairedAt = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+    candidates.forEach(function(row) {
+      const existingRemarks = String(row.remarks || "").trim();
+      const repairNote = "Voided " + repairedAt + " by productionLedger.repairDeletedSources because source production record is DELETED.";
+      ledgerSheet.getRange(row.__sheetRow, statusColumn).setValue("VOIDED");
+      ledgerSheet.getRange(row.__sheetRow, remarksColumn).setValue(existingRemarks ? existingRemarks + " | " + repairNote : repairNote);
+    });
+
+    return output({
+      ok: true,
+      route: "productionLedger.repairDeletedSources",
+      dryRun: false,
+      backupSheetName,
+      summary,
+      message: "Deleted-source production ledger rows were voided safely. Operational records were not changed.",
+      elapsedMs: Date.now() - startedAt,
+    });
+  } catch (err) {
+    return output({
+      ok: false,
+      route: "productionLedger.repairDeletedSources",
+      dryRun,
+      error: err.message || String(err),
+      elapsedMs: Date.now() - startedAt,
+    });
+  } finally {
+    if (!dryRun) lock.releaseLock();
+  }
 }
 
 function productionLedgerRowActive_(row) {

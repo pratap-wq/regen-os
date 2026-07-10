@@ -55,6 +55,23 @@ assert.equal(audit.operationalDuplicateBatchIdCount, 1);
 assert.equal(audit.negativeBalanceAffectedBatchIdCount, 1);
 assert.deepEqual(Array.from(audit.affectedBatchIds), ["WB-1", "EX-DUP"]);
 
+context.__deletedIndex = { "GRINDER|GB-DELETED": true };
+context.__deletedLedgerRows = [
+  { ledgerId: "DG-1", module: "GRINDER", targetRef: "GB-DELETED", qtyIn: 0, qtyOut: 50, status: "ACTIVE" },
+  { ledgerId: "DG-2", module: "GRINDER", targetRef: "GB-DELETED", qtyIn: 45, qtyOut: 0, status: "ACTIVE" },
+  { ledgerId: "DG-3", module: "GRINDER", targetRef: "GB-DELETED", qtyIn: 1, qtyOut: 0, status: "VOIDED" },
+  { ledgerId: "WG-1", module: "WASH", targetRef: "GB-DELETED", qtyIn: 40, qtyOut: 0, status: "ACTIVE" },
+];
+const deletedCandidates = evaluate("productionLedgerDeletedSourceCandidates_(__deletedLedgerRows, __deletedIndex)");
+assert.deepEqual(Array.from(deletedCandidates, (row) => row.ledgerId), ["DG-1", "DG-2"]);
+context.__deletedCandidates = deletedCandidates;
+const deletedSummary = evaluate("productionLedgerDeletedSourceSummary_(__deletedCandidates)");
+assert.equal(deletedSummary.ledgerRowsMatched, 2);
+assert.equal(deletedSummary.sourceRecordsMatched, 1);
+assert.equal(deletedSummary.qtyInKg, 45);
+assert.equal(deletedSummary.qtyOutKg, 50);
+assert.equal(deletedSummary.netInventoryImpactKg, -5);
+
 context.__events = [];
 context.__updateData = {};
 vm.runInContext(`
@@ -95,4 +112,4 @@ assert.equal(deleteUpdate.deleted, true);
 assert.equal(deleteUpdate.ledgerVoided, true);
 assert.deepEqual(Array.from(context.__events), ["void", "operational"]);
 
-console.log("Production ledger integrity regression checks passed (18/18).");
+console.log("Production ledger integrity regression checks passed (25/25).");

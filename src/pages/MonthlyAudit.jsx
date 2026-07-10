@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
-import { calculateMonthClose } from "../services/monthCloseEngine";
-import { getPhysicalCount, savePhysicalCount } from "../services/physicalCountService";
+import { calculateControlRoomDifferenceValue } from "../services/monthCloseEngine";
+import { savePhysicalCount } from "../services/physicalCountService";
 
 const MANUFACTURING_GROUPS = ["RM", "VIRGIN", "BATTERY", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"];
 const FIRST_SYSTEM_CLOSE_MONTH = "2026-06";
@@ -13,22 +13,7 @@ export default function MonthlyAudit() {
   );
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
-  const [rows, setRows] = useState({
-    rm: [],
-    wash: [],
-    sorting: [],
-    extrusion: [],
-    dispatch: [],
-    storesInward: [],
-    storesIssue: [],
-    factoryExpenses: [],
-    factoryCostMaster: [],
-    storesMaster: [],
-    adjustments: [],
-    closeRows: [],
-    materials: [],
-  });
-  const [materialGroupView, setMaterialGroupView] = useState(null);
+  const [controlRoom, setControlRoom] = useState(() => emptyControlRoom(month));
   const [physical, setPhysical] = useState({
     storesPhysicalValue: "",
     productionSignoff: "",
@@ -49,140 +34,61 @@ export default function MonthlyAudit() {
     loadAll();
   }, [month]);
 
-  async function safeLoad(fn, extra = {}) {
-    try {
-      const res = await apiCall({ fn, ...extra });
-      return res?.rows || [];
-    } catch (err) {
-      console.log(fn, err);
-      return [];
-    }
-  }
-
-  async function safeCall(fn, extra = {}) {
-    try {
-      return await apiCall({ fn, ...extra });
-    } catch (err) {
-      console.log(fn, err);
-      return null;
-    }
-  }
-
   async function loadAll() {
     setLoading(true);
     setStatus("");
+    try {
+      const res = await monthCloseControlRoomCall(month);
+      if (!res || res.ok === false) {
+        const step = res?.failedStep ? ` (${res.failedStep})` : "";
+        throw new Error((res?.error || "Month Close failed to load") + step);
+      }
 
-    const [
-      rm,
-      wash,
-      sorting,
-      extrusion,
-      dispatch,
-      storesInward,
-      storesIssue,
-      factoryExpenses,
-      factoryCostMaster,
-      storesMaster,
-      adjustments,
-      closeRows,
-      materials,
-      materialGroups,
-      physicalCount,
-    ] = await Promise.all([
-      safeLoad("rm.list"),
-      safeLoad("wash.list"),
-      safeLoad("sorting.list"),
-      safeLoad("extrusion.list"),
-      safeLoad("dispatch.list"),
-      safeLoad("storesInward.list"),
-      safeLoad("storesIssue.list"),
-      safeLoad("factoryExpenses.list"),
-      safeLoad("factoryCostMaster.list"),
-      safeLoad("storesMaster.list"),
-      safeLoad("inventoryAdjustments.list", { periodMonth: month }),
-      safeLoad("monthClose.list"),
-      safeLoad("materialMaster.list"),
-      safeCall("monthClose.materialGroups", { periodMonth: month }),
-      safeCall("physicalCounts.get", { periodMonth: month }),
-    ]);
-
-    setRows({
-      rm,
-      wash,
-      sorting,
-      extrusion,
-      dispatch,
-      storesInward,
-      storesIssue,
-      factoryExpenses,
-      factoryCostMaster,
-      storesMaster,
-      adjustments,
-      closeRows,
-      materials,
-    });
-    setMaterialGroupView(materialGroups?.ok ? materialGroups : null);
-
-    if (physicalCount?.ok && physicalCount.row) {
+      setControlRoom(res);
+      const nextPhysicalLines = {};
+      const nextReasons = {};
+      (res.stockRows || []).forEach((row) => {
+        const config = controlRoomStockConfig(row.stockType);
+        nextPhysicalLines[config.key] = row.actualKg === null || row.actualKg === undefined ? "" : row.actualKg;
+        nextReasons[config.key] = row.reason || "";
+      });
+      setPhysicalMaterialLines(nextPhysicalLines);
+      setAdjustmentReasons(nextReasons);
       setPhysical((prev) => ({
         ...prev,
-        storesPhysicalValue: physicalCount.row.storesPhysicalValue ?? "",
-        productionSignoff: physicalCount.row.productionSignoff ?? "",
-        storesSignoff: physicalCount.row.storesSignoff ?? "",
-        accountsSignoff: physicalCount.row.accountsSignoff ?? "",
-        qcSignoff: physicalCount.row.qcSignoff ?? "",
-        ceoSignoff: physicalCount.row.ceoSignoff || "Pratap",
-        remarks: physicalCount.row.remarks ?? "",
+        productionSignoff: res.signoffs?.production || "",
+        storesSignoff: res.signoffs?.stores || "",
+        accountsSignoff: res.signoffs?.accounts || "",
+        ceoSignoff: res.signoffs?.ceo || "Pratap",
+        remarks: res.signoffs?.remarks || "",
       }));
-      setPhysicalMaterialLines(parsePhysicalMaterialLines(physicalCount.row.materialPhysicalLinesJson));
-    } else {
-      setPhysicalMaterialLines({});
+      return res;
+    } catch (err) {
+      console.log("monthClose.controlRoom", err);
+      setStatus(err.message || "Month Close failed to load.");
+      return null;
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   }
 
-  const close = useMemo(
-    () =>
-      calculateMonthClose({
-        rmRows: rows.rm,
-        washRows: rows.wash,
-        sortingRows: rows.sorting,
-        extrusionRows: rows.extrusion,
-        dispatchRows: rows.dispatch,
-        storesIssueRows: rows.storesIssue,
-        factoryExpenseRows: rows.factoryExpenses,
-        factoryCostMasterRows: rows.factoryCostMaster,
-        storesMasterRows: rows.storesMaster,
-        periodMonth: month,
-      }),
-    [rows, month]
-  );
-
+  const productionSummary = controlRoom.productionSummary || {};
+  const moneySummary = controlRoom.moneySummary || {};
+  const closeStatus = controlRoom.closeStatus || {};
   const materialLines = useMemo(
-    () => buildFactoryFlowStockRows({ close, rows, physicalMaterialLines, month }),
-    [close, rows, physicalMaterialLines, month]
+    () => buildControlRoomStockLines(controlRoom, physicalMaterialLines),
+    [controlRoom, physicalMaterialLines]
   );
-  const rmStockLine = materialLines.find((line) => line.key === "FLOW|RM");
-  const virginStockLine = materialLines.find((line) => line.key === "FLOW|VIRGIN_POLYMER");
-  const batteryStockLine = materialLines.find((line) => line.key === "FLOW|BATTERY_MATERIAL");
-  const wipStockLine = materialLines.find((line) => line.key === "FLOW|WIP");
-  const wasteReworkStockLine = materialLines.find((line) => line.key === "FLOW|WASTE_REWORK");
-  const openingDebug = getOpeningDebug(rows.closeRows, month);
-  const rmReceivedProofKg =
-    num(close.rm.totalReceivedKg) -
-    num(close.production.virginReceivedKg) -
-    num(close.production.batteryReceivedKg) -
-    num(close.production.additivesReceivedKg);
-  const rmReceivedProofDifferenceKg = rmReceivedProofKg - num(close.rm.purchasedKg);
-
-  const monthClosed = useMemo(
-    () =>
-      rows.closeRows.some(
-        (r) => String(r.periodMonth || "") === String(month) && String(r.status || "").toUpperCase() === "CLOSED"
-      ),
-    [rows.closeRows, month]
-  );
+  const openingDebug = {
+    periodMonth: closeStatus.previousClosedMonth || "",
+    isFirstSystemMonth: Boolean(closeStatus.firstSystemMonth),
+    rule: closeStatus.firstSystemMonth
+      ? "Opening is zero for first system month"
+      : closeStatus.previousClosedMonth
+      ? "Opening comes from previous approved system close"
+      : "Immediate previous system close required",
+  };
+  const monthClosed = Boolean(closeStatus.isClosed);
 
   const readiness = useMemo(() => {
     const physicalPending = materialLines.filter((line) => !line.hasPhysical).length;
@@ -191,9 +97,9 @@ export default function MonthlyAudit() {
     const approvalPending = materialLines.filter((line) => line.statusType === "warning").length;
     const differenceLines = materialLines.filter((line) => line.statusType === "danger");
     const differenceReasonPending = differenceLines.filter((line) => !String(adjustmentReasons[line.key] || "").trim()).length;
-    const productionDone = close.production.washInputKg > 0 && close.production.fgProducedKg > 0;
-    const dispatchDone = close.production.dispatchKg > 0;
-    const expensesEntered = close.costs.factoryExpenseValue > 0 || close.costs.storesIssueValue > 0;
+    const productionDone = num(productionSummary.totalExtruderFeedKg) > 0 && num(productionSummary.fgProducedKg) > 0;
+    const dispatchDone = num(productionSummary.dispatchedKg) > 0;
+    const expensesEntered = num(moneySummary.factoryExpenses) > 0 || num(moneySummary.storesCost) > 0;
     const physicalDone = materialLines.length > 0 && physicalPending === 0;
     const openingOk = openingPending === 0 && openingBlocked === 0;
     const differencesResolvedOrExplained = physicalDone && approvalPending === 0 && differenceReasonPending === 0;
@@ -272,9 +178,9 @@ export default function MonthlyAudit() {
         next: monthClosed ? "Month closed" : signoffsComplete ? "Sign-off complete" : "Complete sign-off",
       },
     ];
-  }, [close, materialLines, physical, monthClosed, adjustmentReasons]);
+  }, [productionSummary, moneySummary, materialLines, physical, monthClosed, adjustmentReasons]);
 
-  const readyToClose = !monthClosed && readiness.every((card) => card.ok);
+  const readyToClose = !monthClosed && Boolean(closeStatus.canClose);
   const busy = loading || saving || closing || Boolean(approvingKey);
 
   function onPhysicalChange(lineKey, value) {
@@ -360,7 +266,7 @@ export default function MonthlyAudit() {
         systemQty: line.systemClosing,
         physicalQty: line.physicalKg,
         differenceQty: line.remainingKg,
-        value: getDifferenceValue(line, close),
+        value: calculateControlRoomDifferenceValue(line, controlRoom),
         reason,
         remarks: physical.remarks || "",
         sourceRef: `MONTH_CLOSE:${month}:${line.key}`,
@@ -420,19 +326,20 @@ export default function MonthlyAudit() {
         washVarianceKg: sumByGroup(materialLines, "WIP", "remainingKg"),
         sortingVarianceKg: 0,
         fgVarianceKg: sumByGroup(materialLines, "FG", "remainingKg"),
-        rmInwardKg: close.rm.purchasedKg,
-        washInputKg: close.production.washInputKg,
-        washedOutputKg: close.production.washedOutputKg,
-        sortingInputKg: close.production.sortingInputKg,
-        sortingAcceptedKg: close.production.sortingAcceptedKg,
-        extrusionInputKg: close.production.extrusionInputKg,
-        fgProducedKg: close.production.fgProducedKg,
-        dispatchKg: close.production.dispatchKg,
-        salesValue: close.profitability.salesValue,
-        factoryExpenses: close.costs.factoryExpenseValue,
-        storesIssueQty: close.costs.storesIssueValue,
-        estimatedRmConsumedValue: close.costs.estimatedRmConsumedValue,
-        manufacturingProfit: close.profitability.manufacturingProfit,
+        rmInwardKg: productionSummary.recycledRmReceivedKg,
+        washInputKg: productionSummary.rmUsedKg,
+        washedOutputKg: 0,
+        sortingInputKg: 0,
+        sortingAcceptedKg: 0,
+        extrusionInputKg: productionSummary.totalExtruderFeedKg,
+        fgProducedKg: productionSummary.fgProducedKg,
+        dispatchKg: productionSummary.dispatchedKg,
+        salesValue: moneySummary.salesValue,
+        factoryExpenses: moneySummary.factoryExpenses,
+        storesIssueQty: moneySummary.storesCost,
+        estimatedRmConsumedValue: moneySummary.rmCost,
+        manufacturingProfit: moneySummary.estimatedManufacturingProfit,
+        overallRecovery: productionSummary.recoveryPercent,
         exceptions: JSON.stringify(materialLines.map((line) => ({
           key: line.key,
           stockType: line.materialName,
@@ -475,7 +382,7 @@ export default function MonthlyAudit() {
 
       <div style={monthBanner}>
         <b>{monthLabel(month)} Status:</b>{" "}
-        {formatTon(close.production.fgProducedKg)} Produced | {formatTon(close.production.dispatchKg)} Dispatched | {materialLines.filter((x) => x.statusType === "danger" || x.statusType === "warning").length} Differences Pending | {readyToClose ? "Can Close" : "Action Required"}
+        {formatTon(productionSummary.fgProducedKg)} Produced | {formatTon(productionSummary.dispatchedKg)} Dispatched | {materialLines.filter((x) => x.statusType === "danger" || x.statusType === "warning").length} Differences Pending | {readyToClose ? "Can Close" : "Action Required"}
       </div>
       {openingDebug.isFirstSystemMonth && (
         <div style={muted}>First system month: opening stock is treated as zero. Closing stock will become next month's opening.</div>
@@ -529,7 +436,7 @@ export default function MonthlyAudit() {
                       <input
                         value={physicalMaterialLines[openingKey(line.key)] ?? ""}
                         onChange={(e) => onPhysicalChange(openingKey(line.key), e.target.value)}
-                        onBlur={() => savePhysicalSnapshot({ silent: true }).catch((err) => setStatus(err.message))}
+                        onBlur={() => savePhysicalSnapshot({ silent: true }).then(() => loadAll()).catch((err) => setStatus(err.message))}
                         type="number"
                         placeholder="Opening"
                         style={qtyInput}
@@ -551,7 +458,7 @@ export default function MonthlyAudit() {
                     <input
                       value={physicalMaterialLines[line.key] ?? ""}
                       onChange={(e) => onPhysicalChange(line.key, e.target.value)}
-                      onBlur={() => savePhysicalSnapshot({ silent: true }).catch((err) => setStatus(err.message))}
+                      onBlur={() => savePhysicalSnapshot({ silent: true }).then(() => loadAll()).catch((err) => setStatus(err.message))}
                       type="number"
                       placeholder="Kg"
                       style={qtyInput}
@@ -583,10 +490,10 @@ export default function MonthlyAudit() {
 
       <Section title="Stores Summary">
         <div style={summaryRow}>
-          <StatusPill label="Store Items" count={materialGroupView?.storesSummary?.itemCount || 0} type="success" />
-          <StatusPill label="Inward" count={formatQtyCount(materialGroupView?.storesSummary?.inwardQty)} type="success" />
-          <StatusPill label="Issued" count={formatQtyCount(materialGroupView?.storesSummary?.issuedQty)} type="warning" />
-          <StatusPill label="Closing" count={formatQtyCount(materialGroupView?.storesSummary?.closingQty)} type="success" />
+          <StatusPill label="Opening" count={formatQtyCount(controlRoom.storesSummary?.openingKg)} type="success" />
+          <StatusPill label="Inward" count={formatQtyCount(controlRoom.storesSummary?.inwardKg)} type="success" />
+          <StatusPill label="Issued" count={formatQtyCount(controlRoom.storesSummary?.issuedKg)} type="warning" />
+          <StatusPill label="Closing" count={formatQtyCount(controlRoom.storesSummary?.closingKg)} type="success" />
         </div>
         <div style={muted}>Stores are summarized here so consumable items do not crowd the manufacturing stock table.</div>
       </Section>
@@ -598,59 +505,27 @@ export default function MonthlyAudit() {
       </div>
       {showDebug && (
         <>
-          {materialGroupView && (
-            <Section title="Mapping Check">
-              <div style={muted}>Debug-only view for migration and Month Close stabilization.</div>
-              <ReconTable
-                rows={[
-                  ["Unmapped ledger rows", materialGroupView.unmappedLedgerRows?.length || 0, "text"],
-                  ["Invalid ledger rows", materialGroupView.invalidLedgerRows?.length || 0, "text"],
-                  ["Mapping warnings", materialGroupView.movementSourceSummary?.mappingWarnings?.length || 0, "text"],
-                  ["System source", materialGroupView.source || "-", "text"],
-                ]}
-              />
-            </Section>
-          )}
-          <Section title="RM Stock Calculation Check">
-            <div style={muted}>Debug-only proof that RM Stock excludes virgin, battery, and additive materials.</div>
+          <Section title="Control Room Timing">
+            <div style={muted}>Developer timing from the single Month Close backend request.</div>
             <ReconTable
               rows={[
-                ["Total RM Received before exclusions", close.rm.totalReceivedKg],
-                ["Minus Virgin Polymer", -num(close.production.virginReceivedKg)],
-                ["Excluded Virgin Materials", formatMaterialBreakdown(close.production.excludedMaterialBreakdown?.virgin), "text"],
-                ["Minus Battery Material", -num(close.production.batteryReceivedKg)],
-                ["Excluded Battery Materials", formatMaterialBreakdown(close.production.excludedMaterialBreakdown?.battery), "text"],
-                ["Minus Excluded Additives", -num(close.production.additivesReceivedKg)],
-                ["Excluded Additive Materials", formatMaterialBreakdown(close.production.excludedMaterialBreakdown?.additives), "text"],
-                ["RM Stock Received", close.rm.purchasedKg],
-                ["Formula Check Difference", rmReceivedProofDifferenceKg],
-                ["Opening Rule", openingDebug.rule, "text"],
-                ["Previous System Close Month", openingDebug.periodMonth || "-", "text"],
-                ["RM Opening Source", rmStockLine?.openingSource || "-", "text"],
-                ["RM Opening", rmStockLine?.opening || 0],
-                ["Virgin Opening", virginStockLine?.opening || 0],
-                ["Battery Opening", batteryStockLine?.opening || 0],
-                ["RM Out", rmStockLine?.flowOut || 0],
-                ["RM System Stock", rmStockLine?.systemClosing || 0],
+                ["Previous close lookup", `${num(controlRoom.timings?.previousCloseLookup)} ms`, "text"],
+                ["Ledger summary", `${num(controlRoom.timings?.ledgerSummary)} ms`, "text"],
+                ["Production summary", `${num(controlRoom.timings?.productionSummary)} ms`, "text"],
+                ["Cost summary", `${num(controlRoom.timings?.costSummary)} ms`, "text"],
+                ["Physical count", `${num(controlRoom.timings?.physicalCount)} ms`, "text"],
+                ["Adjustments", `${num(controlRoom.timings?.adjustments)} ms`, "text"],
+                ["Total elapsed", `${num(controlRoom.elapsedMs)} ms`, "text"],
               ]}
             />
           </Section>
-          <Section title="WIP / Waste Movement Check">
-            <div style={muted}>Debug-only proof that Waste / Rework reduces WIP once and is not subtracted again from RM Stock.</div>
-            <ReconTable
-              rows={[
-                ["WIP Opening", wipStockLine?.opening || 0],
-                ["WIP In = RM Used", close.rm.consumedKg],
-                ["WIP Out to FG = FG Produced", close.production.fgProducedKg],
-                ["WIP Out to Waste/Rework = Waste/Rework Generated", getWasteReworkGenerated(close)],
-                ["WIP Closing = Opening + RM Used - FG - Waste/Rework", wipStockLine?.systemClosing || 0],
-                ["RM Stock Out = RM Used only", rmStockLine?.flowOut || 0],
-                ["Waste/Rework Opening", wasteReworkStockLine?.opening || 0],
-                ["Waste/Rework Generated", wasteReworkStockLine?.flowIn || 0],
-                ["Waste/Rework Disposed/Reused", wasteReworkStockLine?.flowOut || 0],
-                ["Waste/Rework Closing", wasteReworkStockLine?.systemClosing || 0],
-              ]}
-            />
+          <Section title="Close Checks">
+            <div style={muted}>All checks come from monthClose.controlRoom.</div>
+            {(closeStatus.blockers || []).length ? (
+              <ul>{closeStatus.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul>
+            ) : (
+              <div style={muted}>No backend blockers.</div>
+            )}
           </Section>
         </>
       )}
@@ -658,16 +533,16 @@ export default function MonthlyAudit() {
         <Section title="Production Summary">
           <ReconTable
             rows={[
-              ["RM Received (Recycled RM)", close.rm.purchasedKg],
-              ["Virgin Added", close.production.virginAddedKg],
-              ["Battery Material", close.production.batteryMaterialKg],
-              ["Additives", close.production.additivesKg],
-              ["Total Extruder Feed", close.production.totalExtruderFeedKg],
-              ["RM Used", close.rm.consumedKg],
-              ["FG Produced", close.production.fgProducedKg],
-              ["Dispatched", close.production.dispatchKg],
-              ["Waste / Rework", close.materialFlow.wasteSaleKg + close.materialFlow.trueLossKg + close.materialFlow.recoveryReuseKg],
-              ["Recovery %", close.production.overallRecovery, "percent"],
+              ["RM Received (Recycled RM)", productionSummary.recycledRmReceivedKg],
+              ["Virgin Received", productionSummary.virginReceivedKg],
+              ["Battery Received", productionSummary.batteryReceivedKg],
+              ["Additives Received", productionSummary.additivesReceivedKg],
+              ["Total Extruder Feed", productionSummary.totalExtruderFeedKg],
+              ["RM Used", productionSummary.rmUsedKg],
+              ["FG Produced", productionSummary.fgProducedKg],
+              ["Dispatched", productionSummary.dispatchedKg],
+              ["Waste / Rework", productionSummary.wasteReworkKg],
+              ["Recovery %", productionSummary.recoveryPercent, "percent"],
             ]}
           />
         </Section>
@@ -675,15 +550,14 @@ export default function MonthlyAudit() {
         <Section title="Money Summary">
           <ReconTable
             rows={[
-              ["Sales", close.profitability.salesValue, "currency"],
-              ["RM Cost", close.costs.estimatedRmConsumedValue, "currency"],
-              ["Stores Cost", close.costs.storesIssueValue, "currency"],
-              ["Factory Expenses", close.costs.factoryExpenseValue, "currency"],
-              ["Factory Cost Master Allocation", close.costs.factoryCostAllocationValue, "currency"],
+              ["Sales", moneySummary.salesValue, "currency"],
+              ["RM Cost", moneySummary.rmCost, "currency"],
+              ["Stores Cost", moneySummary.storesCost, "currency"],
+              ["Factory Expenses", moneySummary.factoryExpenses, "currency"],
               [
                 "Estimated Manufacturing Profit",
-                close.costs.costDataComplete ? close.profitability.manufacturingProfit : "Cost data incomplete",
-                close.costs.costDataComplete ? "currency" : "text",
+                moneySummary.costDataComplete ? moneySummary.estimatedManufacturingProfit : "Cost data incomplete",
+                moneySummary.costDataComplete ? "currency" : "text",
               ],
             ]}
           />
@@ -714,6 +588,182 @@ export default function MonthlyAudit() {
       {status && <div style={statusBox}>{status}</div>}
     </div>
   );
+}
+
+const CONTROL_ROOM_TIMEOUT_MS = 25000;
+
+function emptyControlRoom(periodMonth = "") {
+  return {
+    ok: true,
+    periodMonth,
+    elapsedMs: 0,
+    timings: {},
+    closeStatus: {
+      isClosed: false,
+      canClose: false,
+      blockers: [],
+      previousClosedMonth: "",
+      firstSystemMonth: periodMonth === FIRST_SYSTEM_CLOSE_MONTH,
+    },
+    productionSummary: {},
+    stockRows: [],
+    moneySummary: {},
+    signoffs: {},
+    adjustmentSummary: {},
+    storesSummary: {},
+  };
+}
+
+async function monthCloseControlRoomCall(periodMonth) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const error = new Error("Month Close load timed out. Check Apps Script deployment and try again.");
+      error.code = "MONTH_CLOSE_TIMEOUT";
+      reject(error);
+    }, CONTROL_ROOM_TIMEOUT_MS);
+  });
+
+  return Promise.race([
+    apiCall({ fn: "monthClose.controlRoom", periodMonth }),
+    timeout,
+  ]).finally(() => clearTimeout(timeoutId));
+}
+
+function controlRoomStockConfig(stockType) {
+  const configs = {
+    "RM Stock": {
+      key: "FLOW|RM",
+      group: "RM",
+      materialId: "FLOW|RM",
+      materialCode: "RM",
+      adjustmentItemName: "RM Stock",
+      adjustmentItemType: "RM",
+    },
+    "Virgin Polymer Stock": {
+      key: "FLOW|VIRGIN_POLYMER",
+      group: "VIRGIN",
+      materialId: "FLOW|VIRGIN_POLYMER",
+      materialCode: "VIRGIN",
+      adjustmentItemName: "Virgin PPCP",
+      adjustmentItemType: "ADDITIVE",
+    },
+    "Battery Material Stock": {
+      key: "FLOW|BATTERY_MATERIAL",
+      group: "BATTERY",
+      materialId: "FLOW|BATTERY_MATERIAL",
+      materialCode: "BATTERY",
+      adjustmentItemName: "Battery PPCP",
+      adjustmentItemType: "RM",
+    },
+    "WIP Stock": {
+      key: "FLOW|WIP",
+      group: "WIP",
+      materialId: "FLOW|WIP",
+      materialCode: "WIP",
+      adjustmentItemName: "WIP Stock",
+      adjustmentItemType: "WIP",
+    },
+    "FG Stock": {
+      key: "FLOW|FG",
+      group: "FG",
+      materialId: "FLOW|FG",
+      materialCode: "FG",
+      adjustmentItemName: "FG Stock",
+      adjustmentItemType: "FG",
+    },
+    "Waste / Rework Stock": {
+      key: "FLOW|WASTE_REWORK",
+      group: "WASTE",
+      materialId: "FLOW|WASTE_REWORK",
+      materialCode: "WASTE",
+      adjustmentItemName: "Waste / Rework Stock",
+      adjustmentItemType: "WASTE",
+    },
+    "Stores Stock": {
+      key: "FLOW|STORES",
+      group: "STORE",
+      materialId: "FLOW|STORES",
+      materialCode: "STORE",
+      adjustmentItemName: "Stores Stock",
+      adjustmentItemType: "STORE",
+    },
+  };
+
+  return configs[stockType] || {
+    key: `FLOW|${String(stockType || "UNKNOWN").toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`,
+    group: "UNKNOWN",
+    materialId: "",
+    materialCode: "",
+    adjustmentItemName: stockType || "Stock",
+    adjustmentItemType: "",
+  };
+}
+
+function buildControlRoomStockLines(controlRoom, physicalMaterialLines) {
+  const firstSystemMonth = Boolean(controlRoom.closeStatus?.firstSystemMonth);
+  const previousClosedMonth = controlRoom.closeStatus?.previousClosedMonth || "";
+  const openingBlocked = !firstSystemMonth && !previousClosedMonth;
+
+  return (controlRoom.stockRows || []).map((row) => {
+    const config = controlRoomStockConfig(row.stockType);
+    const localPhysical = physicalMaterialLines[config.key];
+    const hasPhysical = localPhysical !== "" && localPhysical !== null && localPhysical !== undefined;
+    const physicalKg = hasPhysical ? num(localPhysical) : 0;
+    const differenceKg = hasPhysical
+      ? physicalKg - num(row.systemClosingKg)
+      : num(row.differenceKg);
+    let status = row.status || "Actual Stock Pending";
+
+    if (hasPhysical) {
+      status = Math.abs(differenceKg) <= 0.01 ? "Reconciled" : "Check Difference";
+    }
+    if (row.status === "Approval Pending" && hasPhysical && Math.abs(differenceKg) > 0.01) {
+      status = "Approval Pending";
+    }
+
+    const statusType =
+      status === "Reconciled"
+        ? "success"
+        : status === "Approval Pending"
+        ? "warning"
+        : status === "Check Difference" || status === "Previous Close Pending"
+        ? "danger"
+        : "pending";
+
+    return {
+      ...config,
+      materialName: row.stockType,
+      opening: num(row.openingKg),
+      openingEditable: false,
+      openingBlocked,
+      hasOpening: true,
+      openingSource: firstSystemMonth
+        ? "First system month"
+        : previousClosedMonth
+        ? `Previous approved close: ${previousClosedMonth}`
+        : "Previous close required",
+      flowIn: num(row.inKg),
+      flowOut: num(row.outKg),
+      flowOutNote: "",
+      flowOutBreakdown: [],
+      inward: config.group === "RM" || config.group === "STORE" ? num(row.inKg) : 0,
+      produced: ["WIP", "FG", "WASTE"].includes(config.group) ? num(row.inKg) : 0,
+      consumed: ["RM", "WIP"].includes(config.group) ? num(row.outKg) : 0,
+      dispatched: config.group === "FG" ? num(row.outKg) : 0,
+      issued: config.group === "STORE" ? num(row.outKg) : 0,
+      approvedAdjustments: 0,
+      systemClosing: num(row.systemClosingKg),
+      physicalKg,
+      physicalValue: hasPhysical ? localPhysical : "",
+      hasPhysical,
+      differenceKg,
+      remainingKg: differenceKg,
+      pendingAdjustmentKg: status === "Approval Pending" ? differenceKg : 0,
+      status,
+      statusType,
+    };
+  });
 }
 
 function Section({ title, children }) {

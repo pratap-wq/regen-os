@@ -245,6 +245,21 @@ export function calculateMonthClose({
   };
 }
 
+export function calculateControlRoomDifferenceValue(line = {}, controlRoom = {}) {
+  const money = controlRoom.moneySummary || {};
+  const production = controlRoom.productionSummary || {};
+  const rmUsedKg = num(production.rmUsedKg);
+  const fgProducedKg = num(production.fgProducedKg);
+  const rmUnitRate = rmUsedKg > 0 ? num(money.rmCost) / rmUsedKg : 0;
+  const manufacturingCost =
+    num(money.rmCost) + num(money.storesCost) + num(money.factoryExpenses);
+  const manufacturingUnitRate = fgProducedKg > 0
+    ? manufacturingCost / fgProducedKg
+    : rmUnitRate;
+  const rate = line.group === "RM" ? rmUnitRate : manufacturingUnitRate || rmUnitRate;
+  return Math.abs(num(line.remainingKg)) * rate;
+}
+
 function classifyRmReceivedFeed(rows) {
   return rows.reduce(
     (acc, row) => {

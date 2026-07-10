@@ -155,6 +155,7 @@ if (p.fn === "factoryCostMaster.update") return updateFactoryCostMaster(p);
     // Monthly Close v1 compatibility
     if (p.fn === "monthClose.add") return addMonthClose(p);
     if (p.fn === "monthClose.list") return listMaster("Month_Close");
+    if (p.fn === "monthClose.controlRoom") return getMonthCloseControlRoom(p);
     if (p.fn === "monthClose.materialGroups") return output(getMonthCloseMaterialGroups(p));
     if (p.fn === "monthClose.materialRepair.preview") return output(previewMonthCloseMaterialRepair(p));
     if (p.fn === "monthClose.materialRepair.run") return output(runMonthCloseMaterialRepair(p));
@@ -660,6 +661,7 @@ function debugRoutes() {
       "storesIssue.update",
       "monthClose.add",
       "monthClose.list",
+      "monthClose.controlRoom",
       "monthClose.materialGroups",
       "monthClose.materialRepair.preview",
       "monthClose.materialRepair.run",
@@ -11210,6 +11212,615 @@ function verifyJuneLedgerV1(data = {}) {
       category: materialFlowNormalizeMaterial_(material, "").category,
     })),
   };
+}
+
+function getMonthCloseControlRoom(data = {}) {
+  const periodMonth = normalizeMonthClosePeriod_(data.periodMonth || data.month || "");
+  const timer = monthCloseControlRoomTimer_();
+
+  if (!periodMonth) {
+    return output({ ok: false, error: "monthClose.controlRoom requires periodMonth in YYYY-MM format" });
+  }
+
+  try {
+    const closeRows = timer.run("previousCloseLookup", function() {
+      return getRowsAsObjects("Month_Close").filter(monthCloseControlRoomActiveRow_);
+    });
+    const firstSystemMonth = periodMonth === "2026-06";
+    const previousMonth = monthCloseControlRoomPreviousMonth_(periodMonth);
+    const previousClose = firstSystemMonth ? null : closeRows.find(function(row) {
+      return String(row.periodMonth || "").slice(0, 7) === previousMonth &&
+        String(row.status || "").toUpperCase() === "CLOSED";
+    }) || null;
+    const selectedClose = closeRows.find(function(row) {
+      return String(row.periodMonth || "").slice(0, 7) === periodMonth &&
+        String(row.status || "").toUpperCase() === "CLOSED";
+    }) || null;
+
+    const ledgerContext = timer.run("ledgerSummary", function() {
+      const materials = getRowsAsObjects("Material_Master")
+        .filter(monthCloseControlRoomActiveRow_)
+        .filter(function(row) { return materialRowIsActive_(row) && !rowHasBannedOperationalMaterial_(row); });
+      const ledgerRows = getRowsAsObjects("Inventory_Ledger").filter(monthCloseControlRoomActiveRow_);
+      return monthCloseControlRoomLedgerContext_(materials, ledgerRows, periodMonth);
+    });
+
+    const productionSummary = timer.run("productionSummary", function() {
+      return monthCloseControlRoomProductionSummary_(ledgerContext.movements);
+    });
+
+    const moneySummary = timer.run("costSummary", function() {
+      return monthCloseControlRoomMoneySummary_({
+        periodMonth,
+        productionSummary,
+        materialIndex: ledgerContext.materialIndex,
+        dispatchRows: getRowsAsObjects("Dispatches").filter(monthCloseControlRoomActiveRow_),
+        fgRateRows: getRowsAsObjects("FG_Rates").filter(monthCloseControlRoomActiveRow_),
+        rmRows: getRowsAsObjects("RM_Inward").filter(monthCloseControlRoomActiveRow_),
+        storesIssueRows: getRowsAsObjects("Stores_Issue").filter(monthCloseControlRoomActiveRow_),
+        factoryExpenseRows: getRowsAsObjects("Factory_Expenses").filter(monthCloseControlRoomActiveRow_),
+      });
+    });
+
+    const physicalContext = timer.run("physicalCount", function() {
+      const physicalRows = getRowsAsObjects("Physical_Counts")
+        .filter(monthCloseControlRoomActiveRow_)
+        .filter(function(row) { return String(row.periodMonth || "").slice(0, 7) === periodMonth; });
+      const latestPhysical = physicalRows.length ? physicalRows[physicalRows.length - 1] : null;
+      return monthCloseControlRoomPhysicalContext_(latestPhysical, selectedClose);
+    });
+
+    const adjustmentContext = timer.run("adjustments", function() {
+      const rows = getRowsAsObjects("Inventory_Adjustments")
+        .filter(monthCloseControlRoomActiveRow_)
+        .filter(function(row) {
+          return String(row.periodMonth || row.closeMonth || "").slice(0, 7) === periodMonth;
+        });
+      return monthCloseControlRoomAdjustmentContext_(rows);
+    });
+
+    const stockRows = timer.run("stockSummary", function() {
+      return monthCloseControlRoomStockRows_({
+        periodMonth,
+        firstSystemMonth,
+        previousClose,
+        ledgerContext,
+        physicalContext,
+        adjustmentContext,
+      });
+    });
+
+    const storesRow = stockRows.find(function(row) { return row.stockType === "Stores Stock"; }) || {};
+    const storesSummary = {
+      openingKg: round2(storesRow.openingKg),
+      inwardKg: round2(storesRow.inKg),
+      issuedKg: round2(storesRow.outKg),
+      closingKg: round2(storesRow.systemClosingKg),
+    };
+
+    const blockers = monthCloseControlRoomBlockers_({
+      periodMonth,
+      firstSystemMonth,
+      previousClose,
+      selectedClose,
+      productionSummary,
+      moneySummary,
+      stockRows,
+      signoffs: physicalContext.signoffs,
+      adjustmentContext,
+      unknownMovementCount: ledgerContext.unknownMovementCount,
+    });
+    const isClosed = Boolean(selectedClose);
+    const adjustmentSummary = {
+      approvedCount: adjustmentContext.approvedCount,
+      pendingCount: adjustmentContext.pendingCount,
+      unresolvedCount: stockRows.filter(function(row) {
+        return row.actualKg !== null && Math.abs(num(row.differenceKg)) > 0.01;
+      }).length,
+    };
+
+    if (timer.elapsed() > 20000) {
+      const timeoutError = new Error("Month Close control room exceeded 20 seconds during total");
+      timeoutError.controlRoomStep = "total";
+      throw timeoutError;
+    }
+
+    return output({
+      ok: true,
+      periodMonth,
+      generatedAt: new Date().toISOString(),
+      elapsedMs: timer.elapsed(),
+      timings: timer.snapshot(),
+      closeStatus: {
+        isClosed,
+        canClose: !isClosed && blockers.length === 0,
+        blockers,
+        previousClosedMonth: previousClose ? String(previousClose.periodMonth || "").slice(0, 7) : "",
+        firstSystemMonth,
+      },
+      productionSummary,
+      stockRows,
+      moneySummary,
+      signoffs: physicalContext.signoffs,
+      adjustmentSummary,
+      storesSummary,
+    });
+  } catch (err) {
+    return output({
+      ok: false,
+      periodMonth,
+      error: err.message || String(err),
+      failedStep: err.controlRoomStep || timer.currentStep() || "unknown",
+      elapsedMs: timer.elapsed(),
+      timings: timer.snapshot(),
+    });
+  }
+}
+
+function monthCloseControlRoomTimer_() {
+  const startedAt = Date.now();
+  const timings = {};
+  let current = "";
+
+  return {
+    run: function(name, callback) {
+      current = name;
+      const stepStartedAt = Date.now();
+      try {
+        const value = callback();
+        timings[name] = Date.now() - stepStartedAt;
+        if (Date.now() - startedAt > 20000) {
+          const timeoutError = new Error("Month Close control room exceeded 20 seconds during " + name);
+          timeoutError.controlRoomStep = name;
+          throw timeoutError;
+        }
+        current = "";
+        return value;
+      } catch (err) {
+        timings[name] = Date.now() - stepStartedAt;
+        err.controlRoomStep = err.controlRoomStep || name;
+        throw err;
+      }
+    },
+    elapsed: function() { return Date.now() - startedAt; },
+    snapshot: function() {
+      return {
+        previousCloseLookup: num(timings.previousCloseLookup),
+        ledgerSummary: num(timings.ledgerSummary),
+        productionSummary: num(timings.productionSummary),
+        costSummary: num(timings.costSummary),
+        physicalCount: num(timings.physicalCount),
+        adjustments: num(timings.adjustments),
+        stockSummary: num(timings.stockSummary),
+        totalElapsed: Date.now() - startedAt,
+      };
+    },
+    currentStep: function() { return current; },
+  };
+}
+
+function monthCloseControlRoomActiveRow_(row) {
+  if (isDeleted_(row)) return false;
+  const status = String(row.status || "ACTIVE").trim().toUpperCase();
+  return ["INACTIVE", "DISABLED", "ARCHIVED", "VOID", "VOIDED", "CANCELLED", "REJECTED"].indexOf(status) === -1;
+}
+
+function monthCloseControlRoomRowInPeriod_(row, periodMonth) {
+  const value = row.periodMonth || row.closeMonth || row.month || row.date || row.invoiceDate || row.createdAt || row.savedAt || "";
+  return normalizeMonthClosePeriod_(value) === periodMonth;
+}
+
+function monthCloseControlRoomPreviousMonth_(periodMonth) {
+  const parts = String(periodMonth || "").split("-").map(Number);
+  if (!parts[0] || !parts[1]) return "";
+  const date = new Date(parts[0], parts[1] - 2, 1);
+  return date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0");
+}
+
+function monthCloseControlRoomStockDefinitions_() {
+  return [
+    { key: "FLOW|RM", stockType: "RM Stock", stockKey: "RM", category: "RM" },
+    { key: "FLOW|VIRGIN_POLYMER", stockType: "Virgin Polymer Stock", stockKey: "VIRGIN", category: "VIRGIN" },
+    { key: "FLOW|BATTERY_MATERIAL", stockType: "Battery Material Stock", stockKey: "BATTERY", category: "BATTERY" },
+    { key: "FLOW|WIP", stockType: "WIP Stock", stockKey: "WIP", category: "WIP" },
+    { key: "FLOW|FG", stockType: "FG Stock", stockKey: "FG", category: "FG" },
+    { key: "FLOW|WASTE_REWORK", stockType: "Waste / Rework Stock", stockKey: "WASTE_REWORK", category: "WASTE" },
+    { key: "FLOW|STORES", stockType: "Stores Stock", stockKey: "STORES", category: "STORE" },
+  ];
+}
+
+function monthCloseControlRoomLedgerContext_(materialRows, ledgerRows, periodMonth) {
+  const materialIndex = {};
+  materialRows.forEach(function(material) {
+    [material.materialId, material.materialCode, material.materialName].forEach(function(value) {
+      const key = compactInventoryMaterialKey_(value);
+      if (key && !materialIndex[key]) materialIndex[key] = material;
+    });
+  });
+
+  const movements = [];
+  let unknownMovementCount = 0;
+  let unknownMovementKg = 0;
+  ledgerRows.filter(function(row) {
+    return monthCloseControlRoomRowInPeriod_(row, periodMonth);
+  }).forEach(function(row) {
+    const material = [row.materialId, row.materialCode, row.itemName, row.materialName]
+      .map(compactInventoryMaterialKey_)
+      .filter(function(key) { return key; })
+      .map(function(key) { return materialIndex[key]; })
+      .filter(function(match) { return match; })[0];
+    const qtyIn = num(row.qtyIn);
+    const qtyOut = num(row.qtyOut);
+
+    if (!material) {
+      if (Math.abs(qtyIn) + Math.abs(qtyOut) > 0.01) {
+        unknownMovementCount += 1;
+        unknownMovementKg += Math.abs(qtyIn - qtyOut);
+      }
+      return;
+    }
+
+    const category = normalizeMaterialCategoryForLedger_(material.category || row.itemType);
+    movements.push({
+      module: String(row.module || "").trim().toUpperCase(),
+      movementType: String(row.movementType || "").trim().toUpperCase(),
+      materialCode: material.materialCode || "",
+      materialName: material.materialName || row.itemName || "",
+      category,
+      stockKey: monthCloseControlRoomStockKey_(material, category),
+      qtyIn,
+      qtyOut,
+    });
+  });
+
+  return {
+    materialIndex,
+    movements,
+    unknownMovementCount,
+    unknownMovementKg: round2(unknownMovementKg),
+  };
+}
+
+function monthCloseControlRoomStockKey_(material, category) {
+  const text = String((material && (material.materialCode || material.materialName)) || "").toUpperCase();
+  if (category === "STORE") return "STORES";
+  if (text.indexOf("BATTERY") !== -1) return "BATTERY";
+  if (text.indexOf("VIRGIN") !== -1) return "VIRGIN";
+  if (category === "RM") return "RM";
+  if (category === "WIP") return "WIP";
+  if (category === "FG") return "FG";
+  if (category === "WASTE" || category === "REWORK") return "WASTE_REWORK";
+  if (category === "ADDITIVE") return "ADDITIVE";
+  return "";
+}
+
+function monthCloseControlRoomProductionSummary_(movements) {
+  const summary = {
+    recycledRmReceivedKg: 0,
+    virginReceivedKg: 0,
+    batteryReceivedKg: 0,
+    additivesReceivedKg: 0,
+    totalExtruderFeedKg: 0,
+    rmUsedKg: 0,
+    fgProducedKg: 0,
+    dispatchedKg: 0,
+    wasteReworkKg: 0,
+    recoveryPercent: 0,
+  };
+
+  movements.forEach(function(move) {
+    const receiving = /RM_INWARD|MATERIAL_RECEIVING|RECEIVING/.test(move.module);
+    const production = /GRINDER|WASH|SORTING|EXTRUSION|PRODUCTION/.test(move.module);
+    if (receiving && move.stockKey === "RM") summary.recycledRmReceivedKg += move.qtyIn;
+    if (receiving && move.stockKey === "VIRGIN") summary.virginReceivedKg += move.qtyIn;
+    if (receiving && move.stockKey === "BATTERY") summary.batteryReceivedKg += move.qtyIn;
+    if (receiving && move.stockKey === "ADDITIVE") summary.additivesReceivedKg += move.qtyIn;
+    if (move.module === "EXTRUSION") summary.totalExtruderFeedKg += move.qtyOut;
+    if ((move.module === "WASH" || move.module === "EXTRUSION") && move.stockKey === "RM") summary.rmUsedKg += move.qtyOut;
+    if (move.module === "EXTRUSION" && move.stockKey === "FG") summary.fgProducedKg += move.qtyIn;
+    if (move.module === "DISPATCH" && move.stockKey === "FG") summary.dispatchedKg += move.qtyOut;
+    if (production && move.stockKey === "WASTE_REWORK") summary.wasteReworkKg += move.qtyIn;
+  });
+
+  Object.keys(summary).forEach(function(key) {
+    summary[key] = round2(summary[key]);
+  });
+  summary.recoveryPercent = summary.totalExtruderFeedKg > 0
+    ? round2(summary.fgProducedKg * 100 / summary.totalExtruderFeedKg)
+    : 0;
+  return summary;
+}
+
+function monthCloseControlRoomMoneySummary_(context) {
+  const dispatchRows = context.dispatchRows.filter(function(row) {
+    return monthCloseControlRoomRowInPeriod_(row, context.periodMonth);
+  });
+  const fgRateRows = context.fgRateRows;
+  let salesValue = 0;
+  let missingDispatchRate = false;
+
+  dispatchRows.forEach(function(row) {
+    const savedValue = num(row.dispatchValue);
+    if (savedValue > 0) {
+      salesValue += savedValue;
+      return;
+    }
+
+    const lines = parseDispatchLines_(row.dispatchLines);
+    const targets = lines.length ? lines : [{
+      grade: row.grade || row.material,
+      dispatchQtyKg: row.quantityKg,
+      ratePerKg: row.ratePerKg,
+    }];
+    targets.forEach(function(line) {
+      const qty = num(line.dispatchQtyKg || line.quantityKg || row.quantityKg);
+      const grade = monthCloseControlRoomFgGrade_(line.grade || line.material || row.grade || row.material);
+      const rate = num(line.ratePerKg || row.ratePerKg) || monthCloseControlRoomFgRate_(fgRateRows, grade, row.customerName, row.date);
+      if (qty > 0 && rate > 0) salesValue += qty * rate;
+      else if (qty > 0) missingDispatchRate = true;
+    });
+  });
+
+  let recycledRmQty = 0;
+  let recycledRmValue = 0;
+  let missingRmValue = false;
+  context.rmRows.filter(function(row) {
+    return monthCloseControlRoomRowInPeriod_(row, context.periodMonth);
+  }).forEach(function(row) {
+    const lines = monthCloseControlRoomRmLines_(row);
+    const totalQty = lines.reduce(function(sum, line) { return sum + num(line.quantityKg); }, 0);
+    lines.forEach(function(line) {
+      const material = monthCloseControlRoomFindMaterial_(context.materialIndex, "", line.material);
+      const category = material ? normalizeMaterialCategoryForLedger_(material.category) : "";
+      const stockKey = material ? monthCloseControlRoomStockKey_(material, category) : "";
+      if (stockKey !== "RM") return;
+      const qty = num(line.quantityKg);
+      const allocatedValue = num(line.amount) || (totalQty > 0 ? num(row.taxableValue) * qty / totalQty : 0);
+      recycledRmQty += qty;
+      recycledRmValue += allocatedValue;
+      if (qty > 0 && allocatedValue <= 0) missingRmValue = true;
+    });
+  });
+  const avgRmRate = recycledRmQty > 0 ? recycledRmValue / recycledRmQty : 0;
+  const rmCost = context.productionSummary.rmUsedKg * avgRmRate;
+
+  let storesCost = 0;
+  let missingStoresRate = false;
+  const storesIssueRows = context.storesIssueRows.filter(function(row) {
+    return monthCloseControlRoomRowInPeriod_(row, context.periodMonth);
+  });
+  storesIssueRows.forEach(function(row) {
+    const qty = num(row.qty || row.quantityKg || row.issueQty);
+    const value = num(row.issueValue) || qty * num(row.issueRate || row.rate);
+    storesCost += value;
+    if (qty > 0 && value <= 0) missingStoresRate = true;
+  });
+
+  const factoryExpenseRows = context.factoryExpenseRows.filter(function(row) {
+    return monthCloseControlRoomRowInPeriod_(row, context.periodMonth);
+  });
+  const factoryExpenses = factoryExpenseRows.reduce(function(sum, row) {
+    return sum + num(row.amount || row.expenseAmount || row.totalAmount || row.value);
+  }, 0);
+  const costDataComplete =
+    dispatchRows.length > 0 && salesValue > 0 && !missingDispatchRate &&
+    context.productionSummary.rmUsedKg > 0 && rmCost > 0 && !missingRmValue &&
+    storesIssueRows.length > 0 && storesCost > 0 && !missingStoresRate &&
+    factoryExpenseRows.length > 0 && factoryExpenses > 0;
+
+  return {
+    salesValue: round2(salesValue),
+    rmCost: round2(rmCost),
+    storesCost: round2(storesCost),
+    factoryExpenses: round2(factoryExpenses),
+    estimatedManufacturingProfit: round2(salesValue - rmCost - storesCost - factoryExpenses),
+    costDataComplete,
+  };
+}
+
+function monthCloseControlRoomRmLines_(row) {
+  let lines = [];
+  try {
+    lines = typeof row.materialLines === "string" ? JSON.parse(row.materialLines || "[]") : row.materialLines || [];
+  } catch (err) {
+    lines = [];
+  }
+  if (!Array.isArray(lines) || !lines.length) {
+    lines = [{
+      material: row.material || "",
+      quantityKg: row.quantityKg || row.netWeight || row.grossWeight,
+      rate: row.ratePerKg,
+      amount: row.taxableValue,
+    }];
+  }
+  return lines.map(function(line) {
+    const qty = num(line.quantityKg || line.qtyKg || line.quantity || line.netWeight);
+    const rate = num(line.rate || line.ratePerKg);
+    return {
+      material: line.material || line.materialName || "",
+      quantityKg: qty,
+      amount: num(line.amount) || qty * rate,
+    };
+  }).filter(function(line) { return line.material && line.quantityKg > 0; });
+}
+
+function monthCloseControlRoomFindMaterial_(materialIndex, materialId, materialName) {
+  const idKey = compactInventoryMaterialKey_(materialId);
+  const nameKey = compactInventoryMaterialKey_(materialName);
+  return materialIndex[idKey] || materialIndex[nameKey] || null;
+}
+
+function monthCloseControlRoomFgGrade_(value) {
+  const match = String(value || "").trim().toUpperCase().match(/\bE[1-5]\b/);
+  return match ? match[0] : "";
+}
+
+function monthCloseControlRoomFgRate_(rows, grade, customerName, dateValue) {
+  if (!grade) return 0;
+  const customerKey = String(customerName || "").trim().toUpperCase();
+  const targetTime = new Date(normalizeDateOnly_(dateValue || todayYmd())).getTime();
+  const matches = rows.filter(function(row) {
+    if (monthCloseControlRoomFgGrade_(row.grade) !== grade) return false;
+    const rowCustomer = String(row.customerName || "").trim().toUpperCase();
+    return !rowCustomer || !customerKey || rowCustomer === customerKey;
+  }).map(function(row) {
+    const rowCustomer = String(row.customerName || "").trim().toUpperCase();
+    return {
+      row,
+      exactCustomer: Boolean(customerKey && rowCustomer === customerKey),
+      time: fgRateEffectiveTime_(row),
+    };
+  }).filter(function(item) {
+    return !targetTime || !item.time || item.time <= targetTime;
+  }).sort(function(a, b) {
+    if (a.exactCustomer !== b.exactCustomer) return a.exactCustomer ? -1 : 1;
+    return b.time - a.time;
+  });
+  return matches.length ? num(matches[0].row.ratePerKg) : 0;
+}
+
+function monthCloseControlRoomPhysicalContext_(physicalRow, selectedClose) {
+  const lineMap = {};
+  if (physicalRow && physicalRow.materialPhysicalLinesJson) {
+    try {
+      const lines = typeof physicalRow.materialPhysicalLinesJson === "string"
+        ? JSON.parse(physicalRow.materialPhysicalLinesJson || "[]")
+        : physicalRow.materialPhysicalLinesJson || [];
+      if (Array.isArray(lines)) {
+        lines.forEach(function(line) {
+          const key = String(line.key || "").trim();
+          if (key) lineMap[key] = line.physicalKg;
+        });
+      }
+    } catch (err) {}
+  }
+  const source = physicalRow || selectedClose || {};
+  return {
+    physicalRow,
+    lineMap,
+    signoffs: {
+      production: source.productionSignoff || "",
+      stores: source.storesSignoff || "",
+      accounts: source.accountsSignoff || "",
+      ceo: source.ceoSignoff || "",
+      remarks: source.remarks || "",
+    },
+  };
+}
+
+function monthCloseControlRoomAdjustmentContext_(rows) {
+  const approved = rows.filter(function(row) { return String(row.status || "").toUpperCase() === "APPROVED"; });
+  const pending = rows.filter(function(row) {
+    return ["DRAFT", "SUBMITTED", "PENDING"].indexOf(String(row.status || "").toUpperCase()) !== -1;
+  });
+  const bySourceRef = {};
+  rows.forEach(function(row) {
+    const key = String(row.sourceRef || "").trim();
+    if (key) bySourceRef[key] = row;
+  });
+  return {
+    rows,
+    bySourceRef,
+    approvedCount: approved.length,
+    pendingCount: pending.length,
+  };
+}
+
+function monthCloseControlRoomStockRows_(context) {
+  const totals = {};
+  monthCloseControlRoomStockDefinitions_().forEach(function(definition) {
+    totals[definition.stockKey] = { qtyIn: 0, qtyOut: 0 };
+  });
+  context.ledgerContext.movements.forEach(function(move) {
+    if (!totals[move.stockKey]) return;
+    totals[move.stockKey].qtyIn += num(move.qtyIn);
+    totals[move.stockKey].qtyOut += num(move.qtyOut);
+  });
+
+  return monthCloseControlRoomStockDefinitions_().map(function(definition) {
+    const openingKg = context.firstSystemMonth
+      ? 0
+      : monthCloseControlRoomPreviousOpening_(context.previousClose, definition);
+    const movement = totals[definition.stockKey] || { qtyIn: 0, qtyOut: 0 };
+    const systemClosingKg = round2(openingKg + movement.qtyIn - movement.qtyOut);
+    const actualValue = monthCloseControlRoomActualValue_(context.physicalContext, definition);
+    const actualKg = actualValue === null ? null : round2(actualValue);
+    const differenceKg = actualKg === null ? 0 : round2(actualKg - systemClosingKg);
+    const adjustment = context.adjustmentContext.bySourceRef[
+      "MONTH_CLOSE:" + context.periodMonth + ":" + definition.key
+    ];
+    const adjustmentStatus = String(adjustment && adjustment.status || "").toUpperCase();
+    let status = "Actual Stock Pending";
+    if (!context.firstSystemMonth && !context.previousClose) status = "Previous Close Pending";
+    else if (actualKg !== null && Math.abs(differenceKg) <= 0.01) status = "Reconciled";
+    else if (actualKg !== null && ["DRAFT", "SUBMITTED", "PENDING"].indexOf(adjustmentStatus) !== -1) status = "Approval Pending";
+    else if (actualKg !== null) status = "Check Difference";
+
+    return {
+      stockType: definition.stockType,
+      openingKg: round2(openingKg),
+      inKg: round2(movement.qtyIn),
+      outKg: round2(movement.qtyOut),
+      systemClosingKg,
+      actualKg,
+      differenceKg,
+      reason: adjustment ? adjustment.reason || "" : "",
+      status,
+    };
+  });
+}
+
+function monthCloseControlRoomPreviousOpening_(previousClose, definition) {
+  if (!previousClose) return 0;
+  try {
+    const rows = JSON.parse(previousClose.exceptions || "[]");
+    const match = Array.isArray(rows) ? rows.find(function(row) {
+      return String(row.key || "") === definition.key || String(row.stockType || "") === definition.stockType;
+    }) : null;
+    if (match && match.physicalKg !== "" && match.physicalKg !== null && match.physicalKg !== undefined) {
+      return num(match.physicalKg);
+    }
+  } catch (err) {}
+  if (definition.stockKey === "RM") return num(previousClose.rmPhysicalKg);
+  if (definition.stockKey === "WIP") return num(previousClose.washPhysicalKg) + num(previousClose.sortingPhysicalKg);
+  if (definition.stockKey === "FG") return num(previousClose.fgPhysicalKg);
+  return 0;
+}
+
+function monthCloseControlRoomActualValue_(physicalContext, definition) {
+  const lineValue = physicalContext.lineMap[definition.key];
+  if (lineValue !== "" && lineValue !== null && lineValue !== undefined) return num(lineValue);
+  const row = physicalContext.physicalRow;
+  if (!row) return null;
+  if (definition.stockKey === "RM") return monthCloseControlRoomOptionalNumber_(row.rmPhysicalKg);
+  if (definition.stockKey === "WIP") {
+    const wash = monthCloseControlRoomOptionalNumber_(row.washPhysicalKg);
+    const sorting = monthCloseControlRoomOptionalNumber_(row.sortingPhysicalKg);
+    return wash === null && sorting === null ? null : num(wash) + num(sorting);
+  }
+  if (definition.stockKey === "FG") return monthCloseControlRoomOptionalNumber_(row.fgPhysicalKg);
+  return null;
+}
+
+function monthCloseControlRoomOptionalNumber_(value) {
+  return value === "" || value === null || value === undefined ? null : num(value);
+}
+
+function monthCloseControlRoomBlockers_(context) {
+  const blockers = [];
+  if (context.selectedClose) blockers.push("Month is already closed");
+  if (!context.firstSystemMonth && !context.previousClose) blockers.push("Immediate previous month must be closed first");
+  if (context.productionSummary.totalExtruderFeedKg <= 0 || context.productionSummary.fgProducedKg <= 0) blockers.push("Production data is incomplete");
+  if (context.productionSummary.dispatchedKg <= 0) blockers.push("Dispatch data is incomplete");
+  if (!context.moneySummary.costDataComplete) blockers.push("Cost data is incomplete");
+  if (context.stockRows.some(function(row) { return row.actualKg === null; })) blockers.push("Actual stock is pending");
+  if (context.stockRows.some(function(row) { return row.actualKg !== null && Math.abs(num(row.differenceKg)) > 0.01; })) blockers.push("Stock differences require approval");
+  if (context.adjustmentContext.pendingCount > 0) blockers.push("Inventory adjustments are pending");
+  if (context.unknownMovementCount > 0) blockers.push("Inventory Ledger contains unmapped material movements");
+  if (![context.signoffs.production, context.signoffs.stores, context.signoffs.accounts, context.signoffs.ceo].every(function(value) {
+    return String(value || "").trim();
+  })) blockers.push("Required sign-offs are incomplete");
+  return blockers;
 }
 
 function getMonthCloseMaterialGroups(data = {}) {

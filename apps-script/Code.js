@@ -3,7 +3,11 @@
 
 const SHEET_ID = "165IV2wQxli0Qi7K0s-bl7IuxnmoPUkirYbXPiedDUIE";
 
+let REQUEST_SPREADSHEET_ = null;
+let REQUEST_SHEET_CACHE_ = {};
+
 function doGet(e) {
+  resetSpreadsheetRequestCache_();
   try {
     const p = e.parameter || {};
 
@@ -102,6 +106,7 @@ function doGet(e) {
     // Dispatch
     if (p.fn === "dispatch.add") return addDispatch(p);
     if (p.fn === "dispatch.list") return listMaster("Dispatches");
+    if (p.fn === "dispatch.fgAvailability") return getDispatchFgAvailability();
     if (p.fn === "dispatch.update") return updateDispatch(p);
     if (p.fn === "dispatch.debugSavePreview") return debugDispatchSavePreview(p);
     if (p.fn === "dispatch.debugLedger") return debugDispatchLedger(p);
@@ -557,10 +562,27 @@ function doPost(e) {
   }
 }
 
+function resetSpreadsheetRequestCache_() {
+  REQUEST_SPREADSHEET_ = null;
+  REQUEST_SHEET_CACHE_ = {};
+}
+
+function getSpreadsheet_() {
+  if (!REQUEST_SPREADSHEET_) {
+    REQUEST_SPREADSHEET_ = SpreadsheetApp.openById(SHEET_ID);
+  }
+  return REQUEST_SPREADSHEET_;
+}
+
 function getSheet(name) {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
+  if (Object.prototype.hasOwnProperty.call(REQUEST_SHEET_CACHE_, name)) {
+    return REQUEST_SHEET_CACHE_[name];
+  }
+
+  const ss = getSpreadsheet_();
   const sh = ss.getSheetByName(name);
   if (!sh) throw new Error("Sheet not found: " + name);
+  REQUEST_SHEET_CACHE_[name] = sh;
   return sh;
 }
 
@@ -624,6 +646,7 @@ function debugRoutes() {
       "extrusion.update",
       "dispatch.add",
       "dispatch.list",
+      "dispatch.fgAvailability",
       "dispatch.update",
       "storesMaster.add",
       "storesMaster.list",
@@ -691,7 +714,7 @@ function buildHealthCheck_(data) {
   };
 
   try {
-    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const ss = getSpreadsheet_();
     const requiredSheets = ["RM_Inward", "Inventory_Ledger", "Month_Close"];
     const missingSheets = requiredSheets.filter(function (name) {
       return !ss.getSheetByName(name);
@@ -1720,7 +1743,7 @@ function dbValidateSchema(data) {
 }
 
 function dbRepairHeaders(data) {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ss = getSpreadsheet_();
   const schema = getRequiredDbSchema_();
   const changes = [];
 
@@ -1761,7 +1784,7 @@ function dbRepairHeaders(data) {
 }
 
 function dbRunMigrations(data) {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ss = getSpreadsheet_();
   const schema = getRequiredDbSchema_();
   const changes = [];
 
@@ -1812,7 +1835,7 @@ function dbRunMigrations(data) {
 }
 
 function buildDatabaseHealth_() {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ss = getSpreadsheet_();
   const schema = getRequiredDbSchema_();
   const requiredSheets = Object.keys(schema);
   const allSheets = ss.getSheets();
@@ -1986,7 +2009,7 @@ function isSheetHeaderOnlyOrEmpty_(sheet) {
 }
 
 function updateSystemMetadata_(key, value) {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ss = getSpreadsheet_();
   let sheet = ss.getSheetByName("System_Metadata");
 
   if (!sheet) {
@@ -5129,7 +5152,7 @@ function addMaterialBucket(data = {}) {
 }
 
 function seedStandardMaterialBuckets() {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ss = getSpreadsheet_();
   let sh = ss.getSheetByName("Material_Buckets");
   const headers = transformationSchemaHeaders_("Material_Buckets");
 
@@ -8989,6 +9012,49 @@ function debugDispatchLedger(data = {}) {
   });
 }
 
+function getDispatchFgAvailability() {
+  const startedAt = Date.now();
+  const balances = {
+    E1: 0,
+    E2: 0,
+    E3: 0,
+    E4: 0,
+    E5: 0,
+  };
+
+  getRowsAsObjects("Inventory_Ledger").forEach(function(row) {
+    const status = String(row.status || "ACTIVE").trim().toUpperCase();
+    if (
+      isDeleted_(row) ||
+      ["INACTIVE", "DISABLED", "ARCHIVED", "VOID", "VOIDED", "REVERSED", "CANCELLED", "REJECTED"].indexOf(status) !== -1
+    ) {
+      return;
+    }
+
+    if (String(row.itemType || "").trim().toUpperCase() !== "FG") return;
+
+    const rawGrade = String(
+      row.itemName || row.materialName || row.materialCode || ""
+    ).trim().toUpperCase();
+    if (!/^E[1-5]$/.test(rawGrade)) return;
+
+    balances[rawGrade] += num(row.qtyIn) - num(row.qtyOut);
+  });
+
+  return output({
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    source: "Inventory_Ledger",
+    grades: ["E1", "E2", "E3", "E4", "E5"].map(function(grade) {
+      return {
+        grade,
+        availableKg: round2(balances[grade]),
+      };
+    }),
+    elapsedMs: Date.now() - startedAt,
+  });
+}
+
 function addDispatch(data = {}) {
   const timer = dispatchTimer_();
   timer.mark("received request");
@@ -10067,7 +10133,7 @@ function rebuildInventoryLedger(data = {}) {
   }
 
   try {
-    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const ss = getSpreadsheet_();
     const ledgerSheet = getSheet("Inventory_Ledger");
     const headers = inventoryLedgerHeaders_();
     ensureHeaders_("Inventory_Ledger", headers);
@@ -10756,7 +10822,7 @@ function migrateJuneMaterialFlowToV1(dryRun) {
   }
 
   try {
-    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const ss = getSpreadsheet_();
     const ledgerSheet = getSheet("Inventory_Ledger");
     const headers = inventoryLedgerHeaders_();
     ensureHeaders_("Inventory_Ledger", headers);
@@ -10839,7 +10905,7 @@ function migrateJuneMaterialFlowToV1Chunk(data = {}) {
   }
 
   try {
-    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const ss = getSpreadsheet_();
     const ledgerSheet = getSheet("Inventory_Ledger");
     const headers = inventoryLedgerHeaders_();
     ensureHeaders_("Inventory_Ledger", headers);
@@ -10936,7 +11002,7 @@ function rebuildJuneLedgerV1(data = {}) {
   }
 
   try {
-    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const ss = getSpreadsheet_();
     const ledgerSheet = getSheet("Inventory_Ledger");
     const headers = inventoryLedgerHeaders_();
     ensureHeaders_("Inventory_Ledger", headers);
@@ -14383,15 +14449,18 @@ function syncOldQualityData() {
 
 // MONTH AUDIT - SAFE ADD-ON
 function createSheetIfMissing_(sheetName, headers) {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ss = getSpreadsheet_();
   let sh = ss.getSheetByName(sheetName);
 
   if (!sh) {
     sh = ss.insertSheet(sheetName);
+    REQUEST_SHEET_CACHE_[sheetName] = sh;
     sh.appendRow(headers);
     sh.setFrozenRows(1);
     return sh;
   }
+
+  REQUEST_SHEET_CACHE_[sheetName] = sh;
 
   if (sh.getLastRow() === 0) {
     sh.appendRow(headers);
@@ -14917,7 +14986,7 @@ function calculateInventoryBackend({
 // SETUP
 
 function setupRegenOSBackend() {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ss = getSpreadsheet_();
 
   const sheets = {
     Inventory_Ledger: [

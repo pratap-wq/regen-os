@@ -459,6 +459,9 @@ export default function Production() {
       const finalGrinderRows = cleanGrinderRows();
       const grinderTotalKg = grinderFeedTotalKg();
       const finalGrinderOutputRows = cleanOutputRows(grinderOutputRows);
+      const grinderRegrindMaterial = grinderOutputRows.find((row) =>
+        String(row.material || "").toUpperCase().includes("REGRIND")
+      )?.material || "regrind material";
       const finalWashRows = cleanWashRows();
       const washTotalKg = washFeedTotalKg();
       const finalWashOutputRows = cleanOutputRows(washOutputRows);
@@ -474,7 +477,7 @@ export default function Production() {
         }
 
         if (grinderRegrindOutputKg <= 0) {
-          setMessage(`Grinder: add ${grinderOutputMaterial} output quantity.`);
+          setMessage(`Grinder: add ${grinderRegrindMaterial} output quantity.`);
           setSaving(false);
           return;
         }

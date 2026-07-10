@@ -7,11 +7,29 @@ import FormSection from "../components/FormSection";
 import FactoryDropdown from "../components/FactoryDropdown";
 import ProductionMaterialSelect from "../components/ProductionMaterialSelect";
 import { KpiCard, PageLayout } from "../components/factoryDesignSystem";
-import {
-  materialInventoryFromLedgerBalances,
-  normalizeInventoryMaterial,
-} from "../services/inventoryEngine";
+import { normalizeInventoryMaterial } from "../services/inventoryEngine";
 import { materialKey } from "../utils/materialInventory";
+
+const DISPATCH_API_DEBUG =
+  import.meta.env.DEV ||
+  String(import.meta.env.VITE_REGEN_DEBUG || "").toLowerCase() === "true";
+
+async function timedDispatchApiCall(payload) {
+  const startedAt = Date.now();
+
+  try {
+    return await apiCall(payload);
+  } finally {
+    const elapsedMs = Date.now() - startedAt;
+    const routeName = payload?.fn || "unknown";
+
+    if (elapsedMs > 5000) {
+      console.warn(`[Dispatch API] ${routeName}: ${elapsedMs} ms`);
+    } else if (DISPATCH_API_DEBUG) {
+      console.info(`[Dispatch API] ${routeName}: ${elapsedMs} ms`);
+    }
+  }
+}
 
 export default function Dispatch() {
   const today = new Date().toISOString().split("T")[0];
@@ -58,8 +76,7 @@ export default function Dispatch() {
   };
 
   const [rows, setRows] = useState([]);
-  const [extrusionRows, setExtrusionRows] = useState([]);
-  const [ledgerBalanceRows, setLedgerBalanceRows] = useState([]);
+  const [fgAvailabilityRows, setFgAvailabilityRows] = useState([]);
   const [customerRows, setCustomerRows] = useState([]);
   const [customerUnitRows, setCustomerUnitRows] = useState([]);
   const [fgRateRows, setFgRateRows] = useState([]);
@@ -77,19 +94,21 @@ export default function Dispatch() {
 
   async function loadData() {
     try {
-      const [dispatch, extrusion, ledgerBalance, customers, customerUnits, fgRates, materials] = await Promise.all([
-        apiCall({ fn: "dispatch.list" }),
-        apiCall({ fn: "extrusion.list" }),
-        apiCall({ fn: "inventoryLedger.balance" }),
-        apiCall({ fn: "factoryMaster.list", masterType: "customer" }),
-        apiCall({ fn: "factoryMaster.list", masterType: "customerUnit" }),
-        apiCall({ fn: "fgRates.list" }),
-        apiCall({ fn: "materialMaster.list" }),
+      const [dispatch, fgAvailability, customers, customerUnits, fgRates, materials] = await Promise.all([
+        timedDispatchApiCall({ fn: "dispatch.list" }),
+        timedDispatchApiCall({ fn: "dispatch.fgAvailability" }),
+        timedDispatchApiCall({ fn: "factoryMaster.list", masterType: "customer" }),
+        timedDispatchApiCall({ fn: "factoryMaster.list", masterType: "customerUnit" }),
+        timedDispatchApiCall({ fn: "fgRates.list" }),
+        timedDispatchApiCall({ fn: "materialMaster.list" }),
       ]);
 
+      if (!fgAvailability || fgAvailability.ok === false) {
+        throw new Error(fgAvailability?.error || "Failed loading FG availability from Inventory Ledger.");
+      }
+
       setRows(dispatch.rows || []);
-      setExtrusionRows(extrusion.rows || []);
-      setLedgerBalanceRows(ledgerBalance.rows || []);
+      setFgAvailabilityRows(fgAvailability.grades || []);
       setCustomerRows(customers.rows || []);
       setCustomerUnitRows(customerUnits.rows || []);
       setFgRateRows(fgRates.rows || []);
@@ -155,107 +174,13 @@ export default function Dispatch() {
     return [{ ...blankLine }];
   }
 
-  function getDispatchedQtyForBatch(batchId, currentDispatchId = "") {
-    let total = 0;
-
-    rows
-      .filter(
-        (r) =>
-          String(r.dispatchStatus || "").toUpperCase() !== "DELETED" &&
-          String(r.status || "").toUpperCase() !== "DELETED"
-      )
-      .filter(
-        (r) => String(r.dispatchId || "") !== String(currentDispatchId || "")
-      )
-      .forEach((r) => {
-        const lines = parseLines(r);
-
-        lines.forEach((line) => {
-          if (
-            String(line.sourceExtrusionBatchId || "") === String(batchId || "")
-          ) {
-            total += Number(line.dispatchQtyKg || 0);
-          }
-        });
-      });
-
-    return total;
-  }
-
-  function getAvailableFG(batchId, currentDispatchId = editingRow?.dispatchId || "") {
-    const fg = extrusionRows.find(
-      (x) => String(x.extrusionBatchId) === String(batchId)
-    );
-
-    if (!fg) return 0;
-
-    const produced = Number(fg.fgOutputKg || 0);
-    const dispatched = getDispatchedQtyForBatch(batchId, currentDispatchId);
-
-    return Math.max(produced - dispatched, 0);
-  }
-
-  function extrusionDate(row) {
-    return dateForInput(row.date || row.productionDate || row.createdAt || "");
-  }
-
-  function extrusionShift(row) {
-    return String(row.shift || row.productionShift || "").toUpperCase();
-  }
-
-  const allLiveLots = useMemo(() => {
-    return extrusionRows
-      .map((x) => ({
-        ...x,
-        productionDate: extrusionDate(x),
-        productionShift: extrusionShift(x),
-        available: getAvailableFG(x.extrusionBatchId),
-      }))
-      .filter((x) => Number(x.available || 0) > 0)
-      .sort((a, b) =>
-        String(a.extrusionBatchId || "").localeCompare(
-          String(b.extrusionBatchId || "")
-        )
-      );
-  }, [extrusionRows, rows, editingRow]);
-
   const materialInventory = useMemo(() => {
-    const ledgerFg = materialInventoryFromLedgerBalances(ledgerBalanceRows, {
-      itemType: "FG",
-    });
-    const hasFgLedgerRows = ledgerBalanceRows.some(
-      (row) => String(row.itemType || "").toUpperCase() === "FG"
-    );
-
-    if (hasFgLedgerRows) {
-      return ledgerFg;
-    }
-
-    const map = {};
-
-    allLiveLots.forEach((lot) => {
-      const material = normalizeFgGrade(lot.productionGrade || lot.grade);
-      if (!material) return;
-
-      if (!map[material]) {
-        map[material] = {
-          material,
-          availableKg: 0,
-          lots: 0,
-          source: "Legacy extrusion lots",
-        };
-      }
-
-      map[material].availableKg += Number(lot.available || 0);
-      map[material].lots += 1;
-    });
-
-    return Object.values(map).sort((a, b) =>
-      String(a.material).localeCompare(String(b.material), undefined, {
-        numeric: true,
-      })
-    );
-  }, [ledgerBalanceRows, allLiveLots]);
+    return fgAvailabilityRows.map((row) => ({
+      material: normalizeFgGrade(row.grade),
+      availableKg: Number(row.availableKg || 0),
+      source: "Inventory_Ledger",
+    }));
+  }, [fgAvailabilityRows]);
 
   const fgGrades = useMemo(() => {
     return materialRows

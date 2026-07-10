@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
@@ -9,42 +9,38 @@ import { auth, logout } from "./firebase";
 import Sidebar from "./components/Sidebar";
 
 import Login from "./pages/Login";
-import Traceability from "./pages/Traceability";
-import Production from "./pages/Production";
-import ProductionHistory from "./pages/ProductionHistory";
-import ProductionControlCenter from "./pages/ProductionControlCenter";
 
-import Dashboard from "./pages/Dashboard";
-import ProcurementDashboard from "./pages/ProcurementDashboard";
-import InventoryDashboard from "./pages/InventoryDashboard";
-
-import RMInward from "./pages/RMInward";
-import RMList from "./pages/RMList";
-import Suppliers from "./pages/Suppliers";
-import SupplierEntry from "./pages/SupplierEntry";
-
-import WashBatches from "./pages/WashBatches";
-import ExtrusionBatches from "./pages/ExtrusionBatches";
-import Dispatch from "./pages/Dispatch";
-import ColorSorterBatches from "./pages/ColorSorterBatches";
-import FactoryMasters from "./pages/FactoryMasters";
-import LiveInventory from "./pages/LiveInventory";
-import MonthlyAudit from "./pages/MonthlyAudit";
-import InventoryAdjustments from "./pages/InventoryAdjustments";
-import Quality from "./pages/Quality";
-import FGRates from "./pages/FGRates";
-import FactoryExpenses from "./pages/FactoryExpenses";
-
-import Consumables from "./pages/Consumables";
-import StoresInward from "./pages/StoresInward";
-import StoresIssue from "./pages/StoresIssue";
-import LiveStoresInventory from "./pages/LiveStoresInventory";
-import StoresCosting from "./pages/StoresCosting";
-
-import AlertSettings from "./pages/AlertSettings";
-import AlertCenter from "./pages/AlertCenter";
-import SystemHealth from "./pages/SystemHealth";
-import MaterialMasterAdmin from "./pages/MaterialMasterAdmin";
+const Traceability = lazy(() => import("./pages/Traceability"));
+const Production = lazy(() => import("./pages/Production"));
+const ProductionHistory = lazy(() => import("./pages/ProductionHistory"));
+const ProductionControlCenter = lazy(() => import("./pages/ProductionControlCenter"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const ProcurementDashboard = lazy(() => import("./pages/ProcurementDashboard"));
+const InventoryDashboard = lazy(() => import("./pages/InventoryDashboard"));
+const RMInward = lazy(() => import("./pages/RMInward"));
+const RMList = lazy(() => import("./pages/RMList"));
+const Suppliers = lazy(() => import("./pages/Suppliers"));
+const SupplierEntry = lazy(() => import("./pages/SupplierEntry"));
+const WashBatches = lazy(() => import("./pages/WashBatches"));
+const ExtrusionBatches = lazy(() => import("./pages/ExtrusionBatches"));
+const Dispatch = lazy(() => import("./pages/Dispatch"));
+const ColorSorterBatches = lazy(() => import("./pages/ColorSorterBatches"));
+const FactoryMasters = lazy(() => import("./pages/FactoryMasters"));
+const LiveInventory = lazy(() => import("./pages/LiveInventory"));
+const MonthlyAudit = lazy(() => import("./pages/MonthlyAudit"));
+const InventoryAdjustments = lazy(() => import("./pages/InventoryAdjustments"));
+const Quality = lazy(() => import("./pages/Quality"));
+const FGRates = lazy(() => import("./pages/FGRates"));
+const FactoryExpenses = lazy(() => import("./pages/FactoryExpenses"));
+const Consumables = lazy(() => import("./pages/Consumables"));
+const StoresInward = lazy(() => import("./pages/StoresInward"));
+const StoresIssue = lazy(() => import("./pages/StoresIssue"));
+const LiveStoresInventory = lazy(() => import("./pages/LiveStoresInventory"));
+const StoresCosting = lazy(() => import("./pages/StoresCosting"));
+const AlertSettings = lazy(() => import("./pages/AlertSettings"));
+const AlertCenter = lazy(() => import("./pages/AlertCenter"));
+const SystemHealth = lazy(() => import("./pages/SystemHealth"));
+const MaterialMasterAdmin = lazy(() => import("./pages/MaterialMasterAdmin"));
 export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -94,7 +90,8 @@ export default function App() {
           </div>
 
           <div style={pageWrap}>
-            <Routes>
+            <Suspense fallback={<div style={loadingStyle}>Loading RegenOS...</div>}>
+              <Routes>
               <Route path="/" element={<Production />} />
               <Route path="/production" element={<Production />} />
               <Route
@@ -150,8 +147,9 @@ export default function App() {
               <Route path="/system-health" element={<SystemHealth />} />
               <Route path="/material-master-admin" element={<MaterialMasterAdmin />} />
 
-              <Route path="*" element={<Navigate to="/dashboard" />} />
-            </Routes>
+                <Route path="*" element={<Navigate to="/dashboard" />} />
+              </Routes>
+            </Suspense>
           </div>
         </main>
       </div>

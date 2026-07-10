@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 import DataTable from "../components/DataTable";
+import { createStableTransactionId, requireSuccessfulResponse, withRequestTimeout } from "../utils/requestSafety";
 
 import {
   pageStyle,
@@ -18,6 +19,7 @@ export default function StoresInward() {
   const today = new Date().toISOString().split("T")[0];
 
   const blankForm = {
+    inwardId: "",
     date: today,
     itemName: "",
     category: "",
@@ -67,6 +69,9 @@ export default function StoresInward() {
     [items, newItem.unit, editingRow?.unit]
   );
   const [savingEdit, setSavingEdit] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveState, setSaveState] = useState("idle");
+  const saveLockRef = useRef(false);
 
   useEffect(() => {
     loadData();
@@ -184,6 +189,10 @@ export default function StoresInward() {
       ...form,
       [e.target.name]: e.target.value,
     };
+    if (["date", "itemName"].includes(e.target.name) && form[e.target.name] !== e.target.value) {
+      updated.inwardId = "";
+    }
+    if (saveState === "saved") setSaveState("idle");
 
     if (e.target.name === "itemName") {
       const selected = items.find((x) => x.itemName === e.target.value);
@@ -249,26 +258,30 @@ export default function StoresInward() {
 
   async function submit(e) {
     e.preventDefault();
+    if (saveLockRef.current || saveState === "saved") return;
+    saveLockRef.current = true;
+    setIsSaving(true);
+    setSaveState("saving");
+    setStatus("Saving stores inward...");
 
-    if (!form.date) return alert("Date is mandatory");
-    if (!form.itemName) return alert("Select item");
-    if (!form.qty) return alert("Enter quantity");
+    if (!form.date) return releaseMainSave("Date is mandatory");
+    if (!form.itemName) return releaseMainSave("Select item");
+    if (!form.qty) return releaseMainSave("Enter quantity");
 
     try {
       const beforeQty = getAvailableStock(form.itemName);
       const addedQty = Number(form.qty || 0);
-      const res = await apiCall({
+      const inwardId = form.inwardId || createStableTransactionId("SIN", form.date, form.itemName);
+      if (!form.inwardId) setForm((current) => ({ ...current, inwardId }));
+      const res = requireSuccessfulResponse(await withRequestTimeout(apiCall({
         fn: "storesInward.add",
         ...form,
+        inwardId,
         totalAmount: calcAmount(form.qty, form.rate),
-      });
+      })), "inwardId", "Stores inward save");
 
-      if (res.ok === false) {
-        setStatus(res.error || "Error saving stores inward");
-        return;
-      }
-
-      setStatus("Stores inward saved successfully");
+      setStatus(`Stores inward saved successfully: ${res.inwardId}`);
+      setSaveState("saved");
       setLastStockMovement({
         itemName: form.itemName,
         before: beforeQty,
@@ -276,15 +289,28 @@ export default function StoresInward() {
         movement: addedQty,
         remaining: beforeQty + addedQty,
       });
+      await loadData();
       setForm(blankForm);
-      loadData();
     } catch (err) {
       setStatus(err.message);
+      setSaveState("idle");
+    } finally {
+      saveLockRef.current = false;
+      setIsSaving(false);
     }
   }
 
+  function releaseMainSave(message) {
+    setStatus(message);
+    setSaveState("idle");
+    saveLockRef.current = false;
+    setIsSaving(false);
+  }
+
   function clearMainForm() {
+    if (saveLockRef.current) return;
     setForm(blankForm);
+    setSaveState("idle");
     setStatus("Ready for new inward entry");
   }
 
@@ -444,8 +470,9 @@ export default function StoresInward() {
         <form
           onSubmit={submit}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && e.target.tagName !== "TEXTAREA") {
+            if (e.key === "Enter" && (isSaving || e.target.tagName !== "TEXTAREA")) {
               e.preventDefault();
+              if (isSaving) e.stopPropagation();
             }
           }}
           style={formGrid}
@@ -544,11 +571,11 @@ export default function StoresInward() {
           </Field>
 
           <div style={formActions}>
-            <button type="submit" style={primaryButton}>
-              Save Inward
+            <button type="submit" disabled={isSaving || saveState === "saved"} style={isSaving || saveState === "saved" ? disabledMainButton : primaryButton}>
+              {isSaving ? "Saving..." : saveState === "saved" ? "Saved" : "Save Inward"}
             </button>
 
-            <button type="button" style={clearButton} onClick={clearMainForm}>
+            <button type="button" disabled={isSaving} style={isSaving ? disabledClearButton : clearButton} onClick={clearMainForm}>
               Clear / New Entry
             </button>
           </div>
@@ -1053,6 +1080,9 @@ const saveButton = {
   cursor: "pointer",
   fontWeight: 700,
 };
+
+const disabledMainButton = { ...primaryButton, opacity: 0.65, cursor: "not-allowed" };
+const disabledClearButton = { ...clearButton, opacity: 0.65, cursor: "not-allowed" };
 
 function uniqueOptions(values, ...currentValues) {
   return [...new Set([...(values || []), ...currentValues].map((value) => String(value || "").trim()).filter(Boolean))].sort();

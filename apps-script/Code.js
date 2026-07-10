@@ -85,6 +85,8 @@ function doGet(e) {
     if (p.fn === "grinder.list") return listGrinderBatches(p);
     if (p.fn === "grinder.update") return updateGrinderBatch(p);
     if (p.fn === "production.historySummary") return getProductionHistorySummary(p);
+    if (p.fn === "dashboard.ceoSummary") return getDashboardCeoSummary(p);
+    if (p.fn === "dashboard.factorySummary") return getDashboardFactorySummary(p);
 
     // Wash
     if (p.fn === "wash.add") return addWashBatch(p);
@@ -636,6 +638,8 @@ function debugRoutes() {
       "grinder.list",
       "grinder.update",
       "production.historySummary",
+      "dashboard.ceoSummary",
+      "dashboard.factorySummary",
       "wash.add",
       "wash.list",
       "wash.update",
@@ -7778,6 +7782,374 @@ function productionHistorySearchText_(row) {
     row.supervisorName,
     row.remarks,
   ].join(" ").toLowerCase();
+}
+
+function getDashboardCeoSummary(data = {}) {
+  const startedAt = Date.now();
+  const periodMonth = normalizeMonthClosePeriod_(data.periodMonth || todayYmd());
+  const monthlyTargetKg = num(data.monthlyTargetKg) || 500000;
+  if (!periodMonth) return output({ ok: false, error: "dashboard.ceoSummary requires periodMonth" });
+
+  try {
+    const rmAll = getRowsAsObjects("RM_Inward").filter(function(row) { return !isDeleted_(row); });
+    const washAll = getRowsAsObjects("Wash_Batches").filter(function(row) { return !isDeleted_(row); });
+    const sortingAll = getRowsAsObjects("Sorting_Batches").filter(function(row) { return !isDeleted_(row); });
+    const extrusionAll = getRowsAsObjects("Extrusion_Batches").filter(function(row) { return !isDeleted_(row); });
+    const dispatchAll = getRowsAsObjects("Dispatches").filter(function(row) { return !isDeleted_(row); });
+    const storesInwardAll = getRowsAsObjects("Stores_Inward").filter(function(row) { return !isDeleted_(row); });
+    const storesIssueAll = getRowsAsObjects("Stores_Issue").filter(function(row) { return !isDeleted_(row); });
+    const factoryExpenseAll = getRowsAsObjects("Factory_Expenses").filter(function(row) { return !isDeleted_(row); });
+    const storesMaster = getRowsAsObjects("Stores_Master").filter(function(row) { return !isDeleted_(row); });
+
+    const rm = dashboardRowsForPeriod_(rmAll, periodMonth);
+    const wash = dashboardRowsForPeriod_(washAll, periodMonth);
+    const sorting = dashboardRowsForPeriod_(sortingAll, periodMonth);
+    const extrusion = dashboardRowsForPeriod_(extrusionAll, periodMonth);
+    const dispatch = dashboardRowsForPeriod_(dispatchAll, periodMonth);
+    const storesInward = dashboardRowsForPeriod_(storesInwardAll, periodMonth);
+    const storesIssue = dashboardRowsForPeriod_(storesIssueAll, periodMonth);
+    const factoryExpenses = dashboardRowsForPeriod_(factoryExpenseAll, periodMonth);
+    const itemRates = dashboardStoreRates_(storesMaster, storesInwardAll);
+
+    const rmPurchased = dashboardSum_(rm, "netWeight");
+    const rmValue = rm.reduce(function(sum, row) { return sum + num(row.netWeight) * num(row.ratePerKg); }, 0);
+    const washInput = dashboardSum_(wash, "inputWeightKg");
+    const washOutput = dashboardSum_(wash, "washedOutputKg");
+    const sortingInput = dashboardSum_(sorting, "inputWeightKg");
+    const sortingOutput = sorting.reduce(function(sum, row) {
+      return sum + (num(row.acceptedQtyKg || row.acceptedWeightKg) ||
+        num(row.whiteSortedKg) + num(row.allMixSortedKg) + num(row.whiteGreyKg));
+    }, 0);
+    const extrusionInput = extrusion.reduce(function(sum, row) {
+      return sum + num(row.inputWeightKg || row.totalInputKg);
+    }, 0);
+    const fgProduced = dashboardSum_(extrusion, "fgOutputKg");
+    const dispatched = dashboardSum_(dispatch, "quantityKg");
+    const revenue = dispatch.reduce(function(sum, row) {
+      return sum + num(row.quantityKg) * num(row.ratePerKg);
+    }, 0);
+    const storesInwardValue = storesInward.reduce(function(sum, row) {
+      return sum + num(row.totalAmount || num(row.qty) * num(row.rate));
+    }, 0);
+    const storesIssueQty = dashboardSum_(storesIssue, "qty");
+    const storesIssueValue = storesIssue.reduce(function(sum, row) {
+      const rate = num(row.issueRate || row.rate) || num(itemRates[row.itemName]);
+      return sum + num(row.issueValue || num(row.qty) * rate);
+    }, 0);
+    const factoryExpenseValue = factoryExpenses.reduce(function(sum, row) {
+      return sum + num(row.amount || row.expenseAmount || row.totalAmount || row.value);
+    }, 0);
+
+    const rmTransportValue = rm.reduce(function(sum, row) {
+      return String(row.transportPaidBy || "SUPPLIER").toUpperCase() === "REGEN"
+        ? sum + num(row.transportCost)
+        : sum;
+    }, 0);
+    const avgRmRate = rmPurchased > 0 ? rmValue / rmPurchased : 0;
+    const avgRmCostPerKg = rmPurchased > 0 ? (rmValue + rmTransportValue) / rmPurchased : 0;
+    const avgSaleRate = dispatched > 0 ? revenue / dispatched : 0;
+    const overallRecovery = washInput > 0 ? fgProduced * 100 / washInput : 0;
+    const washRecovery = washInput > 0 ? washOutput * 100 / washInput : 0;
+    const sortingRecovery = sortingInput > 0 ? sortingOutput * 100 / sortingInput : 0;
+    const extrusionRecovery = extrusionInput > 0 ? fgProduced * 100 / extrusionInput : 0;
+    const effectiveRmCostPerKg = overallRecovery > 0 ? avgRmCostPerKg / (overallRecovery / 100) : avgRmCostPerKg;
+    const storesCostPerKg = fgProduced > 0 ? storesIssueValue / fgProduced : 0;
+    const factoryCostPerKg = fgProduced > 0 ? factoryExpenseValue / fgProduced : 0;
+    const manufacturingCostPerKg = effectiveRmCostPerKg + storesCostPerKg + factoryCostPerKg;
+    const grossMarginPerKg = avgSaleRate - manufacturingCostPerKg;
+    const estimatedRmConsumedValue = washInput * avgRmRate;
+    const grossContribution = revenue - estimatedRmConsumedValue;
+    const totalFactoryOverhead = storesIssueValue + factoryExpenseValue;
+    const estimatedProfit = revenue - estimatedRmConsumedValue - storesIssueValue - factoryExpenseValue;
+    const profitPerKg = fgProduced > 0 ? estimatedProfit / fgProduced : 0;
+
+    const periodParts = periodMonth.split("-").map(Number);
+    const now = new Date();
+    const daysInMonth = new Date(periodParts[0], periodParts[1], 0).getDate();
+    const isCurrentMonth = now.getFullYear() === periodParts[0] && now.getMonth() + 1 === periodParts[1];
+    const currentDay = isCurrentMonth ? now.getDate() : daysInMonth;
+    const achievement = monthlyTargetKg > 0 ? fgProduced * 100 / monthlyTargetKg : 0;
+    const phase2Achievement = fgProduced * 100 / 900000;
+    const targetTillDate = monthlyTargetKg / daysInMonth * currentDay;
+    const gap = fgProduced - targetTillDate;
+    const balance = Math.max(monthlyTargetKg - fgProduced, 0);
+    const remainingDays = Math.max(daysInMonth - currentDay, 1);
+    const requiredRunRate = balance / remainingDays;
+    const actualDailyAvg = currentDay > 0 ? fgProduced / currentDay : 0;
+
+    const daily = [];
+    let cumulativeActual = 0;
+    for (let day = 1; day <= currentDay; day += 1) {
+      const actualKg = extrusion.filter(function(row) {
+        return dashboardDay_(row.date || row.createdAt) === day;
+      }).reduce(function(sum, row) { return sum + num(row.fgOutputKg); }, 0);
+      cumulativeActual += actualKg;
+      daily.push({
+        day,
+        target: round2(monthlyTargetKg / daysInMonth * day),
+        actual: round2(cumulativeActual),
+        actualKg: round2(actualKg),
+        gap: round2(cumulativeActual - monthlyTargetKg / daysInMonth * day),
+      });
+    }
+
+    const suppliers = dashboardTopSuppliers_(rm);
+    const topConsumables = dashboardTopConsumables_(storesIssue, itemRates);
+    const costEngine = {
+      periodMonth,
+      rmPurchasedKg: round2(rmPurchased),
+      rmBasicPurchaseValue: round2(rmValue),
+      rmTransportValue: round2(rmTransportValue),
+      rmPurchaseValue: round2(rmValue + rmTransportValue),
+      avgRmCostPerKg: round2(avgRmCostPerKg),
+      washInputKg: round2(washInput),
+      washOutputKg: round2(washOutput),
+      washRecoveryPercent: round2(washRecovery),
+      sortingInputKg: round2(sortingInput),
+      sortingOutputKg: round2(sortingOutput),
+      sortingRecoveryPercent: round2(sortingRecovery),
+      extrusionInputKg: round2(extrusionInput),
+      fgProducedKg: round2(fgProduced),
+      extrusionRecoveryPercent: round2(extrusionRecovery),
+      overallRecoveryPercent: round2(overallRecovery),
+      effectiveRmCostPerKg: round2(effectiveRmCostPerKg),
+      storesIssueValue: round2(storesIssueValue),
+      storesCostPerKg: round2(storesCostPerKg),
+      factoryExpenseValue: round2(factoryExpenseValue),
+      factoryCostPerKg: round2(factoryCostPerKg),
+      manufacturingCostPerKg: round2(manufacturingCostPerKg),
+      dispatchKg: round2(dispatched),
+      revenue: round2(revenue),
+      avgSellingPricePerKg: round2(avgSaleRate),
+      grossMarginPerKg: round2(grossMarginPerKg),
+      estimatedProfit: round2(grossMarginPerKg * fgProduced),
+    };
+    const profitWaterfall = dashboardProfitWaterfall_(costEngine);
+    const latestCostPeriod = factoryExpenseAll.map(function(row) {
+      return normalizeMonthClosePeriod_(row.periodMonth || row.date || row.createdAt || "");
+    }).filter(function(value) { return value; }).sort().pop() || "";
+
+    return output({
+      ok: true,
+      periodMonth,
+      generatedAt: new Date().toISOString(),
+      elapsedMs: Date.now() - startedAt,
+      latestCostPeriod,
+      hasSelectedCostRows: factoryExpenses.length > 0,
+      summary: {
+        rmPurchased: round2(rmPurchased), rmValue: round2(rmValue), washInput: round2(washInput),
+        washOutput: round2(washOutput), sortingInput: round2(sortingInput), sortingOutput: round2(sortingOutput),
+        fgProduced: round2(fgProduced), extrusionInput: round2(extrusionInput), dispatched: round2(dispatched),
+        revenue: round2(revenue), storesInwardValue: round2(storesInwardValue), storesIssueQty: round2(storesIssueQty),
+        storesIssueValue: round2(storesIssueValue), totalFactoryOverhead: round2(totalFactoryOverhead),
+        storesCostPerKg: round2(storesCostPerKg), factoryExpenseValue: round2(factoryExpenseValue),
+        factoryCostPerKg: round2(factoryCostPerKg), avgRmRate: round2(avgRmRate), avgSaleRate: round2(avgSaleRate),
+        estimatedRmConsumedValue: round2(estimatedRmConsumedValue), grossContribution: round2(grossContribution),
+        estimatedProfit: round2(estimatedProfit), profitPerKg: round2(profitPerKg), overallRecovery: round2(overallRecovery),
+        washRecovery: round2(washRecovery), sortingRecovery: round2(sortingRecovery), extrusionRecovery: round2(extrusionRecovery),
+        achievement: round2(achievement), phase2Achievement: round2(phase2Achievement), targetTillDate: round2(targetTillDate),
+        gap: round2(gap), balance: round2(balance), requiredRunRate: round2(requiredRunRate), actualDailyAvg: round2(actualDailyAvg),
+        rmClosing: round2(rmPurchased - washInput), washClosing: round2(washOutput - sortingInput),
+        sortedClosing: round2(sortingOutput - extrusionInput), fgClosing: round2(fgProduced - dispatched),
+        daily, suppliers, topConsumables, daysInMonth, currentDay, costEngine, profitWaterfall,
+        unresolvedAlerts: dashboardUnresolvedAlerts_(costEngine, storesIssue),
+      },
+    });
+  } catch (err) {
+    return output({ ok: false, periodMonth, error: err.message || String(err), elapsedMs: Date.now() - startedAt });
+  }
+}
+
+function getDashboardFactorySummary(data = {}) {
+  const startedAt = Date.now();
+  const periodMonth = normalizeMonthClosePeriod_(data.periodMonth || todayYmd());
+  const monthlyTargetKg = num(data.monthlyTargetKg) || 500000;
+  if (!periodMonth) return output({ ok: false, error: "dashboard.factorySummary requires periodMonth" });
+
+  try {
+    const grinder = dashboardRowsForPeriod_(getRowsAsObjects("Grinder_Batches").filter(function(row) { return !isDeleted_(row); }), periodMonth);
+    const wash = dashboardRowsForPeriod_(getRowsAsObjects("Wash_Batches").filter(function(row) { return !isDeleted_(row); }), periodMonth);
+    const sorting = dashboardRowsForPeriod_(getRowsAsObjects("Sorting_Batches").filter(function(row) { return !isDeleted_(row); }), periodMonth);
+    const extrusion = dashboardRowsForPeriod_(getRowsAsObjects("Extrusion_Batches").filter(function(row) { return !isDeleted_(row); }), periodMonth);
+    const dispatch = dashboardRowsForPeriod_(getRowsAsObjects("Dispatches").filter(function(row) { return !isDeleted_(row); }), periodMonth);
+    const ledger = getRowsAsObjects("Inventory_Ledger").filter(function(row) { return !isDeleted_(row); });
+
+    const grinderInput = dashboardSum_(grinder, "inputWeightKg");
+    const grinderOutput = dashboardSum_(grinder, "regrindOutputKg");
+    const washInput = dashboardSum_(wash, "inputWeightKg");
+    const washOutput = dashboardSum_(wash, "washedOutputKg");
+    const sortingInput = dashboardSum_(sorting, "inputWeightKg");
+    const sortingOutput = sorting.reduce(function(sum, row) {
+      return sum + (num(row.acceptedQtyKg) || num(row.whiteSortedKg) + num(row.allMixSortedKg) + num(row.whiteGreyKg));
+    }, 0);
+    const extrusionInput = extrusion.reduce(function(sum, row) { return sum + num(row.inputWeightKg || row.totalInputKg); }, 0);
+    const fgProduced = dashboardSum_(extrusion, "fgOutputKg");
+    const dispatched = dashboardSum_(dispatch, "quantityKg");
+    const wasteReworkKg = dashboardWasteRework_(grinder, wash, sorting, extrusion);
+    const now = new Date();
+    const parts = periodMonth.split("-").map(Number);
+    const isCurrentMonth = now.getFullYear() === parts[0] && now.getMonth() + 1 === parts[1];
+    const currentDay = isCurrentMonth ? now.getDate() : new Date(parts[0], parts[1], 0).getDate();
+    const daysInMonth = new Date(parts[0], parts[1], 0).getDate();
+    const todayFg = extrusion.filter(function(row) { return isCurrentMonth && dashboardDay_(row.date || row.createdAt) === now.getDate(); })
+      .reduce(function(sum, row) { return sum + num(row.fgOutputKg); }, 0);
+    const todayDispatchKg = dispatch.filter(function(row) { return isCurrentMonth && dashboardDay_(row.date || row.createdAt) === now.getDate(); })
+      .reduce(function(sum, row) { return sum + num(row.quantityKg); }, 0);
+    const targetPerDay = monthlyTargetKg / daysInMonth;
+    const targetTillToday = targetPerDay * currentDay;
+    const balanceKg = monthlyTargetKg - fgProduced;
+    const requiredRunRate = balanceKg > 0 ? balanceKg / Math.max(daysInMonth - currentDay, 1) : 0;
+    const actualDailyAvg = currentDay > 0 ? fgProduced / currentDay : 0;
+    const achievement = monthlyTargetKg > 0 ? fgProduced * 100 / monthlyTargetKg : 0;
+    const daily = [];
+    let cumulativeActual = 0;
+    for (let day = 1; day <= currentDay; day += 1) {
+      const dayFg = extrusion.filter(function(row) { return dashboardDay_(row.date || row.createdAt) === day; })
+        .reduce(function(sum, row) { return sum + num(row.fgOutputKg); }, 0);
+      cumulativeActual += dayFg;
+      daily.push({ day, actualKg: round2(dayFg), cumulativeActual: round2(cumulativeActual), cumulativeTarget: round2(targetPerDay * day), gap: round2(cumulativeActual - targetPerDay * day) });
+    }
+
+    return output({
+      ok: true,
+      periodMonth,
+      generatedAt: new Date().toISOString(),
+      elapsedMs: Date.now() - startedAt,
+      summary: {
+        grinderInputKg: round2(grinderInput), grinderOutputKg: round2(grinderOutput),
+        washInputKg: round2(washInput), washOutputKg: round2(washOutput), sortingInputKg: round2(sortingInput),
+        sortingOutputKg: round2(sortingOutput), extrusionInputKg: round2(extrusionInput), extrusionOutputKg: round2(fgProduced),
+        fgProduced: round2(fgProduced), dispatched: round2(dispatched), todayFg: round2(todayFg), todayDispatchKg: round2(todayDispatchKg),
+        targetPerDay: round2(targetPerDay), targetTillToday: round2(targetTillToday), balanceKg: round2(balanceKg),
+        requiredRunRate: round2(requiredRunRate), actualDailyAvg: round2(actualDailyAvg), achievement: round2(achievement),
+        gap: round2(fgProduced - targetTillToday), washRecovery: washInput > 0 ? round2(washOutput * 100 / washInput) : 0,
+        sortingRecovery: sortingInput > 0 ? round2(sortingOutput * 100 / sortingInput) : 0,
+        extrusionRecovery: extrusionInput > 0 ? round2(fgProduced * 100 / extrusionInput) : 0,
+        overallRecovery: washInput > 0 ? round2(fgProduced * 100 / washInput) : 0,
+        wasteReworkKg: round2(wasteReworkKg), fgAvailable: dashboardFgAvailability_(ledger), daily,
+      },
+    });
+  } catch (err) {
+    return output({ ok: false, periodMonth, error: err.message || String(err), elapsedMs: Date.now() - startedAt });
+  }
+}
+
+function dashboardRowsForPeriod_(rows, periodMonth) {
+  return rows.filter(function(row) {
+    return normalizeMonthClosePeriod_(row.periodMonth || row.date || row.createdAt || "") === periodMonth;
+  });
+}
+
+function dashboardSum_(rows, key) {
+  return rows.reduce(function(sum, row) { return sum + num(row[key]); }, 0);
+}
+
+function dashboardDay_(value) {
+  if (!value) return 0;
+  const date = Object.prototype.toString.call(value) === "[object Date]" ? value : new Date(value);
+  return isNaN(date.getTime()) ? 0 : date.getDate();
+}
+
+function dashboardStoreRates_(masterRows, inwardRows) {
+  const rates = {};
+  masterRows.forEach(function(row) {
+    const name = String(row.itemName || row.name || "").trim();
+    if (name && num(row.standardRate || row.rate) > 0) rates[name] = num(row.standardRate || row.rate);
+  });
+  const totals = {};
+  inwardRows.forEach(function(row) {
+    const name = String(row.itemName || "").trim();
+    if (!name || num(row.rate) <= 0) return;
+    totals[name] = totals[name] || { qty: 0, value: 0 };
+    totals[name].qty += num(row.qty);
+    totals[name].value += num(row.totalAmount || num(row.qty) * num(row.rate));
+  });
+  Object.keys(totals).forEach(function(name) {
+    if (totals[name].qty > 0) rates[name] = totals[name].value / totals[name].qty;
+  });
+  return rates;
+}
+
+function dashboardTopSuppliers_(rows) {
+  const map = {};
+  rows.forEach(function(row) {
+    const supplier = row.supplier || "Unknown";
+    map[supplier] = map[supplier] || { supplier, qty: 0, value: 0, moisture: 0, contamination: 0, count: 0 };
+    map[supplier].qty += num(row.netWeight);
+    map[supplier].value += num(row.netWeight) * num(row.ratePerKg);
+    map[supplier].moisture += num(row.moisture);
+    map[supplier].contamination += num(row.contamination);
+    map[supplier].count += 1;
+  });
+  return Object.keys(map).map(function(key) {
+    const row = map[key];
+    return {
+      supplier: row.supplier, qty: round2(row.qty), value: round2(row.value),
+      avgRate: row.qty > 0 ? round2(row.value / row.qty) : 0,
+      avgMoisture: row.count > 0 ? round2(row.moisture / row.count) : 0,
+      avgContamination: row.count > 0 ? round2(row.contamination / row.count) : 0,
+    };
+  }).sort(function(a, b) { return b.qty - a.qty; }).slice(0, 5);
+}
+
+function dashboardTopConsumables_(rows, rates) {
+  const map = {};
+  rows.forEach(function(row) {
+    const itemName = row.itemName || "Unknown";
+    const rate = num(row.issueRate || row.rate) || num(rates[itemName]);
+    const value = num(row.issueValue || num(row.qty) * rate);
+    map[itemName] = map[itemName] || { itemName, category: row.category || "", qty: 0, value: 0 };
+    map[itemName].qty += num(row.qty);
+    map[itemName].value += value;
+  });
+  return Object.keys(map).map(function(key) {
+    const row = map[key];
+    return { itemName: row.itemName, category: row.category, qty: round2(row.qty), value: round2(row.value) };
+  }).sort(function(a, b) { return b.value - a.value; }).slice(0, 8);
+}
+
+function dashboardProfitWaterfall_(cost) {
+  return [
+    { label: "Material Landed Cost", type: "cost", value: round2(cost.avgRmCostPerKg), note: "Material purchase + Regen-paid transport" },
+    { label: "Recovery Loss", type: "cost", value: round2(cost.effectiveRmCostPerKg - cost.avgRmCostPerKg), note: "Cost added due to recovery loss" },
+    { label: "Stores / Consumables", type: "cost", value: round2(cost.storesCostPerKg), note: "Stores issue allocated per kg material" },
+    { label: "Factory Expenses", type: "cost", value: round2(cost.factoryCostPerKg), note: "Factory expenses allocated per kg material" },
+    { label: "Manufacturing Cost", type: "subtotal", value: round2(cost.manufacturingCostPerKg), note: "Total estimated manufacturing cost/kg" },
+    { label: "Selling Price", type: "revenue", value: round2(cost.avgSellingPricePerKg), note: "Average realized selling price/kg" },
+    { label: "Gross Margin", type: "margin", value: round2(cost.grossMarginPerKg), note: "Selling price minus manufacturing cost/kg" },
+  ];
+}
+
+function dashboardUnresolvedAlerts_(cost, storesIssueRows) {
+  let count = 0;
+  if (cost.fgProducedKg > 0 && cost.factoryExpenseValue <= 0) count += 1;
+  if (cost.dispatchKg > 0 && cost.revenue <= 0) count += 1;
+  if (storesIssueRows.some(function(row) { return num(row.issueRate || row.rate) <= 0 && num(row.issueValue) <= 0; })) count += 1;
+  return count;
+}
+
+function dashboardWasteRework_(grinder, wash, sorting, extrusion) {
+  let total = 0;
+  grinder.forEach(function(row) { total += num(row.dustKg) + num(row.metalRejectKg); });
+  wash.forEach(function(row) {
+    ["raffiaKg", "wrappersKg", "microPlasticKg", "sinkMaterialKg", "ironScrapKg", "otherColorKg", "dustKg", "sludgeKg"].forEach(function(key) { total += num(row[key]); });
+  });
+  sorting.forEach(function(row) { total += num(row.rejectedQtyKg) + num(row.rubberRejectKg) + num(row.blackSpecsRejectKg) + num(row.raffiaRejectKg); });
+  extrusion.forEach(function(row) {
+    ["lumpsKg", "purgingKg", "reworkGranulesKg", "rejectKg", "vacuumRejectKg", "meshRejectKg", "meshRejectionKg", "floorSpillageKg", "dustKg"].forEach(function(key) { total += num(row[key]); });
+  });
+  return total;
+}
+
+function dashboardFgAvailability_(ledgerRows) {
+  const grades = { E1: 0, E2: 0, E3: 0, E4: 0, E5: 0 };
+  ledgerRows.forEach(function(row) {
+    const match = String(row.materialCode || row.itemName || row.materialName || "").toUpperCase().match(/\bE[1-5]\b/);
+    if (!match) return;
+    grades[match[0]] += num(row.qtyIn) - num(row.qtyOut);
+  });
+  Object.keys(grades).forEach(function(grade) { grades[grade] = round2(grades[grade]); });
+  return grades;
 }
 
 function addGrinderBatch(data = {}) {
@@ -16783,9 +17155,10 @@ function savePhysicalCount(data = {}) {
   validateMonthLock(periodMonth);
 
   const sh = getSheet("Physical_Counts");
+  const countId = generateBatchId("PC");
 
   appendObjectRow(sh, {
-    countId: generateBatchId("PC"),
+    countId,
     periodMonth,
     rmPhysicalKg: optionalNumber_(data.rmPhysicalKg),
     washPhysicalKg: optionalNumber_(data.washPhysicalKg),
@@ -16804,7 +17177,7 @@ function savePhysicalCount(data = {}) {
     status: "ACTIVE",
   });
 
-  return output({ ok: true, message: "Physical stock saved", periodMonth });
+  return output({ ok: true, countId, message: "Physical stock saved", periodMonth });
 }
 
 function optionalNumber_(value) {

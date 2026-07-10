@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 import DataTable from "../components/DataTable";
+import { createStableTransactionId, requireSuccessfulResponse, withRequestTimeout } from "../utils/requestSafety";
 
 import {
   pageStyle,
@@ -18,6 +19,7 @@ export default function StoresIssue() {
   const today = new Date().toISOString().split("T")[0];
 
   const blankForm = {
+    issueId: "",
     date: today,
     itemName: "",
     category: "",
@@ -39,6 +41,9 @@ export default function StoresIssue() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const [lastStockMovement, setLastStockMovement] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveState, setSaveState] = useState("idle");
+  const saveLockRef = useRef(false);
   const departments = useMemo(
     () => uniqueOptions(rows.map((row) => row.department), form.department, editingRow?.department),
     [rows, form.department, editingRow?.department]
@@ -226,6 +231,10 @@ export default function StoresIssue() {
       ...form,
       [e.target.name]: e.target.value,
     };
+    if (["date", "itemName"].includes(e.target.name) && form[e.target.name] !== e.target.value) {
+      updated.issueId = "";
+    }
+    if (saveState === "saved") setSaveState("idle");
 
     if (e.target.name === "itemName") {
       const selected = items.find((x) => x.itemName === e.target.value);
@@ -242,17 +251,24 @@ export default function StoresIssue() {
   }
 
   function clearMainForm() {
+    if (saveLockRef.current) return;
     setForm(blankForm);
+    setSaveState("idle");
     setStatus("Ready for new stores issue entry");
   }
 
   async function submit(e) {
     e.preventDefault();
+    if (saveLockRef.current || saveState === "saved") return;
+    saveLockRef.current = true;
+    setIsSaving(true);
+    setSaveState("saving");
+    setStatus("Saving stores issue...");
 
-    if (!form.date) return alert("Date is mandatory");
-    if (!form.itemName) return alert("Select item");
-    if (!form.qty) return alert("Enter quantity");
-    if (!form.department) return alert("Select department");
+    if (!form.date) return releaseMainSave("Date is mandatory");
+    if (!form.itemName) return releaseMainSave("Select item");
+    if (!form.qty) return releaseMainSave("Enter quantity");
+    if (!form.department) return releaseMainSave("Select department");
 
     try {
       const finalForm = calculateIssueValue({ ...form });
@@ -260,19 +276,21 @@ export default function StoresIssue() {
       const issuedQty = Number(finalForm.qty || 0);
 
       if (issuedQty > beforeQty) {
-        setStatus(
+        return releaseMainSave(
           `Cannot issue ${issuedQty.toFixed(2)}. Available ${finalForm.itemName} stock is ${beforeQty.toFixed(2)}.`
         );
-        return;
       }
 
-      const res = await apiCall({
+      const issueId = form.issueId || createStableTransactionId("ISS", form.date, form.itemName);
+      if (!form.issueId) setForm((current) => ({ ...current, issueId }));
+      const res = requireSuccessfulResponse(await withRequestTimeout(apiCall({
         fn: "storesIssue.add",
         ...finalForm,
-      });
+        issueId,
+      })), "issueId", "Stores issue save");
 
-      if (res.ok) {
-        setStatus("Stores issue saved successfully");
+        setStatus(`Stores issue saved successfully: ${res.issueId}`);
+        setSaveState("saved");
         setLastStockMovement({
           itemName: finalForm.itemName,
           before: beforeQty,
@@ -280,14 +298,22 @@ export default function StoresIssue() {
           movement: issuedQty,
           remaining: beforeQty - issuedQty,
         });
+        await loadData();
         setForm(blankForm);
-        loadData();
-      } else {
-        setStatus(res.error || "Error");
-      }
     } catch (err) {
       setStatus(err.message);
+      setSaveState("idle");
+    } finally {
+      saveLockRef.current = false;
+      setIsSaving(false);
     }
+  }
+
+  function releaseMainSave(message) {
+    setStatus(message);
+    setSaveState("idle");
+    saveLockRef.current = false;
+    setIsSaving(false);
   }
 
   function editRow(row) {
@@ -547,8 +573,9 @@ export default function StoresIssue() {
         <form
           onSubmit={submit}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && e.target.tagName !== "TEXTAREA") {
+            if (e.key === "Enter" && (isSaving || e.target.tagName !== "TEXTAREA")) {
               e.preventDefault();
+              if (isSaving) e.stopPropagation();
             }
           }}
           style={formGrid}
@@ -642,11 +669,11 @@ export default function StoresIssue() {
           </Field>
 
           <div style={formActions}>
-            <button type="submit" style={primaryButton}>
-              Save Issue
+            <button type="submit" disabled={isSaving || saveState === "saved"} style={isSaving || saveState === "saved" ? disabledMainButton : primaryButton}>
+              {isSaving ? "Saving..." : saveState === "saved" ? "Saved" : "Save Issue"}
             </button>
 
-            <button type="button" style={clearButton} onClick={clearMainForm}>
+            <button type="button" disabled={isSaving} style={isSaving ? disabledClearButton : clearButton} onClick={clearMainForm}>
               Clear / New Entry
             </button>
           </div>
@@ -1100,6 +1127,9 @@ const clearButton = {
   cursor: "pointer",
   fontWeight: 700,
 };
+
+const disabledMainButton = { ...primaryButton, opacity: 0.65, cursor: "not-allowed" };
+const disabledClearButton = { ...clearButton, opacity: 0.65, cursor: "not-allowed" };
 
 const summaryGrid = {
   display: "grid",

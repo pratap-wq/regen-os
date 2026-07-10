@@ -1,40 +1,42 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
 
+const EMPTY_ROWS = [];
+
 export default function ProductionControlCenter() {
-  const [washRows, setWashRows] = useState([]);
-  const [sortingRows, setSortingRows] = useState([]);
-  const [extrusionRows, setExtrusionRows] = useState([]);
-  const [dispatchRows, setDispatchRows] = useState([]);
+  const washRows = EMPTY_ROWS;
+  const sortingRows = EMPTY_ROWS;
+  const extrusionRows = EMPTY_ROWS;
+  const dispatchRows = EMPTY_ROWS;
   const [loading, setLoading] = useState(true);
+  const [summaryData, setSummaryData] = useState(null);
+  const [loadError, setLoadError] = useState("");
 
   const [monthlyTargetKg, setMonthlyTargetKg] = useState(500000);
 
   useEffect(() => {
-    loadData();
-  }, []);
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      setLoadError("");
+      try {
+        const res = await apiCall({
+          fn: "dashboard.factorySummary",
+          periodMonth: new Date().toISOString().slice(0, 7),
+          monthlyTargetKg,
+        });
+        if (!res || res.ok !== true || !res.summary) throw new Error(res?.error || "Factory Dashboard failed to load");
+        setSummaryData(res.summary);
+      } catch (err) {
+        console.log(err);
+        setLoadError(err.message || "Factory Dashboard failed to load");
+      } finally {
+        setLoading(false);
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [monthlyTargetKg]);
 
-  async function loadData() {
-    try {
-      const [wash, sorting, extrusion, dispatch] = await Promise.all([
-        apiCall({ fn: "wash.list" }),
-        apiCall({ fn: "sorting.list" }),
-        apiCall({ fn: "extrusion.list" }),
-        apiCall({ fn: "dispatch.list" }),
-      ]);
-
-      setWashRows(wash.rows || []);
-      setSortingRows(sorting.rows || []);
-      setExtrusionRows(extrusion.rows || []);
-      setDispatchRows(dispatch.rows || []);
-    } catch (err) {
-      console.log(err);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const dashboard = useMemo(() => {
+  const fallbackDashboard = useMemo(() => {
     const now = new Date();
     const year = now.getFullYear();
     const month = now.getMonth();
@@ -142,8 +144,14 @@ export default function ProductionControlCenter() {
     };
   }, [washRows, sortingRows, extrusionRows, dispatchRows, monthlyTargetKg]);
 
+  const dashboard = summaryData || fallbackDashboard;
+
   if (loading) {
     return <div style={{ padding: 20 }}>Loading Factory Dashboard...</div>;
+  }
+
+  if (loadError) {
+    return <div style={{ padding: 20, color: "#991b1b" }}>{loadError}</div>;
   }
 
   return (

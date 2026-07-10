@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   addFactoryMaster,
   disableFactoryMaster,
   mergeFactoryMaster,
   updateFactoryMaster,
 } from "../services/FactoryMasterService";
+import { requireSuccessfulResponse, withRequestTimeout } from "../utils/requestSafety";
 
 const typeDefaults = {
   material: { category: "RM", unit: "Kg" },
@@ -38,6 +39,7 @@ export default function FactoryMasterModal({
   const [mergeIntoId, setMergeIntoId] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const saveLockRef = useRef(false);
 
   useEffect(() => {
     setForm({
@@ -65,49 +67,55 @@ export default function FactoryMasterModal({
   }
 
   async function save() {
+    if (saveLockRef.current) return;
+    saveLockRef.current = true;
+    setSaving(true);
+    setMessage("Saving...");
     if (!form.name) {
       setMessage("Name is required.");
+      finishAction();
       return;
     }
 
-    setSaving(true);
-    setMessage("");
     try {
       let saved = null;
       if (mode === "edit" && item?.id) {
-        await updateFactoryMaster(masterType, {
+        requireSuccessfulResponse(await withRequestTimeout(updateFactoryMaster(masterType, {
           ...form,
           id: item.id,
           status: form.status || "ACTIVE",
-        });
+        })), "", "Master update");
         saved = { ...item, ...form, name: form.name };
       } else {
-        saved = await addFactoryMaster(masterType, {
+        saved = await withRequestTimeout(addFactoryMaster(masterType, {
           ...form,
           status: form.status || defaultStatus,
           createdBy,
           updatedBy: createdBy,
-        });
+        }));
+        if (!saved || (!saved.id && !saved.name)) throw new Error("Master save failed: backend did not return the saved item.");
       }
       onSaved?.(saved || { ...form, name: form.name });
     } catch (err) {
       setMessage(err.message || "Failed to save master item.");
     } finally {
-      setSaving(false);
+      finishAction();
     }
   }
 
   async function disable() {
     if (!item?.id) return;
+    if (saveLockRef.current) return;
+    saveLockRef.current = true;
     setSaving(true);
-    setMessage("");
+    setMessage("Saving...");
     try {
-      await disableFactoryMaster(masterType, item);
+      requireSuccessfulResponse(await withRequestTimeout(disableFactoryMaster(masterType, item)), "", "Master disable");
       onSaved?.({ ...item, status: "DISABLED" });
     } catch (err) {
       setMessage(err.message || "Failed to disable item.");
     } finally {
-      setSaving(false);
+      finishAction();
     }
   }
 
@@ -118,16 +126,23 @@ export default function FactoryMasterModal({
     }
     const target = mergeTargets.find((x) => String(x.id) === String(mergeIntoId));
     if (!target) return;
+    if (saveLockRef.current) return;
+    saveLockRef.current = true;
     setSaving(true);
-    setMessage("");
+    setMessage("Saving...");
     try {
-      await mergeFactoryMaster(masterType, item, target);
+      requireSuccessfulResponse(await withRequestTimeout(mergeFactoryMaster(masterType, item, target)), "", "Master merge");
       onSaved?.({ ...item, status: "MERGED", mergedIntoId: target.id });
     } catch (err) {
       setMessage(err.message || "Failed to merge duplicate.");
     } finally {
-      setSaving(false);
+      finishAction();
     }
+  }
+
+  function finishAction() {
+    saveLockRef.current = false;
+    setSaving(false);
   }
 
   return (
@@ -138,7 +153,7 @@ export default function FactoryMasterModal({
             <h3 style={{ margin: 0 }}>{title || "Factory Master"}</h3>
             <div style={subtle}>Add, edit, disable or merge without leaving this transaction.</div>
           </div>
-          <button type="button" onClick={onClose} style={ghostButton}>×</button>
+          <button type="button" onClick={onClose} disabled={saving} style={ghostButton}>×</button>
         </div>
 
         <div style={grid}>
@@ -331,7 +346,7 @@ export default function FactoryMasterModal({
               Disable
             </button>
           )}
-          <button type="button" onClick={onClose} style={secondaryButton}>Cancel</button>
+          <button type="button" onClick={onClose} disabled={saving} style={secondaryButton}>Cancel</button>
           <button type="button" onClick={save} disabled={saving} style={primaryButton}>
             {saving ? "Saving..." : "Save"}
           </button>

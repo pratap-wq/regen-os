@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   addInventoryAdjustment,
   approveInventoryAdjustment,
@@ -7,6 +7,7 @@ import {
   rejectInventoryAdjustment,
 } from "../services/inventoryAdjustmentService";
 import { listProductionMaterialMaster } from "../services/productionMaterialMaster";
+import { createStableTransactionId, requireSuccessfulResponse, withRequestTimeout } from "../utils/requestSafety";
 
 const MODULES = ["RM", "Wash", "Color Sorter", "Extrusion", "FG", "Dispatch", "Stores", "Waste"];
 const ITEM_TYPES = ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE", "STORE"];
@@ -63,8 +64,11 @@ export default function InventoryAdjustments() {
   const [masters, setMasters] = useState({ materials: [] });
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [activeAction, setActiveAction] = useState("");
+  const actionLockRef = useRef(false);
 
   const [form, setForm] = useState({
+    adjustmentId: "",
     periodMonth: getCurrentMonth(),
     date: getToday(),
     module: "FG",
@@ -154,11 +158,16 @@ export default function InventoryAdjustments() {
   }, [itemOptions]);
 
   function updateForm(key, value) {
-    setForm((prev) => ({ ...prev, [key]: value }));
+    setForm((prev) => ({
+      ...prev,
+      [key]: value,
+      ...(["periodMonth", "date", "itemCode"].includes(key) && prev[key] !== value ? { adjustmentId: "" } : {}),
+    }));
   }
 
   function resetForm() {
     setForm({
+      adjustmentId: "",
       periodMonth,
       date: getToday(),
       module: "FG",
@@ -175,38 +184,75 @@ export default function InventoryAdjustments() {
   }
 
   async function saveAdjustment(nextStatus) {
-    if (!form.itemCode) return setMessage("Select Item Code / Material / Grade");
-    if (num(form.quantityKg) === 0) return setMessage("Quantity cannot be zero");
-
+    if (actionLockRef.current) return;
+    actionLockRef.current = true;
     setSaving(true);
+    setActiveAction(nextStatus === "DRAFT" ? "SAVE" : "SUBMIT");
     setMessage("Saving...");
+    if (!form.itemCode) return releaseAction("Select Item Code / Material / Grade");
+    if (num(form.quantityKg) === 0) return releaseAction("Quantity cannot be zero");
 
-    const res = await addInventoryAdjustment({ ...form, status: nextStatus });
-
-    setSaving(false);
-
-    if (!res?.ok) {
-      setMessage(res?.error || "Failed to save adjustment");
-      return;
+    try {
+      const adjustmentId = form.adjustmentId || createStableTransactionId("IA", form.date, form.itemCode);
+      if (!form.adjustmentId) setForm((current) => ({ ...current, adjustmentId }));
+      const res = requireSuccessfulResponse(
+        await withRequestTimeout(addInventoryAdjustment({ ...form, adjustmentId, status: nextStatus })),
+        "adjustmentId",
+        "Inventory adjustment save"
+      );
+      setMessage(`Adjustment saved successfully: ${res.adjustmentId}`);
+      await loadData();
+      resetForm();
+    } catch (err) {
+      setMessage(err.message || "Failed to save adjustment");
+    } finally {
+      finishAction();
     }
-
-    resetForm();
-    setMessage("Adjustment saved");
-    loadData();
   }
 
   async function handleApprove(id) {
-    const res = await approveInventoryAdjustment(id, "System");
-    if (!res?.ok) return setMessage(res?.error || "Approval failed");
-    setMessage("Adjustment approved");
-    loadData();
+    if (actionLockRef.current) return;
+    actionLockRef.current = true;
+    setSaving(true);
+    setActiveAction(`APPROVE:${id}`);
+    setMessage("Approving...");
+    try {
+      requireSuccessfulResponse(await withRequestTimeout(approveInventoryAdjustment(id, "System")), "", "Adjustment approval");
+      setMessage(`Adjustment approved: ${id}`);
+      await loadData();
+    } catch (err) {
+      setMessage(err.message || "Approval failed");
+    } finally {
+      finishAction();
+    }
   }
 
   async function handleReject(id) {
-    const res = await rejectInventoryAdjustment(id, "System", "Rejected from Inventory Adjustments");
-    if (!res?.ok) return setMessage(res?.error || "Reject failed");
-    setMessage("Adjustment rejected");
-    loadData();
+    if (actionLockRef.current) return;
+    actionLockRef.current = true;
+    setSaving(true);
+    setActiveAction(`REJECT:${id}`);
+    setMessage("Saving...");
+    try {
+      requireSuccessfulResponse(await withRequestTimeout(rejectInventoryAdjustment(id, "System", "Rejected from Inventory Adjustments")), "", "Adjustment rejection");
+      setMessage(`Adjustment rejected: ${id}`);
+      await loadData();
+    } catch (err) {
+      setMessage(err.message || "Reject failed");
+    } finally {
+      finishAction();
+    }
+  }
+
+  function releaseAction(message) {
+    setMessage(message);
+    finishAction();
+  }
+
+  function finishAction() {
+    actionLockRef.current = false;
+    setSaving(false);
+    setActiveAction("");
   }
 
   return (
@@ -247,7 +293,7 @@ export default function InventoryAdjustments() {
           </Field>
 
           <Field label="Action">
-            <button style={primaryBtn} onClick={loadData}>Refresh</button>
+            <button style={primaryBtn} disabled={saving} onClick={loadData}>Refresh</button>
           </Field>
         </div>
       </div>
@@ -321,9 +367,9 @@ export default function InventoryAdjustments() {
         </div>
 
         <div style={buttonRow}>
-          <button style={primaryBtn} disabled={saving} onClick={() => saveAdjustment("DRAFT")}>Save Draft</button>
-          <button style={greenBtn} disabled={saving} onClick={() => saveAdjustment("SUBMITTED")}>Submit for Approval</button>
-          <button style={secondaryBtn} onClick={resetForm}>Clear</button>
+          <button style={primaryBtn} disabled={saving} onClick={() => saveAdjustment("DRAFT")}>{activeAction === "SAVE" ? "Saving..." : "Save Draft"}</button>
+          <button style={greenBtn} disabled={saving} onClick={() => saveAdjustment("SUBMITTED")}>{activeAction === "SUBMIT" ? "Saving..." : "Submit for Approval"}</button>
+          <button style={secondaryBtn} disabled={saving} onClick={resetForm}>Clear</button>
         </div>
       </div>
 
@@ -363,8 +409,8 @@ export default function InventoryAdjustments() {
                     <td style={td}>
                       {canAct ? (
                         <div style={smallBtnRow}>
-                          <button style={miniGreenBtn} onClick={() => handleApprove(r.adjustmentId)}>Approve</button>
-                          <button style={miniRedBtn} onClick={() => handleReject(r.adjustmentId)}>Reject</button>
+                          <button disabled={saving} style={miniGreenBtn} onClick={() => handleApprove(r.adjustmentId)}>{activeAction === `APPROVE:${r.adjustmentId}` ? "Approving..." : "Approve"}</button>
+                          <button disabled={saving} style={miniRedBtn} onClick={() => handleReject(r.adjustmentId)}>{activeAction === `REJECT:${r.adjustmentId}` ? "Saving..." : "Reject"}</button>
                         </div>
                       ) : "-"}
                     </td>

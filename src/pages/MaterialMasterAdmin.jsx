@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiCall } from "../api/api";
 import DataTable from "../components/DataTable";
+import { requireSuccessfulResponse, withRequestTimeout } from "../utils/requestSafety";
 
 const CATEGORIES = ["RM", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE", "STORE"];
 const STATUSES = ["ACTIVE", "INACTIVE"];
@@ -53,6 +54,7 @@ export default function MaterialMasterAdmin() {
   const [materialSearch, setMaterialSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("NON_STORE");
   const [selectedMaterialId, setSelectedMaterialId] = useState("");
+  const saveLockRef = useRef(false);
 
   useEffect(() => {
     loadRows();
@@ -88,32 +90,32 @@ export default function MaterialMasterAdmin() {
 
   async function submit(e) {
     e.preventDefault();
-    if (!form.materialName.trim()) return alert("Material name is required");
-    if (!form.materialCode.trim()) return alert("Material code is required");
+    if (saveLockRef.current) return;
+    saveLockRef.current = true;
+    setSaving(true);
+    setStatus("Saving material...");
+    if (!form.materialName.trim()) return finishSave("Material name is required");
+    if (!form.materialCode.trim()) return finishSave("Material code is required");
 
     try {
-      setSaving(true);
-      const res = await apiCall({
+      const res = requireSuccessfulResponse(await withRequestTimeout(apiCall({
         fn: form.materialId ? "materialMaster.update" : "materialMaster.add",
         ...form,
         materialCode: normalizeMaterialCode(form.materialCode),
         appearsInRmInward: form.appearsInRMInward,
         createdBy: "Admin",
         updatedBy: "Admin",
-      });
+      })), "", "Material save");
+      const savedId = res.materialId || res.id || form.materialId;
+      if (!savedId) throw new Error("Material save failed: backend did not return materialId.");
 
-      if (res.ok === false) {
-        alert(res.error || "Save failed");
-        return;
-      }
-
-      setStatus(res.alreadyExists ? "Material already exists. No duplicate was created." : "Material saved.");
-      setForm(blankForm);
+      setStatus(res.alreadyExists ? `Material already exists: ${savedId}` : `Material saved successfully: ${savedId}`);
       await loadRows();
+      setForm(blankForm);
     } catch (err) {
       setStatus(err.message);
     } finally {
-      setSaving(false);
+      finishSave();
     }
   }
 
@@ -133,28 +135,26 @@ export default function MaterialMasterAdmin() {
     const ok = window.confirm(`${nextStatus === "ACTIVE" ? "Activate" : "Mark inactive"} ${materialName}?`);
     if (!ok) return;
 
+    if (saveLockRef.current) return;
+    saveLockRef.current = true;
+    setSaving(true);
+    setStatus("Saving...");
     try {
-      setSaving(true);
-      const res = await apiCall({
+      requireSuccessfulResponse(await withRequestTimeout(apiCall({
         fn: "materialMaster.updateStatus",
         materialId: row.materialId,
         materialCode: row.materialCode,
         status: nextStatus,
         remarks: `${nextStatus} from Material Master Admin`,
         updatedBy: "Admin",
-      });
-
-      if (res.ok === false) {
-        alert(res.error || "Status update failed");
-        return;
-      }
+      })), "", "Material status update");
 
       setStatus(`Material marked ${nextStatus}.`);
       await loadRows();
     } catch (err) {
-      alert(err.message);
+      setStatus(err.message);
     } finally {
-      setSaving(false);
+      finishSave();
     }
   }
 
@@ -219,6 +219,7 @@ export default function MaterialMasterAdmin() {
   }
 
   async function saveDropdownChanges() {
+    if (saveLockRef.current) return;
     const originalById = new Map(rows.map((row) => [materialIdentity(row), normalizeDropdownFlags(row)]));
     const changedRows = draftRows.filter((row) => {
       const original = originalById.get(materialIdentity(row));
@@ -232,7 +233,9 @@ export default function MaterialMasterAdmin() {
     }
 
     try {
+      saveLockRef.current = true;
       setSaving(true);
+      setStatus("Saving dropdown changes...");
       for (const row of changedRows) {
         const payload = {
           ...row,
@@ -240,14 +243,10 @@ export default function MaterialMasterAdmin() {
           appearsInRmInward: yesNoValue(row, "appearsInRMInward"),
           updatedBy: "Admin",
         };
-        const res = await apiCall({
+        requireSuccessfulResponse(await withRequestTimeout(apiCall({
           fn: "materialMaster.update",
           ...payload,
-        });
-
-        if (res.ok === false) {
-          throw new Error(res.error || `Failed to save ${row.materialName || row.materialCode}`);
-        }
+        })), "", `Save ${row.materialName || row.materialCode}`);
       }
 
       setStatus(`Dropdown control saved for ${changedRows.length} material(s).`);
@@ -255,8 +254,14 @@ export default function MaterialMasterAdmin() {
     } catch (err) {
       setStatus(err.message);
     } finally {
-      setSaving(false);
+      finishSave();
     }
+  }
+
+  function finishSave(message = "") {
+    if (message) setStatus(message);
+    saveLockRef.current = false;
+    setSaving(false);
   }
 
   function resetDropdownChanges() {
@@ -361,7 +366,7 @@ export default function MaterialMasterAdmin() {
           </div>
         </div>
       ) : (
-        <form onSubmit={submit} style={formGrid}>
+        <form onSubmit={submit} onKeyDown={(e) => { if (e.key === "Enter" && saving) { e.preventDefault(); e.stopPropagation(); } }} style={formGrid}>
           <Field label="Material Code">
             <input name="materialCode" value={form.materialCode} onChange={onChange} style={input} placeholder="WHITE_BUCKETS" />
           </Field>

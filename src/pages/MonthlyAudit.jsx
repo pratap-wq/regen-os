@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiCall } from "../api/api";
 import { calculateControlRoomDifferenceValue } from "../services/monthCloseEngine";
 import { savePhysicalCount } from "../services/physicalCountService";
+import { requireSuccessfulResponse, withRequestTimeout } from "../utils/requestSafety";
 
 const MANUFACTURING_GROUPS = ["RM", "VIRGIN", "BATTERY", "WIP", "FG", "REWORK", "WASTE", "ADDITIVE"];
 const FIRST_SYSTEM_CLOSE_MONTH = "2026-06";
@@ -29,6 +30,7 @@ export default function MonthlyAudit() {
   const [saving, setSaving] = useState(false);
   const [closing, setClosing] = useState(false);
   const [approvingKey, setApprovingKey] = useState("");
+  const writeLockRef = useRef(false);
 
   useEffect(() => {
     loadAll();
@@ -220,19 +222,18 @@ export default function MonthlyAudit() {
       { rmPhysicalKg: 0, washPhysicalKg: 0, sortingPhysicalKg: 0, fgPhysicalKg: 0 }
     );
 
-    const res = await savePhysicalCount(month, {
+    const res = requireSuccessfulResponse(await withRequestTimeout(savePhysicalCount(month, {
       ...physical,
       ...totals,
       materialPhysicalLinesJson: JSON.stringify(physicalRows),
       savedBy: physical.ceoSignoff || physical.accountsSignoff || "Month Close",
-    });
-    if (!res?.ok) throw new Error(res?.error || "Failed to save physical stock.");
+    })), "countId", "Physical stock save");
     if (!silent) setStatus("Physical stock saved.");
     return res;
   }
 
   async function approveAdjustment(line) {
-    if (approvingKey || saving || closing) return;
+    if (writeLockRef.current || approvingKey || saving || closing) return;
     if (!line.hasPhysical) {
       setStatus("Enter physical closing stock first.");
       return;
@@ -248,10 +249,12 @@ export default function MonthlyAudit() {
     }
     if (!window.confirm(`Approve ${formatKg(line.remainingKg)} difference for ${line.materialName}?`)) return;
 
+    writeLockRef.current = true;
     setApprovingKey(line.key);
+    setStatus("Approving...");
     try {
       await savePhysicalSnapshot({ silent: true });
-      const res = await apiCall({
+      requireSuccessfulResponse(await withRequestTimeout(apiCall({
         fn: "inventoryAdjustments.approveMonthClose",
         periodMonth: month,
         closeMonth: month,
@@ -271,32 +274,51 @@ export default function MonthlyAudit() {
         remarks: physical.remarks || "",
         sourceRef: `MONTH_CLOSE:${month}:${line.key}`,
         approvedBy: physical.accountsSignoff || physical.ceoSignoff || "Month Close",
-      });
-      if (!res?.ok) {
-        setStatus(res?.error || "Difference approval failed.");
-        return;
-      }
-      setStatus("Difference approved.");
+      })), "", "Difference approval");
       await loadAll();
+      setStatus("Difference approved.");
+    } catch (err) {
+      setStatus(err.message || "Difference approval failed.");
     } finally {
+      writeLockRef.current = false;
       setApprovingKey("");
     }
   }
+
+  async function saveActualStock() {
+    if (writeLockRef.current) return;
+    writeLockRef.current = true;
+    setSaving(true);
+    setStatus("Saving...");
+    try {
+      await savePhysicalSnapshot({ silent: true });
+      await loadAll();
+      setStatus("Actual stock saved.");
+    } catch (err) {
+      setStatus(err.message || "Actual stock save failed.");
+    } finally {
+      writeLockRef.current = false;
+      setSaving(false);
+    }
+  }
   async function saveSignoffs() {
-    if (saving || closing) return;
+    if (writeLockRef.current || saving || closing) return;
+    writeLockRef.current = true;
     setSaving(true);
     try {
       setStatus("Saving physical stock and sign-off...");
-      await savePhysicalSnapshot();
+      await savePhysicalSnapshot({ silent: true });
       await loadAll();
+      setStatus("Sign-off saved.");
     } catch (err) {
       setStatus(err.message || "Save failed.");
     } finally {
+      writeLockRef.current = false;
       setSaving(false);
     }
   }
   async function closeMonth() {
-    if (closing || saving) return;
+    if (writeLockRef.current || closing || saving) return;
     if (monthClosed) {
       setStatus("This month is already closed.");
       return;
@@ -306,10 +328,12 @@ export default function MonthlyAudit() {
       return;
     }
     if (!window.confirm(`Close ${monthLabel(month)}?`)) return;
+    writeLockRef.current = true;
     setClosing(true);
+    setStatus("Closing...");
     try {
       await savePhysicalSnapshot({ silent: true });
-      const res = await apiCall({
+      const res = requireSuccessfulResponse(await withRequestTimeout(apiCall({
         fn: "monthClose.add",
         periodMonth: month,
         status: "Closed",
@@ -359,10 +383,13 @@ export default function MonthlyAudit() {
         accountsSignoff: physical.accountsSignoff,
         ceoSignoff: physical.ceoSignoff,
         remarks: physical.remarks,
-      });
-      setStatus(res?.ok ? "Month closed successfully." : res?.error || "Month close failed.");
+      })), "closeId", "Month close");
       await loadAll();
+      setStatus(`Month closed successfully: ${res.closeId}`);
+    } catch (err) {
+      setStatus(err.message || "Month close failed.");
     } finally {
+      writeLockRef.current = false;
       setClosing(false);
     }
   }
@@ -436,7 +463,7 @@ export default function MonthlyAudit() {
                       <input
                         value={physicalMaterialLines[openingKey(line.key)] ?? ""}
                         onChange={(e) => onPhysicalChange(openingKey(line.key), e.target.value)}
-                        onBlur={() => savePhysicalSnapshot({ silent: true }).then(() => loadAll()).catch((err) => setStatus(err.message))}
+                        onBlur={saveActualStock}
                         type="number"
                         placeholder="Opening"
                         style={qtyInput}
@@ -458,7 +485,7 @@ export default function MonthlyAudit() {
                     <input
                       value={physicalMaterialLines[line.key] ?? ""}
                       onChange={(e) => onPhysicalChange(line.key, e.target.value)}
-                      onBlur={() => savePhysicalSnapshot({ silent: true }).then(() => loadAll()).catch((err) => setStatus(err.message))}
+                      onBlur={saveActualStock}
                       type="number"
                       placeholder="Kg"
                       style={qtyInput}

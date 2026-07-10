@@ -3,18 +3,23 @@ import { apiCall } from "../api/api";
 import { calculateCostEngine, periodMonthOnly } from "../services/costEngine";
 import { calculateProfitWaterfall } from "../services/profitWaterfallEngine";
 
+const EMPTY_ROWS = [];
+
 export default function Dashboard() {
   const now = new Date();
 
-  const [rmRows, setRmRows] = useState([]);
-  const [washRows, setWashRows] = useState([]);
-  const [sortingRows, setSortingRows] = useState([]);
-  const [extrusionRows, setExtrusionRows] = useState([]);
-  const [dispatchRows, setDispatchRows] = useState([]);
-  const [storesInwardRows, setStoresInwardRows] = useState([]);
-  const [storesIssueRows, setStoresIssueRows] = useState([]);
-  const [factoryExpenseRows, setFactoryExpenseRows] = useState([]);
-  const [consumableRows, setConsumableRows] = useState([]);
+  const rmRows = EMPTY_ROWS;
+  const washRows = EMPTY_ROWS;
+  const sortingRows = EMPTY_ROWS;
+  const extrusionRows = EMPTY_ROWS;
+  const dispatchRows = EMPTY_ROWS;
+  const storesInwardRows = EMPTY_ROWS;
+  const storesIssueRows = EMPTY_ROWS;
+  const factoryExpenseRows = EMPTY_ROWS;
+  const consumableRows = EMPTY_ROWS;
+  const [summaryData, setSummaryData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
   const [month, setMonth] = useState(
     String(now.getMonth() + 1).padStart(2, "0")
@@ -23,62 +28,30 @@ export default function Dashboard() {
   const [monthlyTargetKg, setMonthlyTargetKg] = useState(500000);
 
   useEffect(() => {
-    loadData();
-  }, []);
-
-  async function safeLoad(fn) {
-    try {
-      const res = await apiCall({ fn });
-      return res.rows || [];
-    } catch (err) {
-      console.log(fn, err);
-      return [];
-    }
-  }
-
-  async function loadData() {
-    const [
-      rm,
-      wash,
-      sorting,
-      extrusion,
-      dispatch,
-      inward,
-      issue,
-      factoryExpenses,
-      consumables,
-    ] = await Promise.all([
-      safeLoad("rm.list"),
-      safeLoad("wash.list"),
-      safeLoad("sorting.list"),
-      safeLoad("extrusion.list"),
-      safeLoad("dispatch.list"),
-      safeLoad("storesInward.list"),
-      safeLoad("storesIssue.list"),
-      safeLoad("factoryExpenses.list"),
-      safeLoad("storesMaster.list"),
-    ]);
-
-    setRmRows(rm);
-    setWashRows(wash);
-    setSortingRows(sorting);
-    setExtrusionRows(extrusion);
-    setDispatchRows(dispatch);
-    setStoresInwardRows(inward);
-    setStoresIssueRows(issue);
-    setFactoryExpenseRows(factoryExpenses);
-    setConsumableRows(consumables);
-
-    const latestCostPeriod = latestPeriodFromRows(factoryExpenses);
-    const currentPeriod = `${year}-${month}`;
-    const hasCurrentCostRows = factoryExpenses.some((row) => rowPeriod(row) === currentPeriod);
-
-    if (latestCostPeriod && !hasCurrentCostRows) {
-      const [latestYear, latestMonth] = latestCostPeriod.split("-");
-      setYear(latestYear);
-      setMonth(latestMonth);
-    }
-  }
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      setLoadError("");
+      try {
+        const res = await apiCall({
+          fn: "dashboard.ceoSummary",
+          periodMonth: `${year}-${month}`,
+          monthlyTargetKg,
+        });
+        if (!res || res.ok !== true || !res.summary) throw new Error(res?.error || "CEO Dashboard failed to load");
+        setSummaryData(res.summary);
+        if (res.latestCostPeriod && !res.hasSelectedCostRows && res.latestCostPeriod !== `${year}-${month}`) {
+          const [latestYear, latestMonth] = res.latestCostPeriod.split("-");
+          setYear(latestYear);
+          setMonth(latestMonth);
+        }
+      } catch (err) {
+        setLoadError(err.message || "CEO Dashboard failed to load");
+      } finally {
+        setLoading(false);
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [month, year, monthlyTargetKg]);
 
   function dateForCompare(value) {
   if (!value) return null;
@@ -162,7 +135,7 @@ export default function Dashboard() {
     );
   }
 
-  const data = useMemo(() => {
+  const fallbackData = useMemo(() => {
     const m = Number(month);
     const y = Number(year);
     const daysInMonth = new Date(y, m, 0).getDate();
@@ -431,6 +404,8 @@ export default function Dashboard() {
     monthlyTargetKg,
   ]);
 
+  const data = summaryData || fallbackData;
+
   return (
     <div style={page}>
       <div style={hero}>
@@ -473,6 +448,9 @@ export default function Dashboard() {
           />
         </div>
       </div>
+
+      {loading && <div style={dashboardMessage}>Loading CEO Dashboard...</div>}
+      {loadError && <div style={dashboardError}>{loadError}</div>}
 
       <div style={kpiGrid}>
         <KPI title="Wash Output MTD" value={`${ton(data.washOutput)} T`} />
@@ -681,14 +659,6 @@ function sum(rows, key) {
 
 function rowPeriod(row) {
   return periodMonthOnly(row.periodMonth || row.date || row.createdAt || "");
-}
-
-function latestPeriodFromRows(rows) {
-  return rows
-    .map(rowPeriod)
-    .filter(Boolean)
-    .sort()
-    .pop();
 }
 
 function ton(kg) {
@@ -971,4 +941,19 @@ const muted = {
 
 const empty = {
   color: "#64748b",
+};
+
+const dashboardMessage = {
+  marginBottom: 14,
+  padding: 12,
+  borderRadius: 10,
+  background: "#eff6ff",
+  color: "#1d4ed8",
+  fontWeight: 800,
+};
+
+const dashboardError = {
+  ...dashboardMessage,
+  background: "#fef2f2",
+  color: "#991b1b",
 };

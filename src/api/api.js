@@ -3,7 +3,8 @@ const API_URL = String(
 ).trim();
 
 export async function apiCall(
-  payload = {}
+  payload = {},
+  options = {}
 ) {
 
   if (!API_URL) {
@@ -14,6 +15,7 @@ export async function apiCall(
 
   const res = await fetch(API_URL, {
     method: "POST",
+    signal: options.signal,
     headers: {
       "Content-Type": "text/plain;charset=utf-8",
     },
@@ -35,7 +37,7 @@ export async function apiCall(
   try {
     return JSON.parse(text);
   } catch (err) {
-    throw new Error(`Backend returned non-JSON response. Check Apps Script deployment URL. ${err.message}`);
+    throw new Error(`Backend returned non-JSON response. Check Apps Script deployment URL. ${err.message}`, { cause: err });
   }
 
 }

@@ -47,12 +47,12 @@ function buildCustomerUnitOptions(customerName, customerRows, customerUnitRows) 
   return [...new Set([...unitValues, ...legacyValues].filter(Boolean))].sort();
 }
 
-async function timedDispatchApiCall(payload) {
+async function timedDispatchApiCall(payload, options = {}) {
   const startedAt = Date.now();
   const routeName = payload?.fn || "unknown";
 
   try {
-    const response = await apiCall(payload);
+    const response = await apiCall(payload, options);
     if (DISPATCH_API_DEBUG) {
       console.info("[Dispatch API response]", {
         route: routeName,
@@ -77,6 +77,28 @@ async function timedDispatchApiCall(payload) {
     const elapsedMs = Date.now() - startedAt;
     if (DISPATCH_API_DEBUG) console.info(`[Dispatch API timing] ${routeName}: ${elapsedMs} ms`);
   }
+}
+
+async function dispatchApiCallWithTimeout(payload, ms, message, requestController) {
+  const controller = requestController || new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await timedDispatchApiCall(payload, { signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(message, { cause: error });
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function isTransientHistoryError(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return message.includes("timed out") || message.includes("failed to fetch") || message.includes("network");
+}
+
+function waitFor(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function withTimeout(promise, ms, message) {
@@ -166,31 +188,41 @@ export default function Dispatch() {
   const [deleteError, setDeleteError] = useState("");
   const writeLockRef = useRef(false);
   const historyRequestRef = useRef(0);
+  const historyAbortRef = useRef(null);
 
   const loadReferenceData = useCallback(async () => {
-    const results = await Promise.allSettled([
-        timedDispatchApiCall({ fn: "factoryMaster.list", masterType: "customer" }),
-        timedDispatchApiCall({ fn: "factoryMaster.list", masterType: "customerUnit" }),
-        timedDispatchApiCall({ fn: "fgRates.list" }),
-        timedDispatchApiCall({ fn: "materialMaster.list" }),
-    ]);
-    const [customers, customerUnits, fgRates, materials] = results;
-    if (customers.status === "fulfilled" && customers.value?.ok !== false) setCustomerRows(customers.value?.rows || []);
-    if (customerUnits.status === "fulfilled" && customerUnits.value?.ok !== false) setCustomerUnitRows(customerUnits.value?.rows || []);
-    if (fgRates.status === "fulfilled" && fgRates.value?.ok !== false) setFgRateRows(fgRates.value?.rows || []);
-    if (materials.status === "fulfilled" && materials.value?.ok !== false) setMaterialRows(materials.value?.rows || []);
-
-    const failed = results.filter((result) => result.status === "rejected" || result.value?.ok === false);
-    if (failed.length) setStatus("Some Dispatch master data could not be loaded. Retry the page before saving.");
-    return failed.length === 0;
+    try {
+      const response = await dispatchApiCallWithTimeout(
+        { fn: "dispatch.entryBootstrap" },
+        30000,
+        "Dispatch entry data request timed out."
+      );
+      if (!response || response.ok !== true) throw new Error(response?.error || "Dispatch entry data failed to load.");
+      if (
+        !Array.isArray(response.customers) ||
+        !Array.isArray(response.customerUnits) ||
+        !Array.isArray(response.fgRates) ||
+        !Array.isArray(response.materials)
+      ) {
+        throw new Error("Backend response is missing the Dispatch entry bootstrap contract.");
+      }
+      setCustomerRows(response.customers);
+      setCustomerUnitRows(response.customerUnits);
+      setFgRateRows(response.fgRates);
+      setMaterialRows(response.materials);
+      return true;
+    } catch (error) {
+      setStatus(`Dispatch entry data could not be loaded: ${error.message}`);
+      return false;
+    }
   }, []);
 
   const loadFgAvailability = useCallback(async () => {
     setFgAvailabilityLoading(true);
     setFgAvailabilityError("");
     try {
-      const res = await withTimeout(
-        timedDispatchApiCall({ fn: "dispatch.fgAvailability" }),
+      const res = await dispatchApiCallWithTimeout(
+        { fn: "dispatch.fgAvailability" },
         30000,
         "FG availability request timed out."
       );
@@ -224,25 +256,37 @@ export default function Dispatch() {
   }, [loadFgAvailability, loadReferenceData]);
 
   const loadHistory = useCallback(async () => {
+    if (historyAbortRef.current) historyAbortRef.current.abort();
     const requestId = ++historyRequestRef.current;
     setHistoryLoading(true);
     setHistoryError("");
     try {
-      const res = await withTimeout(
-        timedDispatchApiCall({
-          fn: "dispatch.historySummary",
-          periodMonth: `${year}-${month}`,
-          customer: customerFilter,
-          customerUnit: unitFilter,
-          grade: gradeFilter,
-          search: debouncedSearch,
-          page,
-          pageSize: 50,
-          showDeleted: "NO",
-        }),
-        30000,
-        "Dispatch history request timed out."
-      );
+      const payload = {
+        fn: "dispatch.historySummary",
+        periodMonth: `${year}-${month}`,
+        customer: customerFilter,
+        customerUnit: unitFilter,
+        grade: gradeFilter,
+        search: debouncedSearch,
+        page,
+        pageSize: 50,
+        showDeleted: "NO",
+      };
+      const requestHistory = async () => {
+        const controller = new AbortController();
+        historyAbortRef.current = controller;
+        return dispatchApiCallWithTimeout(payload, 30000, "Dispatch history request timed out.", controller);
+      };
+      let res;
+      try {
+        res = await requestHistory();
+      } catch (firstError) {
+        if (requestId !== historyRequestRef.current) return false;
+        if (!isTransientHistoryError(firstError)) throw firstError;
+        await waitFor(1500);
+        if (requestId !== historyRequestRef.current) return false;
+        res = await requestHistory();
+      }
       if (requestId !== historyRequestRef.current) return false;
       if (!res || res.ok !== true) throw new Error(res?.error || "Dispatch history failed to load.");
       if (!Array.isArray(res.rows) || !res.totals || !res.pagination || !res.gradeTotals) {
@@ -255,10 +299,13 @@ export default function Dispatch() {
     } catch (err) {
       if (requestId !== historyRequestRef.current) return false;
       setRows([]);
-      setHistoryError(err.message);
+      setHistoryError(`Dispatch History could not be loaded. ${err.message}`);
       return false;
     } finally {
-      if (requestId === historyRequestRef.current) setHistoryLoading(false);
+      if (requestId === historyRequestRef.current) {
+        historyAbortRef.current = null;
+        setHistoryLoading(false);
+      }
     }
   }, [customerFilter, debouncedSearch, gradeFilter, month, page, unitFilter, year]);
 

@@ -135,6 +135,7 @@ function doGet(e) {
     // Dispatch
     if (p.fn === "dispatch.add") return addDispatch(p);
     if (p.fn === "dispatch.list") return listMaster("Dispatches");
+    if (p.fn === "dispatch.entryBootstrap") return getDispatchEntryBootstrap(p);
     if (p.fn === "dispatch.historySummary") return getDispatchHistorySummary(p);
     if (p.fn === "dispatch.get") return getDispatchRecord(p);
     if (p.fn === "dispatch.fgAvailability") return getDispatchFgAvailability(p);
@@ -686,6 +687,7 @@ function debugRoutes() {
       "extrusion.update",
       "dispatch.add",
       "dispatch.list",
+      "dispatch.entryBootstrap",
       "dispatch.historySummary",
       "dispatch.get",
       "dispatch.fgAvailability",
@@ -10233,6 +10235,78 @@ function debugDispatchLedger(data = {}) {
   });
 }
 
+function dispatchBootstrapActiveRow_(row) {
+  if (isDeleted_(row)) return false;
+  const status = String(row.status || "ACTIVE").trim().toUpperCase();
+  const isActive = String(row.isActive === undefined ? "TRUE" : row.isActive).trim().toUpperCase();
+  return ["DISABLED", "INACTIVE", "ARCHIVED", "MERGED", "REJECTED"].indexOf(status) === -1 && isActive !== "FALSE";
+}
+
+function getDispatchEntryBootstrap() {
+  const startedAt = Date.now();
+  const customers = getRowsAsObjects("Customers")
+    .filter(dispatchBootstrapActiveRow_)
+    .map(function(row) {
+      return {
+        customerId: row.customerId || "",
+        customerCode: row.customerCode || "",
+        customerName: row.customerName || "",
+        customerUnit: row.customerUnit || "",
+        status: row.status || "ACTIVE",
+      };
+    });
+  const customerUnits = getRowsAsObjects("Customer_Units")
+    .filter(dispatchBootstrapActiveRow_)
+    .map(function(row) {
+      return {
+        unitId: row.unitId || "",
+        customerName: row.customerName || "",
+        customerCode: row.customerCode || "",
+        unitName: row.unitName || "",
+        unitCode: row.unitCode || "",
+        status: row.status || "ACTIVE",
+      };
+    });
+  const fgRates = getRowsAsObjects("FG_Rates")
+    .filter(dispatchBootstrapActiveRow_)
+    .map(function(row) {
+      return {
+        rateId: row.rateId || "",
+        month: row.month || "",
+        year: row.year || "",
+        date: row.date || "",
+        grade: row.grade || "",
+        customerName: row.customerName || "",
+        ratePerKg: num(row.ratePerKg),
+        freightPerKg: num(row.freightPerKg),
+        status: row.status || "ACTIVE",
+      };
+    });
+  const materials = getRowsAsObjects("Material_Master")
+    .filter(dispatchBootstrapActiveRow_)
+    .filter(function(row) { return yesNo_(row.appearsInDispatch) === "YES"; })
+    .map(function(row) {
+      return {
+        materialId: row.materialId || "",
+        materialCode: row.materialCode || "",
+        materialName: row.materialName || "",
+        category: row.category || "",
+        status: row.status || "ACTIVE",
+        appearsInDispatch: "YES",
+      };
+    });
+
+  return output({
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    elapsedMs: Date.now() - startedAt,
+    customers,
+    customerUnits,
+    fgRates,
+    materials,
+  });
+}
+
 function getDispatchRecord(data = {}) {
   const startedAt = Date.now();
   const dispatchId = String(data.dispatchId || "").trim();
@@ -10253,79 +10327,154 @@ function getDispatchRecord(data = {}) {
   });
 }
 
+function dispatchSummaryDateKey_(value, timeZone) {
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, timeZone || Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  const text = String(value || "").trim();
+  const direct = text.match(/^(\d{4})[-\/]?(\d{2})[-\/]?(\d{2})/);
+  if (direct) return direct[1] + "-" + direct[2] + "-" + direct[3];
+  const parsed = new Date(text);
+  if (isNaN(parsed.getTime())) return "";
+  return Utilities.formatDate(parsed, timeZone || Session.getScriptTimeZone(), "yyyy-MM-dd");
+}
+
+function dispatchSummaryPeriod_(value, timeZone) {
+  const dateKey = dispatchSummaryDateKey_(value, timeZone);
+  return dateKey ? dateKey.slice(0, 7) : "";
+}
+
+function dispatchSummaryGrade_(value) {
+  const text = String(value || "").trim().toUpperCase();
+  return /^E[1-5]$/.test(text) ? text : "";
+}
+
+function dispatchSummaryGradeQuantities_(row, cache, cacheKey) {
+  if (cache[cacheKey]) return cache[cacheKey];
+  const result = {};
+  const directGrade = dispatchSummaryGrade_(row.grade || row.material);
+  if (directGrade) {
+    result[directGrade] = num(row.quantityKg);
+    cache[cacheKey] = result;
+    return result;
+  }
+
+  parseDispatchLines_(row.dispatchLines).forEach(function(line) {
+    const lineGrade = dispatchSummaryGrade_(line.grade || line.material || line.itemName);
+    if (!lineGrade) return;
+    result[lineGrade] = (result[lineGrade] || 0) + dispatchLineQty_(line, 0);
+  });
+  cache[cacheKey] = result;
+  return result;
+}
+
 function getDispatchHistorySummary(data = {}) {
   const startedAt = Date.now();
+  const timings = {
+    sheetRead: 0,
+    rowNormalization: 0,
+    periodFilter: 0,
+    searchAndFilters: 0,
+    totals: 0,
+    sortAndPagination: 0,
+    total: 0,
+  };
   const periodMonth = normalizeMonthClosePeriod_(data.periodMonth || todayYmd().slice(0, 7));
   const customer = String(data.customer || "").trim().toUpperCase();
   const customerUnit = String(data.customerUnit || "").trim().toUpperCase();
-  const grade = normalizeDispatchGrade_(data.grade || "");
+  const grade = dispatchSummaryGrade_(data.grade);
   const search = String(data.search || "").trim().toLowerCase();
   const showDeleted = normalizeYesNo(data.showDeleted, "NO") === "YES";
   const pageSize = Math.max(1, Math.min(num(data.pageSize) || 50, 200));
   const requestedPage = Math.max(1, num(data.page) || 1);
+  const timeZone = Session.getScriptTimeZone();
+  let stepStarted = Date.now();
 
-  let rows = getRowsAsObjects("Dispatches")
-    .filter(function(row) { return showDeleted || !isDeleted_(row); })
-    .filter(function(row) { return normalizeMonthClosePeriod_(row.date) === periodMonth; })
-    .filter(function(row) {
-      return !customer || String(row.customerName || "").trim().toUpperCase() === customer;
-    })
-    .filter(function(row) {
-      return !customerUnit || String(row.customerUnit || "").trim().toUpperCase() === customerUnit;
-    })
-    .filter(function(row) {
-      if (!grade) return true;
-      try {
-        return num(dispatchQtyByGradeFromRow_(row)[grade]) > 0;
-      } catch (err) {
-        return normalizeDispatchGrade_(row.grade || row.material) === grade;
-      }
-    });
+  const sheet = getSheet("Dispatches");
+  const values = sheet.getDataRange().getValues();
+  const headers = values.length ? values[0].map(function(value) { return String(value || "").trim(); }) : [];
+  const rawRows = values.length > 1 ? values.slice(1) : [];
+  const headerIndex = {};
+  headers.forEach(function(header, index) { headerIndex[header] = index; });
+  timings.sheetRead = Date.now() - stepStarted;
 
-  if (search) {
-    rows = rows.filter(function(row) {
-      return [
-        row.dispatchId, row.customerName, row.customerUnit, row.grade, row.material,
-        row.invoiceNo, row.vehicleNo, row.driverName, row.remarks, row.dispatchStatus, row.status,
-      ].some(function(value) { return String(value || "").toLowerCase().indexOf(search) !== -1; });
-    });
-  }
-
-  rows.sort(function(a, b) {
-    const byDate = String(normalizeDateOnly_(b.date || "")).localeCompare(String(normalizeDateOnly_(a.date || "")));
-    if (byDate) return byDate;
-    return String(b.createdAt || b.updatedAt || "").localeCompare(String(a.createdAt || a.updatedAt || ""));
+  stepStarted = Date.now();
+  const periodRows = rawRows.filter(function(rawRow) {
+    const status = String(rawRow[headerIndex.status] || "").trim().toUpperCase();
+    const dispatchStatus = String(rawRow[headerIndex.dispatchStatus] || "").trim().toUpperCase();
+    if (!showDeleted && (status === "DELETED" || dispatchStatus === "DELETED")) return false;
+    return dispatchSummaryPeriod_(rawRow[headerIndex.date], timeZone) === periodMonth;
   });
+  timings.periodFilter = Date.now() - stepStarted;
 
+  stepStarted = Date.now();
+  let rows = periodRows.map(function(rawRow, periodIndex) {
+    const row = { __summaryKey: String(periodIndex) };
+    headers.forEach(function(header, index) { row[header] = rawRow[index]; });
+    row.__dateKey = dispatchSummaryDateKey_(row.date, timeZone);
+    return row;
+  });
+  timings.rowNormalization = Date.now() - stepStarted;
+
+  const gradeCache = {};
+  stepStarted = Date.now();
+  rows = rows.filter(function(row) {
+    if (customer && String(row.customerName || "").trim().toUpperCase() !== customer) return false;
+    if (customerUnit && String(row.customerUnit || "").trim().toUpperCase() !== customerUnit) return false;
+    if (grade && num(dispatchSummaryGradeQuantities_(row, gradeCache, row.__summaryKey)[grade]) <= 0) return false;
+    if (!search) return true;
+    return [
+      row.dispatchId, row.customerName, row.customerUnit, row.grade, row.material,
+      row.invoiceNo, row.vehicleNo, row.driverName, row.remarks, row.dispatchStatus, row.status,
+    ].some(function(value) { return String(value || "").toLowerCase().indexOf(search) !== -1; });
+  });
+  timings.searchAndFilters = Date.now() - stepStarted;
+
+  stepStarted = Date.now();
   const totals = { dispatchedKg: 0, dispatchValue: 0, dispatchCount: rows.length };
   const gradeTotals = { E1: 0, E2: 0, E3: 0, E4: 0, E5: 0 };
   rows.forEach(function(row) {
     totals.dispatchedKg += num(row.quantityKg);
     totals.dispatchValue += num(row.dispatchValue) || num(row.quantityKg) * num(row.ratePerKg);
-    try {
-      const byGrade = dispatchQtyByGradeFromRow_(row);
-      Object.keys(gradeTotals).forEach(function(key) { gradeTotals[key] += num(byGrade[key]); });
-    } catch (err) {
-      const rowGrade = normalizeDispatchGrade_(row.grade || row.material);
-      if (gradeTotals[rowGrade] !== undefined) gradeTotals[rowGrade] += num(row.quantityKg);
-    }
+    const byGrade = dispatchSummaryGradeQuantities_(row, gradeCache, row.__summaryKey);
+    Object.keys(gradeTotals).forEach(function(key) { gradeTotals[key] += num(byGrade[key]); });
   });
   totals.dispatchedKg = round2(totals.dispatchedKg);
   totals.dispatchValue = round2(totals.dispatchValue);
   Object.keys(gradeTotals).forEach(function(key) { gradeTotals[key] = round2(gradeTotals[key]); });
+  timings.totals = Date.now() - stepStarted;
 
+  stepStarted = Date.now();
+  rows.sort(function(a, b) {
+    const byDate = String(b.__dateKey || "").localeCompare(String(a.__dateKey || ""));
+    if (byDate) return byDate;
+    return String(b.createdAt || b.updatedAt || "").localeCompare(String(a.createdAt || a.updatedAt || ""));
+  });
   const totalRows = rows.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
   const page = Math.min(requestedPage, totalPages);
   const start = (page - 1) * pageSize;
+  const pageRows = rows.slice(start, start + pageSize).map(function(row) {
+    const clean = Object.assign({}, row);
+    delete clean.__summaryKey;
+    delete clean.__dateKey;
+    return clean;
+  });
+  timings.sortAndPagination = Date.now() - stepStarted;
+  timings.total = Date.now() - startedAt;
 
   return output({
     ok: true,
     periodMonth,
-    elapsedMs: Date.now() - startedAt,
+    generatedAt: new Date().toISOString(),
+    elapsedMs: timings.total,
+    sheetRowCount: rawRows.length,
+    filteredRowCount: totalRows,
+    returnedRowCount: pageRows.length,
+    timings,
     totals,
     gradeTotals,
-    rows: rows.slice(start, start + pageSize),
+    rows: pageRows,
     pagination: { page, pageSize, totalRows, totalPages },
   });
 }

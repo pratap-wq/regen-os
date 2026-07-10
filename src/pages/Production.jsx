@@ -90,6 +90,7 @@ export default function Production() {
     washedRegrindKg: 0,
     sortedRegrindKg: 0,
   });
+  const [processAvailabilityIntegrity, setProcessAvailabilityIntegrity] = useState({});
 
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -110,6 +111,7 @@ export default function Production() {
       setExtrusionRows(res.extrusionRefs || []);
       setInventoryLots(res.inventoryLots || []);
       setProcessAvailability(res.processAvailability || {});
+      setProcessAvailabilityIntegrity(res.processAvailabilityIntegrity || {});
       setMaterialRows(materialData);
       if (!preserveOutputRows) {
         setGrinderOutputRows(defaultOutputRowsFor(materialData, "GRINDER"));
@@ -128,11 +130,13 @@ export default function Production() {
 
   function availabilityCard(field, label) {
     const availableKg = Number(processAvailability?.[field] || 0);
+    const integrity = processAvailabilityIntegrity?.[field] || {};
     return (
       <KpiCard
         title={`${label} Available`}
-        value={`${availableKg.toFixed(0)} Kg`}
-        tone={availableKg < 0 ? "warning" : "neutral"}
+        value={integrity.needsReview ? "Availability Needs Review" : `${availableKg.toFixed(0)} Kg`}
+        helper={integrity.needsReview ? integrity.reason : "Available for production entry"}
+        tone={integrity.needsReview ? "warning" : "neutral"}
       />
     );
   }
@@ -707,10 +711,6 @@ export default function Production() {
         {availabilityCard("sortedRegrindKg", "Sorted Regrind")}
       </div>
 
-      <div style={ledgerBalanceNote}>
-        Negative ledger balance means historical inward/opening stock is incomplete or recorded under another material identity.
-      </div>
-
       {message && <div style={messageBox}>{message}</div>}
 
       <form
@@ -1143,17 +1143,6 @@ const messageBox = {
   border: "1px solid #86efac",
   color: "#166534",
   fontWeight: 700,
-};
-
-const ledgerBalanceNote = {
-  padding: "9px 12px",
-  marginBottom: 15,
-  borderRadius: 8,
-  background: "#fffbeb",
-  border: "1px solid #fcd34d",
-  color: "#92400e",
-  fontSize: 13,
-  fontWeight: 600,
 };
 
 const summaryGrid = {

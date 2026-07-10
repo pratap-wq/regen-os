@@ -9,6 +9,7 @@
     "test:dispatch-pricing": "node scripts/dispatch-pricing-test.mjs",
     "test:production-ledger": "node scripts/production-ledger-integrity-test.mjs",
     "test:production-availability": "node scripts/production-availability-test.mjs",
+    "test:production-flow-integrity": "node scripts/production-flow-integrity-test.mjs",
     "test:inventory-alias": "node scripts/inventory-legacy-alias-test.mjs",
     "test:inventory-cutover": "node scripts/inventory-cutover-preview-test.mjs",
     "test:grinder": "node scripts/grinder-flow-test.mjs",

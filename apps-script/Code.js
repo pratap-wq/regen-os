@@ -111,6 +111,7 @@ function doGet(e) {
     if (p.fn === "production.historySummary") return getProductionHistorySummary(p);
     if (p.fn === "production.historyRecord") return getProductionHistoryRecord(p);
     if (p.fn === "productionLedger.audit") return auditProductionLedger(p);
+    if (p.fn === "inventory.reconciliationPreview") return getInventoryReconciliationPreview(p);
     if (p.fn === "production.entryBootstrap") return getProductionEntryBootstrap(p);
     if (p.fn === "dashboard.ceoSummary") return getDashboardCeoSummary(p);
     if (p.fn === "dashboard.factorySummary") return getDashboardFactorySummary(p);
@@ -672,6 +673,7 @@ function debugRoutes() {
       "production.historySummary",
       "production.historyRecord",
       "productionLedger.audit",
+      "inventory.reconciliationPreview",
       "production.entryBootstrap",
       "dashboard.ceoSummary",
       "dashboard.factorySummary",
@@ -6697,6 +6699,8 @@ function getProductionEntryBootstrap() {
       materialName: material.materialName || material.materialCode || "",
       category,
       qtyKg: 0,
+      qtyIn: 0,
+      qtyOut: 0,
     };
     if (!item.materialName) return;
     inventoryRows.push(item);
@@ -6713,7 +6717,11 @@ function getProductionEntryBootstrap() {
       .map(compactInventoryMaterialKey_)
       .map(function(key) { return materialIndex[key]; })
       .filter(function(match) { return match; })[0];
-    if (material) material.qtyKg += num(row.qtyIn) - num(row.qtyOut);
+    if (material) {
+      material.qtyIn += num(row.qtyIn);
+      material.qtyOut += num(row.qtyOut);
+      material.qtyKg += num(row.qtyIn) - num(row.qtyOut);
+    }
   });
 
   const extrusionRefs = getRowsAsObjects("Extrusion_Batches").map(function(row) {
@@ -6728,7 +6736,11 @@ function getProductionEntryBootstrap() {
       return normalizeMaterialCategoryForLedger_(row.category) === "FG" && materialMasterFlag_(row, ["appearsInExtrusionOutput"]) === "YES";
     }),
     inventoryRows: inventoryRows.map(function(row) {
-      return Object.assign({}, row, { qtyKg: round2(row.qtyKg) });
+      return Object.assign({}, row, {
+        qtyKg: round2(row.qtyKg),
+        qtyIn: round2(row.qtyIn),
+        qtyOut: round2(row.qtyOut),
+      });
     }),
     extrusionRefs,
     generatedAt: new Date().toISOString(),
@@ -15943,6 +15955,526 @@ function ledgerBalancesForItems_(rows, itemNames) {
     qtyOut: round2(wanted[key].qtyOut),
     balance: round2(wanted[key].balance),
   }));
+}
+
+function getInventoryReconciliationPreview(data = {}) {
+  const startedAt = Date.now();
+  const periodEnd = inventoryReconciliationDate_(data.periodEnd || "");
+  const requestedMaterial = String(data.canonicalMaterial || "").trim();
+  const materials = getMaterialMasterRows_().filter(function(row) {
+    return normalizeMaterialCategoryForLedger_(row.category) !== "STORE";
+  });
+  const materialIndex = inventoryReconciliationMaterialIndex_(materials);
+  const ledgerRows = inventoryReconciliationReadRows_("Inventory_Ledger").filter(function(row) {
+    return productionLedgerRowActive_(row) && inventoryReconciliationWithinPeriod_(row.date || row.createdAt, periodEnd);
+  });
+  const sourceRows = {
+    RM_Inward: inventoryReconciliationReadRows_("RM_Inward"),
+    Grinder_Batches: inventoryReconciliationReadRows_("Grinder_Batches"),
+    Wash_Batches: inventoryReconciliationReadRows_("Wash_Batches"),
+    Sorting_Batches: inventoryReconciliationReadRows_("Sorting_Batches"),
+    Extrusion_Batches: inventoryReconciliationReadRows_("Extrusion_Batches"),
+    Inventory_Adjustments: inventoryReconciliationReadRows_("Inventory_Adjustments"),
+  };
+  Object.keys(sourceRows).forEach(function(sheetName) {
+    sourceRows[sheetName] = sourceRows[sheetName].filter(function(row) {
+      return inventoryReconciliationWithinPeriod_(row.date || row.adjustmentDate || row.createdAt, periodEnd);
+    });
+  });
+
+  const canonicalStats = {};
+  materials.forEach(function(material) {
+    canonicalStats[inventoryReconciliationMaterialIdentity_(material)] = inventoryReconciliationEmptyStats_();
+  });
+  const legacyGroups = {};
+  const invalidRecipeGroups = {};
+  const postedAdjustmentIds = {};
+
+  ledgerRows.forEach(function(row) {
+    const material = inventoryReconciliationResolveLedgerMaterial_(row, materialIndex);
+    const itemName = String(row.itemName || row.materialName || row.materialCode || "").trim();
+    const adjustment = inventoryReconciliationIsAdjustment_(row);
+    if (adjustment) {
+      [row.adjustmentId, row.targetRef, row.sourceRef].forEach(function(value) {
+        const id = String(value || "").trim();
+        if (id) postedAdjustmentIds[id] = true;
+      });
+    }
+    if (material) {
+      inventoryReconciliationAddLedgerRow_(
+        canonicalStats[inventoryReconciliationMaterialIdentity_(material)],
+        row,
+        adjustment
+      );
+      return;
+    }
+    if (!itemName) return;
+    if (inventoryReconciliationIsRecipeMaterial_(itemName)) {
+      inventoryReconciliationAddRecipeRow_(invalidRecipeGroups, itemName, row, materials);
+      return;
+    }
+    const key = materialAliasKey_(itemName);
+    if (!legacyGroups[key]) legacyGroups[key] = inventoryReconciliationEmptyLegacyGroup_(itemName);
+      inventoryReconciliationAddLegacyRow_(legacyGroups[key], row, adjustment);
+  });
+
+  let approvedAdjustmentRowsNotPosted = 0;
+  (sourceRows.Inventory_Adjustments || []).forEach(function(row) {
+    if (String(row.status || "").trim().toUpperCase() !== "APPROVED") return;
+    const adjustmentId = String(row.adjustmentId || "").trim();
+    if (adjustmentId && postedAdjustmentIds[adjustmentId]) return;
+    const quantity = row.quantityKg !== undefined && row.quantityKg !== ""
+      ? num(row.quantityKg)
+      : num(row.differenceQty);
+    if (!quantity) return;
+    const material = inventoryReconciliationCanonicalByName_(
+      row.itemCode || row.material || row.materialName || row.itemName,
+      materialIndex
+    );
+    if (material) {
+      canonicalStats[inventoryReconciliationMaterialIdentity_(material)].adjustments += quantity;
+    } else {
+      const unknownName = String(row.itemCode || row.material || row.materialName || row.itemName || "").trim();
+      if (unknownName) {
+        const key = materialAliasKey_(unknownName);
+        if (!legacyGroups[key]) legacyGroups[key] = inventoryReconciliationEmptyLegacyGroup_(unknownName);
+        legacyGroups[key].adjustments += quantity;
+        legacyGroups[key].balance += quantity;
+        legacyGroups[key].transactionCount += 1;
+        if (adjustmentId && legacyGroups[key].affectedBatchIds.indexOf(adjustmentId) === -1) {
+          legacyGroups[key].affectedBatchIds.push(adjustmentId);
+        }
+      }
+    }
+    approvedAdjustmentRowsNotPosted += 1;
+  });
+
+  const evidence = inventoryReconciliationEvidenceNames_(sourceRows, periodEnd);
+  Object.keys(evidence).forEach(function(key) {
+    if (legacyGroups[key] || inventoryReconciliationCanonicalByName_(evidence[key].name, materialIndex)) return;
+    if (inventoryReconciliationIsRecipeMaterial_(evidence[key].name)) return;
+    legacyGroups[key] = inventoryReconciliationEmptyLegacyGroup_(evidence[key].name);
+    legacyGroups[key].evidenceSources = Object.keys(evidence[key].sources);
+  });
+
+  const aliasesByMaterial = inventoryReconciliationAssignAliases_(legacyGroups, materials);
+  const canonicalMaterials = materials
+    .filter(function(material) {
+      if (!requestedMaterial) return true;
+      const requestedKey = compactInventoryMaterialKey_(requestedMaterial);
+      return [material.materialId, material.materialCode, material.materialName]
+        .map(compactInventoryMaterialKey_)
+        .indexOf(requestedKey) !== -1;
+    })
+    .map(function(material) {
+      const identity = inventoryReconciliationMaterialIdentity_(material);
+      const stats = canonicalStats[identity] || inventoryReconciliationEmptyStats_();
+      const aliases = (aliasesByMaterial[identity] || []).sort(inventoryReconciliationAliasSort_);
+      const highImpact = aliases.filter(function(alias) { return alias.confidence === "HIGH"; })
+        .reduce(function(sum, alias) { return sum + alias.balance; }, 0);
+      const balance = round2(stats.qtyIn - stats.qtyOut + stats.adjustments);
+      const residual = round2(balance + highImpact);
+      const proposedOpening = residual < 0 ? round2(Math.abs(residual)) : 0;
+      const affected = {};
+      stats.affectedBatchIds.forEach(function(id) { affected[id] = true; });
+      aliases.filter(function(alias) { return alias.confidence === "HIGH"; }).forEach(function(alias) {
+        alias.affectedBatchIds.forEach(function(id) { affected[id] = true; });
+      });
+      const warnings = [];
+      if (balance < 0) warnings.push("Canonical ledger balance is negative.");
+      if (aliases.some(function(alias) { return alias.confidence === "MEDIUM"; })) {
+        warnings.push("Medium-confidence aliases require business approval and are not included in the residual balance.");
+      }
+      if (proposedOpening > 0) {
+        warnings.push("Provisional opening balance required - physical/accounting confirmation needed.");
+      }
+      return {
+        materialId: material.materialId || "",
+        materialCode: material.materialCode || materialCode_(material.materialName),
+        materialName: material.materialName || material.materialCode || "",
+        canonicalLedger: {
+          qtyIn: round2(stats.qtyIn),
+          qtyOut: round2(stats.qtyOut),
+          adjustments: round2(stats.adjustments),
+          balance,
+        },
+        possibleLegacyAliases: aliases.map(function(alias) {
+          return {
+            legacyName: alias.legacyName,
+            qtyIn: round2(alias.qtyIn),
+            qtyOut: round2(alias.qtyOut),
+            balance: round2(alias.balance),
+            firstDate: alias.firstDate,
+            lastDate: alias.lastDate,
+            transactionCount: alias.transactionCount,
+            confidence: alias.confidence,
+            reason: alias.reason,
+          };
+        }),
+        proposedAliasTransfers: aliases.map(function(alias) {
+          return {
+            legacyName: alias.legacyName,
+            proposedCanonicalMaterial: material.materialName || material.materialCode || "",
+            transferableQtyIn: round2(alias.qtyIn),
+            transferableQtyOut: round2(alias.qtyOut),
+            netImpact: round2(alias.balance),
+            confidence: alias.confidence,
+            requiresApproval: true,
+          };
+        }),
+        residualBalanceAfterAliases: residual,
+        proposedOpeningAdjustmentKg: proposedOpening,
+        affectedBatchIds: Object.keys(affected).sort(),
+        warnings,
+      };
+    });
+
+  const aliasCounts = { HIGH: 0, MEDIUM: 0, LOW: 0 };
+  let provisionalOpeningTotalKg = 0;
+  canonicalMaterials.forEach(function(material) {
+    material.possibleLegacyAliases.forEach(function(alias) {
+      aliasCounts[alias.confidence] = (aliasCounts[alias.confidence] || 0) + 1;
+    });
+    provisionalOpeningTotalKg += num(material.proposedOpeningAdjustmentKg);
+  });
+  const invalidRecipeMaterials = Object.keys(invalidRecipeGroups).map(function(key) {
+    const group = invalidRecipeGroups[key];
+    return {
+      classification: "INVALID_RECIPE_MATERIAL",
+      originalValue: group.originalValue,
+      ledgerRowIds: Object.keys(group.ledgerRowIds).sort(),
+      sourceBatchIds: Object.keys(group.sourceBatchIds).sort(),
+      firstDate: group.firstDate,
+      lastDate: group.lastDate,
+      transactionCount: group.transactionCount,
+      parsedComponents: group.parsedComponents,
+      confidence: group.parsedComponents.length ? "MEDIUM" : "LOW",
+      warning: "Combined recipe/composition text is not a valid inventory material and requires controlled review.",
+    };
+  }).sort(function(a, b) { return b.transactionCount - a.transactionCount; });
+  const cutover = inventoryReconciliationCutover_(ledgerRows, sourceRows, materialIndex);
+
+  return output({
+    ok: true,
+    route: "inventory.reconciliationPreview",
+    readOnly: true,
+    periodEnd: periodEnd || "ALL",
+    canonicalMaterial: requestedMaterial || "ALL",
+    generatedAt: new Date().toISOString(),
+    elapsedMs: Date.now() - startedAt,
+    summary: {
+      canonicalMaterialCount: canonicalMaterials.length,
+      negativeCanonicalBalanceCount: canonicalMaterials.filter(function(item) { return item.canonicalLedger.balance < 0; }).length,
+      aliasCandidateCounts: aliasCounts,
+      recipeStringCount: invalidRecipeMaterials.length,
+      provisionalOpeningTotalKg: round2(provisionalOpeningTotalKg),
+      approvedAdjustmentRowsNotPosted,
+    },
+    cutover,
+    invalidRecipeMaterials,
+    canonicalMaterials,
+    warnings: [
+      "Preview only. No Inventory_Ledger, Material_Master, production history, or adjustment row was changed.",
+      "Only HIGH-confidence alias candidates are included in residualBalanceAfterAliases; all transfers still require approval.",
+      "White Buckets, White PPCP Buckets, and Mixed PPCP Buckets are kept separate for explicit business approval.",
+    ],
+  });
+}
+
+function inventoryReconciliationReadRows_(sheetName) {
+  try { return getRowsAsObjects(sheetName); } catch (err) { return []; }
+}
+
+function inventoryReconciliationDate_(value) {
+  if (!value) return "";
+  const normalized = normalizeDateOnly_(value);
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : "";
+}
+
+function inventoryReconciliationWithinPeriod_(value, periodEnd) {
+  if (!periodEnd) return true;
+  const date = inventoryReconciliationDate_(value);
+  return !date || date <= periodEnd;
+}
+
+function inventoryReconciliationMaterialIdentity_(material) {
+  return String(material.materialId || material.materialCode || material.materialName || "").trim();
+}
+
+function inventoryReconciliationMaterialIndex_(materials) {
+  const index = {};
+  (materials || []).forEach(function(material) {
+    [material.materialId, material.materialCode, material.materialName].forEach(function(value) {
+      const key = compactInventoryMaterialKey_(value);
+      if (key) index[key] = material;
+    });
+  });
+  return index;
+}
+
+function inventoryReconciliationCanonicalByName_(value, materialIndex) {
+  return materialIndex[compactInventoryMaterialKey_(value)] || null;
+}
+
+function inventoryReconciliationResolveLedgerMaterial_(row, materialIndex) {
+  const candidates = [row.materialId, row.materialCode, row.itemName, row.materialName];
+  for (let index = 0; index < candidates.length; index += 1) {
+    const match = inventoryReconciliationCanonicalByName_(candidates[index], materialIndex);
+    if (match) return match;
+  }
+  return null;
+}
+
+function inventoryReconciliationEmptyStats_() {
+  return { qtyIn: 0, qtyOut: 0, adjustments: 0, affectedBatchIds: [] };
+}
+
+function inventoryReconciliationEmptyLegacyGroup_(name) {
+  return {
+    legacyName: String(name || "").trim(), qtyIn: 0, qtyOut: 0, adjustments: 0,
+    balance: 0, firstDate: "", lastDate: "", transactionCount: 0,
+    affectedBatchIds: [], evidenceSources: [],
+  };
+}
+
+function inventoryReconciliationIsAdjustment_(row) {
+  return /ADJUST/.test(String(row.module || row.movementType || "").toUpperCase());
+}
+
+function inventoryReconciliationAddLedgerRow_(stats, row, adjustment) {
+  const qtyIn = num(row.qtyIn);
+  const qtyOut = num(row.qtyOut);
+  if (adjustment) stats.adjustments += qtyIn - qtyOut;
+  else {
+    stats.qtyIn += qtyIn;
+    stats.qtyOut += qtyOut;
+  }
+  const batchId = productionLedgerRecordId_(row);
+  if (batchId && stats.affectedBatchIds.indexOf(batchId) === -1) stats.affectedBatchIds.push(batchId);
+}
+
+function inventoryReconciliationAddLegacyRow_(group, row, adjustment) {
+  const qtyIn = num(row.qtyIn);
+  const qtyOut = num(row.qtyOut);
+  if (adjustment) group.adjustments += qtyIn - qtyOut;
+  else {
+    group.qtyIn += qtyIn;
+    group.qtyOut += qtyOut;
+  }
+  group.balance += qtyIn - qtyOut;
+  group.transactionCount += 1;
+  const date = inventoryReconciliationDate_(row.date || row.createdAt);
+  if (date && (!group.firstDate || date < group.firstDate)) group.firstDate = date;
+  if (date && (!group.lastDate || date > group.lastDate)) group.lastDate = date;
+  const batchId = productionLedgerRecordId_(row);
+  if (batchId && group.affectedBatchIds.indexOf(batchId) === -1) group.affectedBatchIds.push(batchId);
+}
+
+function inventoryReconciliationIsRecipeMaterial_(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  if (/^[\[{]/.test(text)) return true;
+  if (/\s\+\s/.test(text)) return true;
+  if ((text.match(/\bKG\b/gi) || []).length > 1) return true;
+  if (/\b[A-Z][A-Z0-9 _()-]*\s*:\s*[\d,.]+\s*(KG|KGS|KILOGRAMS)?/i.test(text)) return true;
+  return /FEED\s*COMPOSITION|RECIPE|DOSING/i.test(text);
+}
+
+function inventoryReconciliationAddRecipeRow_(groups, value, row, materials) {
+  const key = materialAliasKey_(value);
+  if (!groups[key]) {
+    groups[key] = {
+      originalValue: String(value || "").trim(), ledgerRowIds: {}, sourceBatchIds: {},
+      firstDate: "", lastDate: "", transactionCount: 0,
+      parsedComponents: inventoryReconciliationParseRecipe_(value, materials),
+    };
+  }
+  const group = groups[key];
+  if (row.ledgerId) group.ledgerRowIds[String(row.ledgerId)] = true;
+  const batchId = productionLedgerRecordId_(row);
+  if (batchId) group.sourceBatchIds[batchId] = true;
+  const date = inventoryReconciliationDate_(row.date || row.createdAt);
+  if (date && (!group.firstDate || date < group.firstDate)) group.firstDate = date;
+  if (date && (!group.lastDate || date > group.lastDate)) group.lastDate = date;
+  group.transactionCount += 1;
+}
+
+function inventoryReconciliationParseRecipe_(value, materials) {
+  const text = String(value || "").trim();
+  let components = [];
+  try {
+    const parsed = JSON.parse(text);
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    components = rows.map(function(row) {
+      return {
+        originalComponent: String(row.material || row.materialName || row.itemName || row.inputMaterial || "").trim(),
+        quantityKg: num(row.qtyKg || row.quantityKg || row.quantity || row.consumeQty),
+      };
+    }).filter(function(row) { return row.originalComponent; });
+  } catch (err) {
+    components = text.split(/\s+\+\s+|\s*;\s*/).map(function(part) {
+      const match = part.match(/^\s*(.*?)\s*:\s*([\d,.]+)\s*(?:KG|KGS|KILOGRAMS)?\s*$/i);
+      return {
+        originalComponent: String(match ? match[1] : part).trim(),
+        quantityKg: match ? num(String(match[2]).replace(/,/g, "")) : 0,
+      };
+    }).filter(function(row) { return row.originalComponent; });
+  }
+  const index = inventoryReconciliationMaterialIndex_(materials);
+  return components.map(function(component) {
+    const direct = inventoryReconciliationCanonicalByName_(component.originalComponent, index);
+    const defaultAlias = materialAliasRowsFromDefaults_().filter(function(row) {
+      return materialAliasKey_(row.aliasName) === materialAliasKey_(component.originalComponent);
+    })[0];
+    const mapped = direct || (defaultAlias ? inventoryReconciliationCanonicalByName_(defaultAlias.canonicalName, index) : null);
+    return {
+      originalComponent: component.originalComponent,
+      quantityKg: round2(component.quantityKg),
+      proposedCanonicalMaterial: mapped ? mapped.materialName : "",
+      confidence: direct ? "HIGH" : mapped ? "MEDIUM" : "LOW",
+    };
+  });
+}
+
+function inventoryReconciliationEvidenceNames_(sourceRows) {
+  const evidence = {};
+  const fields = {
+    RM_Inward: ["material", "materialName", "materialSummary", "materialLinesJson"],
+    Grinder_Batches: ["inputMaterial", "feedComposition", "outputComposition"],
+    Wash_Batches: ["inputMaterial", "feedComposition", "outputComposition"],
+    Sorting_Batches: ["inputMaterial", "feedComposition", "outputComposition"],
+    Extrusion_Batches: ["inputMaterial", "feedComposition", "outputComposition", "productionGrade"],
+    Inventory_Adjustments: ["material", "materialName", "itemName", "materialCode"],
+  };
+  Object.keys(fields).forEach(function(sheetName) {
+    (sourceRows[sheetName] || []).forEach(function(row) {
+      fields[sheetName].forEach(function(field) {
+        inventoryReconciliationCollectEvidence_(evidence, row[field], sheetName);
+      });
+    });
+  });
+  return evidence;
+}
+
+function inventoryReconciliationCollectEvidence_(evidence, value, source) {
+  if (value === undefined || value === null || value === "") return;
+  if (Array.isArray(value)) {
+    value.forEach(function(item) { inventoryReconciliationCollectEvidence_(evidence, item, source); });
+    return;
+  }
+  if (typeof value === "object") {
+    ["material", "materialName", "itemName", "inputMaterial", "outputMaterial", "grade"]
+      .forEach(function(field) { inventoryReconciliationCollectEvidence_(evidence, value[field], source); });
+    return;
+  }
+  const text = String(value).trim();
+  if (!text) return;
+  if (/^[\[{]/.test(text)) {
+    try {
+      inventoryReconciliationCollectEvidence_(evidence, JSON.parse(text), source);
+      return;
+    } catch (err) {}
+  }
+  const key = materialAliasKey_(text);
+  if (!key) return;
+  if (!evidence[key]) evidence[key] = { name: text, sources: {} };
+  evidence[key].sources[source] = true;
+}
+
+function inventoryReconciliationAssignAliases_(legacyGroups, materials) {
+  const assigned = {};
+  const defaults = materialAliasRowsFromDefaults_();
+  Object.keys(legacyGroups).forEach(function(key) {
+    const group = legacyGroups[key];
+    const candidates = [];
+    materials.forEach(function(material) {
+      const candidate = inventoryReconciliationAliasCandidate_(group.legacyName, material, defaults);
+      if (candidate) candidates.push(candidate);
+    });
+    candidates.sort(function(a, b) { return b.score - a.score; });
+    if (!candidates.length) return;
+    const best = candidates[0];
+    const identity = inventoryReconciliationMaterialIdentity_(best.material);
+    if (!assigned[identity]) assigned[identity] = [];
+    assigned[identity].push(Object.assign({}, group, {
+      balance: round2(group.qtyIn - group.qtyOut + group.adjustments),
+      confidence: best.confidence,
+      reason: best.reason + (group.evidenceSources.length ? " Evidence: " + group.evidenceSources.join(", ") + "." : ""),
+    }));
+  });
+  return assigned;
+}
+
+function inventoryReconciliationAliasCandidate_(legacyName, material, defaults) {
+  const legacyKey = materialAliasKey_(legacyName);
+  const canonicalName = String(material.materialName || material.materialCode || "").trim();
+  const canonicalKey = materialAliasKey_(canonicalName);
+  if (!legacyKey || !canonicalKey || legacyKey === canonicalKey) return null;
+
+  const bucketApprovalNames = ["WHITE PPCP BUCKETS", "MIXED PPCP BUCKETS", "MIXED BUCKETS", "MIXED BUCKET"];
+  if (canonicalKey === "WHITE BUCKETS" && bucketApprovalNames.indexOf(legacyKey) !== -1) {
+    return { material, confidence: "MEDIUM", score: 220, reason: "Related historical bucket name; explicit approval is required before treating it as White Buckets." };
+  }
+
+  const alias = (defaults || []).filter(function(row) {
+    return materialAliasKey_(row.aliasName) === legacyKey && materialAliasKey_(row.canonicalName) === canonicalKey;
+  })[0];
+  if (alias) {
+    const ambiguous = /\bMIXED\b|^FLAKES$|^REGRINDS?$/.test(legacyKey);
+    const confidence = ambiguous ? "MEDIUM" : num(alias.confidence) >= 95 ? "HIGH" : "MEDIUM";
+    return {
+      material,
+      confidence,
+      score: confidence === "HIGH" ? 300 + num(alias.confidence) : 200 + num(alias.confidence),
+      reason: ambiguous
+        ? "Existing alias evidence is operationally similar but the material description is mixed or generic."
+        : "Existing approved alias evidence identifies this as a former name for the same material.",
+    };
+  }
+
+  if (compactInventoryMaterialKey_(legacyName) === compactInventoryMaterialKey_(canonicalName)) {
+    return { material, confidence: "HIGH", score: 390, reason: "Case, spacing, or punctuation variation of the canonical material name." };
+  }
+  return null;
+}
+
+function inventoryReconciliationAliasSort_(a, b) {
+  const rank = { HIGH: 3, MEDIUM: 2, LOW: 1 };
+  return (rank[b.confidence] || 0) - (rank[a.confidence] || 0) || Math.abs(b.balance) - Math.abs(a.balance);
+}
+
+function inventoryReconciliationFirstDate_(rows, fields) {
+  let first = "";
+  (rows || []).forEach(function(row) {
+    let date = "";
+    for (let index = 0; index < fields.length; index += 1) {
+      date = inventoryReconciliationDate_(row[fields[index]]);
+      if (date) break;
+    }
+    if (date && (!first || date < first)) first = date;
+  });
+  return first;
+}
+
+function inventoryReconciliationCutover_(ledgerRows, sourceRows, materialIndex) {
+  const materialLinkedRows = (ledgerRows || []).filter(function(row) {
+    const idMatch = row.materialId && materialIndex[compactInventoryMaterialKey_(row.materialId)];
+    const codeMatch = row.materialCode && materialIndex[compactInventoryMaterialKey_(row.materialCode)];
+    return idMatch || codeMatch;
+  });
+  const firstMaterialLinked = inventoryReconciliationFirstDate_(materialLinkedRows, ["date", "createdAt"]);
+  return {
+    firstInventoryLedgerDate: inventoryReconciliationFirstDate_(ledgerRows, ["date", "createdAt"]),
+    firstMaterialMasterLinkedLedgerDate: firstMaterialLinked,
+    firstRmInwardDate: inventoryReconciliationFirstDate_(sourceRows.RM_Inward, ["date", "createdAt"]),
+    firstGrinderDate: inventoryReconciliationFirstDate_(sourceRows.Grinder_Batches, ["date", "createdAt"]),
+    firstWashDate: inventoryReconciliationFirstDate_(sourceRows.Wash_Batches, ["date", "createdAt"]),
+    firstExtrusionDate: inventoryReconciliationFirstDate_(sourceRows.Extrusion_Batches, ["date", "createdAt"]),
+    recommendedReconciliationCutoverDate: firstMaterialLinked || "",
+    reason: firstMaterialLinked
+      ? "Use the first date with an active ledger movement linked by current Material_Master materialId/materialCode; earlier history needs opening/alias confirmation."
+      : "No Material_Master-linked ledger date was found. A cutover date requires manual accounting confirmation.",
+  };
 }
 
 function auditProductionLedger(data = {}) {

@@ -124,16 +124,25 @@ export default function Production() {
     }));
   }, [inventoryRows]);
 
-  const availableInventoryByMaterial = useMemo(() => {
-    return buildAvailabilityMap(inventoryLots);
-  }, [inventoryLots]);
-
   function n(v) {
     return Number(v || 0);
   }
 
-  function availableKg(material) {
-    return availableInventoryByMaterial[materialKey(material)] || 0;
+  function ledgerCard(material, label) {
+    const row = inventoryRows.find(
+      (item) => materialKey(item.materialName) === materialKey(material)
+    );
+    const balance = Number(row?.qtyKg || 0);
+    const qtyIn = Number(row?.qtyIn || 0);
+    const qtyOut = Number(row?.qtyOut || 0);
+    return (
+      <KpiCard
+        title={`${label} Ledger Balance`}
+        value={`${balance.toFixed(0)} Kg`}
+        tone={balance < 0 ? "warning" : "neutral"}
+        helper={`${balance < 0 ? "Reconciliation Required | " : ""}Ledger IN: ${formatKg(qtyIn)} | Ledger OUT: ${formatKg(qtyOut)}`}
+      />
+    );
   }
 
   function buildExtrusionBatchId(updatedForm = form) {
@@ -700,10 +709,14 @@ export default function Production() {
       subtitle="One shift entry screen for Grinder, Washline, Colour Sorter and Extrusion. Raw Material and Finished Goods quality testing is performed separately in the Quality Workbench."
     >
       <div className="factory-kpi-grid">
-        <KpiCard title="White Buckets" value={`${availableKg("White Buckets").toFixed(0)} Kg`} tone="neutral" />
-        <KpiCard title="Unwashed Regrind" value={`${availableKg("White Regrind (Unwashed)").toFixed(0)} Kg`} tone="neutral" />
-        <KpiCard title="Washed Regrind" value={`${availableKg("White Regrind (Washed)").toFixed(0)} Kg`} tone="neutral" />
-        <KpiCard title="Sorted Regrind" value={`${availableKg("White Sorted Regrind").toFixed(0)} Kg`} tone="neutral" />
+        {ledgerCard("White Buckets", "White Buckets")}
+        {ledgerCard("White Regrind (Unwashed)", "Unwashed Regrind")}
+        {ledgerCard("White Regrind (Washed)", "Washed Regrind")}
+        {ledgerCard("White Sorted Regrind", "Sorted Regrind")}
+      </div>
+
+      <div style={ledgerBalanceNote}>
+        Negative ledger balance means historical inward/opening stock is incomplete or recorded under another material identity.
       </div>
 
       {message && <div style={messageBox}>{message}</div>}
@@ -1076,6 +1089,10 @@ function isYes(value) {
   return ["YES", "TRUE", "Y", "1", "ON"].includes(String(value || "").toUpperCase());
 }
 
+function formatKg(value) {
+  return `${Number(value || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })} kg`;
+}
+
 function SelectField({ label, name, value, onChange, options }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -1138,6 +1155,17 @@ const messageBox = {
   border: "1px solid #86efac",
   color: "#166534",
   fontWeight: 700,
+};
+
+const ledgerBalanceNote = {
+  padding: "9px 12px",
+  marginBottom: 15,
+  borderRadius: 8,
+  background: "#fffbeb",
+  border: "1px solid #fcd34d",
+  color: "#92400e",
+  fontSize: 13,
+  fontWeight: 600,
 };
 
 const summaryGrid = {

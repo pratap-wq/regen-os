@@ -49,19 +49,42 @@ function buildCustomerUnitOptions(customerName, customerRows, customerUnitRows) 
 
 async function timedDispatchApiCall(payload) {
   const startedAt = Date.now();
+  const routeName = payload?.fn || "unknown";
 
   try {
-    return await apiCall(payload);
+    const response = await apiCall(payload);
+    if (DISPATCH_API_DEBUG) {
+      console.info("[Dispatch API response]", {
+        route: routeName,
+        elapsedMs: response?.elapsedMs ?? Date.now() - startedAt,
+        responseKeys: response ? Object.keys(response) : [],
+        rowCount: Array.isArray(response?.rows) ? response.rows.length : undefined,
+        availability: response?.availability,
+        error: response?.error || "",
+      });
+    }
+    return response;
+  } catch (error) {
+    if (DISPATCH_API_DEBUG) {
+      console.error("[Dispatch API error]", {
+        route: routeName,
+        elapsedMs: Date.now() - startedAt,
+        error: error?.message || String(error),
+      });
+    }
+    throw error;
   } finally {
     const elapsedMs = Date.now() - startedAt;
-    const routeName = payload?.fn || "unknown";
-
-    if (elapsedMs > 5000) {
-      console.warn(`[Dispatch API] ${routeName}: ${elapsedMs} ms`);
-    } else if (DISPATCH_API_DEBUG) {
-      console.info(`[Dispatch API] ${routeName}: ${elapsedMs} ms`);
-    }
+    if (DISPATCH_API_DEBUG) console.info(`[Dispatch API timing] ${routeName}: ${elapsedMs} ms`);
   }
+}
+
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 export default function Dispatch() {
@@ -109,7 +132,9 @@ export default function Dispatch() {
   };
 
   const [rows, setRows] = useState([]);
-  const [fgAvailabilityRows, setFgAvailabilityRows] = useState([]);
+  const [fgAvailability, setFgAvailability] = useState(null);
+  const [fgAvailabilityLoading, setFgAvailabilityLoading] = useState(true);
+  const [fgAvailabilityError, setFgAvailabilityError] = useState("");
   const [customerRows, setCustomerRows] = useState([]);
   const [customerUnitRows, setCustomerUnitRows] = useState([]);
   const [fgRateRows, setFgRateRows] = useState([]);
@@ -125,8 +150,10 @@ export default function Dispatch() {
   const [unitFilter, setUnitFilter] = useState("");
   const [gradeFilter, setGradeFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
   const [historyTotals, setHistoryTotals] = useState({ dispatchedKg: 0, dispatchValue: 0, dispatchCount: 0 });
   const [historyPagination, setHistoryPagination] = useState({ page: 1, pageSize: 50, totalRows: 0, totalPages: 1 });
   const [editRecord, setEditRecord] = useState(null);
@@ -138,76 +165,113 @@ export default function Dispatch() {
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const writeLockRef = useRef(false);
+  const historyRequestRef = useRef(0);
 
-  async function loadReferenceData() {
-    try {
-      const [fgAvailability, customers, customerUnits, fgRates, materials] = await Promise.all([
-        timedDispatchApiCall({ fn: "dispatch.fgAvailability" }),
+  const loadReferenceData = useCallback(async () => {
+    const results = await Promise.allSettled([
         timedDispatchApiCall({ fn: "factoryMaster.list", masterType: "customer" }),
         timedDispatchApiCall({ fn: "factoryMaster.list", masterType: "customerUnit" }),
         timedDispatchApiCall({ fn: "fgRates.list" }),
         timedDispatchApiCall({ fn: "materialMaster.list" }),
-      ]);
+    ]);
+    const [customers, customerUnits, fgRates, materials] = results;
+    if (customers.status === "fulfilled" && customers.value?.ok !== false) setCustomerRows(customers.value?.rows || []);
+    if (customerUnits.status === "fulfilled" && customerUnits.value?.ok !== false) setCustomerUnitRows(customerUnits.value?.rows || []);
+    if (fgRates.status === "fulfilled" && fgRates.value?.ok !== false) setFgRateRows(fgRates.value?.rows || []);
+    if (materials.status === "fulfilled" && materials.value?.ok !== false) setMaterialRows(materials.value?.rows || []);
 
-      if (!fgAvailability || fgAvailability.ok === false) {
-        throw new Error(fgAvailability?.error || "Failed loading FG availability from Inventory Ledger.");
-      }
-
-      setFgAvailabilityRows(fgAvailability.grades || []);
-      setCustomerRows(customers.rows || []);
-      setCustomerUnitRows(customerUnits.rows || []);
-      setFgRateRows(fgRates.rows || []);
-      setMaterialRows(materials.rows || []);
-      return true;
-    } catch (err) {
-      console.log(err);
-      setStatus(err.message);
-      return false;
-    }
-  }
-
-  useEffect(() => {
-    const timer = setTimeout(() => loadReferenceData(), 0);
-    return () => clearTimeout(timer);
+    const failed = results.filter((result) => result.status === "rejected" || result.value?.ok === false);
+    if (failed.length) setStatus("Some Dispatch master data could not be loaded. Retry the page before saving.");
+    return failed.length === 0;
   }, []);
 
-  async function loadFgAvailability() {
-    const res = await timedDispatchApiCall({ fn: "dispatch.fgAvailability" });
-    if (!res || res.ok !== true) throw new Error(res?.error || "Failed loading FG availability.");
-    setFgAvailabilityRows(res.grades || []);
-    return res;
-  }
-
-  const loadHistory = useCallback(async () => {
-    setHistoryLoading(true);
+  const loadFgAvailability = useCallback(async () => {
+    setFgAvailabilityLoading(true);
+    setFgAvailabilityError("");
     try {
-      const res = await timedDispatchApiCall({
-        fn: "dispatch.historySummary",
-        periodMonth: `${year}-${month}`,
-        customer: customerFilter,
-        customerUnit: unitFilter,
-        grade: gradeFilter,
-        search,
-        page,
-        pageSize: 50,
-        showDeleted: "NO",
+      const res = await withTimeout(
+        timedDispatchApiCall({ fn: "dispatch.fgAvailability" }),
+        30000,
+        "FG availability request timed out."
+      );
+      if (!res || res.ok !== true) throw new Error(res?.error || "Failed loading FG availability.");
+      if (!res.availability || typeof res.availability !== "object") {
+        throw new Error("Backend response is missing the FG availability contract.");
+      }
+      setFgAvailability({
+        E1: Number(res.availability.E1 || 0),
+        E2: Number(res.availability.E2 || 0),
+        E3: Number(res.availability.E3 || 0),
+        E4: Number(res.availability.E4 || 0),
+        E5: Number(res.availability.E5 || 0),
       });
-      if (!res || res.ok !== true) throw new Error(res?.error || "Dispatch history failed to load.");
-      setRows(res.rows || []);
-      setHistoryTotals(res.totals || { dispatchedKg: 0, dispatchValue: 0, dispatchCount: 0 });
-      setHistoryPagination(res.pagination || { page: 1, pageSize: 50, totalRows: 0, totalPages: 1 });
-      if (res.pagination?.page && Number(res.pagination.page) !== page) setPage(Number(res.pagination.page));
       return true;
     } catch (err) {
-      setStatus(err.message);
+      setFgAvailability(null);
+      setFgAvailabilityError(`Could not load FG availability: ${err.message}`);
       return false;
     } finally {
-      setHistoryLoading(false);
+      setFgAvailabilityLoading(false);
     }
-  }, [customerFilter, gradeFilter, month, page, search, setPage, unitFilter, year]);
+  }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => loadHistory(), 250);
+    const timer = setTimeout(() => {
+      loadReferenceData();
+      loadFgAvailability();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [loadFgAvailability, loadReferenceData]);
+
+  const loadHistory = useCallback(async () => {
+    const requestId = ++historyRequestRef.current;
+    setHistoryLoading(true);
+    setHistoryError("");
+    try {
+      const res = await withTimeout(
+        timedDispatchApiCall({
+          fn: "dispatch.historySummary",
+          periodMonth: `${year}-${month}`,
+          customer: customerFilter,
+          customerUnit: unitFilter,
+          grade: gradeFilter,
+          search: debouncedSearch,
+          page,
+          pageSize: 50,
+          showDeleted: "NO",
+        }),
+        30000,
+        "Dispatch history request timed out."
+      );
+      if (requestId !== historyRequestRef.current) return false;
+      if (!res || res.ok !== true) throw new Error(res?.error || "Dispatch history failed to load.");
+      if (!Array.isArray(res.rows) || !res.totals || !res.pagination || !res.gradeTotals) {
+        throw new Error("Backend response is missing the Dispatch history contract.");
+      }
+      setRows(res.rows);
+      setHistoryTotals(res.totals || { dispatchedKg: 0, dispatchValue: 0, dispatchCount: 0 });
+      setHistoryPagination(res.pagination || { page: 1, pageSize: 50, totalRows: 0, totalPages: 1 });
+      return true;
+    } catch (err) {
+      if (requestId !== historyRequestRef.current) return false;
+      setRows([]);
+      setHistoryError(err.message);
+      return false;
+    } finally {
+      if (requestId === historyRequestRef.current) setHistoryLoading(false);
+    }
+  }, [customerFilter, debouncedSearch, gradeFilter, month, page, unitFilter, year]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setPage(1);
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => loadHistory(), 0);
     return () => clearTimeout(timer);
   }, [loadHistory]);
 
@@ -262,12 +326,13 @@ export default function Dispatch() {
   }
 
   const materialInventory = useMemo(() => {
-    return fgAvailabilityRows.map((row) => ({
-      material: normalizeFgGrade(row.grade),
-      availableKg: Number(row.availableKg || 0),
+    if (!fgAvailability) return [];
+    return ["E1", "E2", "E3", "E4", "E5"].map((grade) => ({
+      material: grade,
+      availableKg: Number(fgAvailability[grade] || 0),
       source: "Inventory_Ledger",
     }));
-  }, [fgAvailabilityRows]);
+  }, [fgAvailability]);
 
   const fgGrades = useMemo(() => {
     return materialRows
@@ -290,17 +355,16 @@ export default function Dispatch() {
   );
 
   const fgStockRows = useMemo(() => {
-    return fgAvailabilityRows.map((availabilityRow) => {
-      const grade = normalizeFgGrade(availabilityRow.grade);
-      const row = materialInventory.find((x) => normalizeFgGrade(x.material) === grade);
+    if (!fgAvailability) return [];
+    return ["E1", "E2", "E3", "E4", "E5"].map((grade) => {
       return {
         grade,
-        availableKg: Number(row?.availableKg || 0),
-        source: row?.source || "Inventory Ledger",
+        availableKg: Number(fgAvailability[grade] || 0),
+        source: "Inventory_Ledger",
         selected: normalizeFgGrade(form.material || form.grade || "") === grade,
       };
     });
-  }, [fgAvailabilityRows, materialInventory, form.material, form.grade]);
+  }, [fgAvailability, form.material, form.grade]);
 
   function getLineTotal(lines = dispatchLines) {
     return lines.reduce((s, r) => s + Number(r.dispatchQtyKg || 0), 0);
@@ -546,6 +610,11 @@ export default function Dispatch() {
         return;
       }
 
+      if (fgAvailabilityLoading || fgAvailabilityError || !fgAvailability) {
+        setStatus("FG availability is not ready. Retry stock loading before saving dispatch.");
+        return;
+      }
+
       if (Number(form.quantityKg || 0) <= 0) {
         setStatus("Enter dispatch quantity.");
         return;
@@ -621,14 +690,6 @@ export default function Dispatch() {
       setSaving(false);
       writeLockRef.current = false;
     }
-  }
-
-  function withTimeout(promise, ms, message) {
-    let timer;
-    const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(message)), ms);
-    });
-    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
   }
 
   function validateDispatchSaveResponse(res) {
@@ -814,38 +875,89 @@ export default function Dispatch() {
 
   return (
     <PageLayout
-      title="Dispatch Workflow"
+      title="Dispatch"
       subtitle="Dispatch consumes material inventory. Operators select material and quantity; traceability is allocated internally."
     >
 
       <div style={sectionCard}>
-        <div style={sectionTitle}>Available FG Stock</div>
-        <div style={fgStockGrid}>
-          {fgStockRows.map((row) => (
-            <button
-              key={row.grade}
-              type="button"
-              onClick={() => onChange({ target: { name: "material", value: row.grade } })}
-              style={{
-                ...fgStockCard,
-                borderColor: row.selected ? "#0f766e" : "#e5e7eb",
-                background: row.selected ? "#ecfdf5" : "white",
-              }}
-            >
-              <div style={fgGradeTitle}>{row.grade} Available</div>
-              <div style={fgGradeQty}>{row.availableKg.toFixed(2)} kg</div>
-            </button>
-          ))}
+        <div style={sectionTitle}>Filters</div>
+        <div style={historyFilters}>
+          <Field label="Month">
+            <select value={month} onChange={(e) => { setMonth(e.target.value); setPage(1); }} style={inputStyle}>
+              {MONTH_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+          </Field>
+          <Field label="Year">
+            <select value={year} onChange={(e) => { setYear(e.target.value); setPage(1); }} style={inputStyle}>
+              {yearOptions().map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </Field>
+          <Field label="Customer">
+            <select value={customerFilter} onChange={(e) => { setCustomerFilter(e.target.value); setUnitFilter(""); setPage(1); }} style={inputStyle}>
+              <option value="">All Customers</option>
+              {customerRows.map((item) => {
+                const name = item.customerName || item.name || "";
+                return name ? <option key={item.customerId || name} value={name}>{name}</option> : null;
+              })}
+            </select>
+          </Field>
+          <Field label="Customer Unit">
+            <select value={unitFilter} onChange={(e) => { setUnitFilter(e.target.value); setPage(1); }} style={inputStyle}>
+              <option value="">All Units</option>
+              {historyUnitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+            </select>
+          </Field>
+          <Field label="FG Grade">
+            <select value={gradeFilter} onChange={(e) => { setGradeFilter(e.target.value); setPage(1); }} style={inputStyle}>
+              <option value="">All Grades</option>
+              {fgGrades.map((grade) => <option key={grade} value={grade}>{grade}</option>)}
+            </select>
+          </Field>
+          <Field label="Search">
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Dispatch, invoice, vehicle..." style={inputStyle} />
+          </Field>
         </div>
       </div>
 
-      <div style={stockNote}>Available stock as of today | Source: Inventory_Ledger</div>
+      <div style={sectionCard}>
+        <div style={sectionTitle}>Available FG Stock</div>
+        {fgAvailabilityLoading && <div style={loadingPanel}>Loading stock...</div>}
+        {!fgAvailabilityLoading && fgAvailabilityError && (
+          <div style={errorStyle}>
+            <div>{fgAvailabilityError}</div>
+            <button type="button" onClick={loadFgAvailability} style={secondaryButton}>Retry</button>
+          </div>
+        )}
+        {!fgAvailabilityLoading && !fgAvailabilityError && (
+          <div style={fgStockGrid}>
+            {fgStockRows.map((row) => (
+              <button
+                key={row.grade}
+                type="button"
+                onClick={() => onChange({ target: { name: "material", value: row.grade } })}
+                style={{
+                  ...fgStockCard,
+                  borderColor: row.selected ? "#0f766e" : "#e5e7eb",
+                  background: row.selected ? "#ecfdf5" : "white",
+                }}
+              >
+                <div style={fgGradeTitle}>{row.grade} Available</div>
+                <div style={fgGradeQty}>{row.availableKg.toFixed(2)} kg</div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {!fgAvailabilityLoading && !fgAvailabilityError && (
+        <div style={stockNote}>Available stock as of today | Source: Inventory_Ledger</div>
+      )}
 
       <div style={sectionCard}>
         <div style={sectionTitle}>Selected Month Summary - {month}/{year}</div>
         <div className="factory-kpi-grid">
-          <KpiCard title="Total Dispatched" value={`${Number(historyTotals.dispatchedKg || 0).toFixed(0)} Kg`} />
-          <KpiCard title="Total Dispatch Value" value={formatRs(historyTotals.dispatchValue)} tone="neutral" />
+          <KpiCard title="Total Dispatched" value={historyLoading ? "Loading..." : historyError ? "Unavailable" : `${Number(historyTotals.dispatchedKg || 0).toFixed(0)} Kg`} />
+          <KpiCard title="Total Dispatch Value" value={historyLoading ? "Loading..." : historyError ? "Unavailable" : formatRs(historyTotals.dispatchValue)} tone="neutral" />
         </div>
       </div>
 
@@ -892,7 +1004,7 @@ export default function Dispatch() {
           <Field label="Available Quantity">
             <input
               readOnly
-              value={`${Number(selectedInventory?.availableKg || 0).toFixed(2)} Kg`}
+              value={fgAvailabilityLoading ? "Loading..." : fgAvailabilityError ? "Unavailable" : `${Number(selectedInventory?.availableKg || 0).toFixed(2)} Kg`}
               style={readonlyStyle}
             />
             <div style={hintText}>Available stock as of today</div>
@@ -1010,7 +1122,7 @@ export default function Dispatch() {
           <Field label="Available Stock">
             <input
               readOnly
-              value={`${availableStockKg.toFixed(2)} Kg`}
+              value={fgAvailabilityLoading ? "Loading..." : fgAvailabilityError ? "Unavailable" : `${availableStockKg.toFixed(2)} Kg`}
               style={readonlyStyle}
             />
           </Field>
@@ -1133,48 +1245,19 @@ export default function Dispatch() {
         </div>
       </form>
 
-      <div style={sectionCard}>
-        <div style={sectionTitle}>Dispatch History Filters</div>
-        <div style={historyFilters}>
-          <Field label="Month">
-            <select value={month} onChange={(e) => { setMonth(e.target.value); setPage(1); }} style={inputStyle}>
-              {MONTH_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-            </select>
-          </Field>
-          <Field label="Year">
-            <select value={year} onChange={(e) => { setYear(e.target.value); setPage(1); }} style={inputStyle}>
-              {yearOptions().map((item) => <option key={item} value={item}>{item}</option>)}
-            </select>
-          </Field>
-          <Field label="Customer">
-            <select value={customerFilter} onChange={(e) => { setCustomerFilter(e.target.value); setUnitFilter(""); setPage(1); }} style={inputStyle}>
-              <option value="">All Customers</option>
-              {customerRows.map((item) => {
-                const name = item.customerName || item.name || "";
-                return name ? <option key={item.customerId || name} value={name}>{name}</option> : null;
-              })}
-            </select>
-          </Field>
-          <Field label="Customer Unit">
-            <select value={unitFilter} onChange={(e) => { setUnitFilter(e.target.value); setPage(1); }} style={inputStyle}>
-              <option value="">All Units</option>
-              {historyUnitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
-            </select>
-          </Field>
-          <Field label="FG Grade">
-            <select value={gradeFilter} onChange={(e) => { setGradeFilter(e.target.value); setPage(1); }} style={inputStyle}>
-              <option value="">All Grades</option>
-              {fgGrades.map((grade) => <option key={grade} value={grade}>{grade}</option>)}
-            </select>
-          </Field>
-          <Field label="Search">
-            <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Dispatch, invoice, vehicle..." style={inputStyle} />
-          </Field>
+      {historyLoading && <div style={loadingPanel}>Loading dispatch history...</div>}
+      {!historyLoading && historyError && (
+        <div style={errorStyle}>
+          <div>{historyError}</div>
+          <button type="button" onClick={loadHistory} style={secondaryButton}>Retry</button>
         </div>
-      </div>
+      )}
+      {!historyLoading && !historyError && rows.length === 0 && (
+        <div style={emptyPanel}>No dispatch records found for the selected period.</div>
+      )}
 
       <DataTable
-        title={historyLoading ? "Dispatch History - Loading..." : "Dispatch History"}
+        title="Dispatch History"
         rows={rows}
         searchFields={[
           "dispatchId",
@@ -1503,3 +1586,5 @@ const confirmCard = { ...modalCard, width: "min(520px,96vw)" };
 const modalGrid = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 };
 const modalActions = { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 };
 const errorStyle = { ...statusStyle, color: "#991b1b", background: "#fef2f2", border: "1px solid #fecaca", padding: 10, borderRadius: 8 };
+const loadingPanel = { padding: 16, color: "#475569", background: "#f8fafc", borderRadius: 10, fontWeight: 700 };
+const emptyPanel = { padding: 16, color: "#64748b", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10 };

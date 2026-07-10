@@ -137,7 +137,7 @@ function doGet(e) {
     if (p.fn === "dispatch.list") return listMaster("Dispatches");
     if (p.fn === "dispatch.historySummary") return getDispatchHistorySummary(p);
     if (p.fn === "dispatch.get") return getDispatchRecord(p);
-    if (p.fn === "dispatch.fgAvailability") return getDispatchFgAvailability();
+    if (p.fn === "dispatch.fgAvailability") return getDispatchFgAvailability(p);
     if (p.fn === "dispatch.update") return updateDispatch(p);
     if (p.fn === "dispatch.debugSavePreview") return debugDispatchSavePreview(p);
     if (p.fn === "dispatch.debugLedger") return debugDispatchLedger(p);
@@ -10332,7 +10332,7 @@ function getDispatchHistorySummary(data = {}) {
 
 function getDispatchFgAvailability() {
   const startedAt = Date.now();
-  const balances = {
+  const availability = {
     E1: 0,
     E2: 0,
     E3: 0,
@@ -10351,24 +10351,30 @@ function getDispatchFgAvailability() {
 
     if (String(row.itemType || "").trim().toUpperCase() !== "FG") return;
 
-    const rawGrade = String(
-      row.itemName || row.materialName || row.materialCode || ""
-    ).trim().toUpperCase();
-    if (!/^E[1-5]$/.test(rawGrade)) return;
+    const rawGrade = [
+      row.materialCode,
+      row.materialId,
+      row.itemName,
+      row.materialName,
+      row.grade,
+    ].map(function(value) {
+      return String(value || "").trim().toUpperCase();
+    }).find(function(value) {
+      return /^E[1-5]$/.test(value);
+    });
+    if (!rawGrade) return;
 
-    balances[rawGrade] += num(row.qtyIn) - num(row.qtyOut);
+    availability[rawGrade] += num(row.qtyIn) - num(row.qtyOut);
+  });
+
+  Object.keys(availability).forEach(function(grade) {
+    availability[grade] = round2(availability[grade]);
   });
 
   return output({
     ok: true,
     generatedAt: new Date().toISOString(),
-    source: "Inventory_Ledger",
-    grades: ["E1", "E2", "E3", "E4", "E5"].map(function(grade) {
-      return {
-        grade,
-        availableKg: round2(balances[grade]),
-      };
-    }),
+    availability,
     elapsedMs: Date.now() - startedAt,
   });
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { apiCall } from "../api/api";
 import { calculateCostEngine, periodMonthOnly } from "../services/costEngine";
 import { calculateProfitWaterfall } from "../services/profitWaterfallEngine";
+import { dispatchRevenue } from "../services/dispatchPricing";
 
 const EMPTY_ROWS = [];
 
@@ -171,10 +172,7 @@ export default function Dashboard() {
     const fgProduced = sum(extrusion, "fgOutputKg");
 
     const dispatched = sum(dispatch, "quantityKg");
-    const revenue = dispatch.reduce(
-      (s, r) => s + Number(r.quantityKg || 0) * Number(r.ratePerKg || 0),
-      0
-    );
+    const revenue = dispatchRevenue(dispatch);
 
     const storesInwardValue = storesInward.reduce(
       (s, r) =>

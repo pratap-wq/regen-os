@@ -46,7 +46,15 @@ export default function FGRates() {
 
     grade: "",
 
+    customerName: "",
+
     ratePerKg: "",
+
+    effectiveFrom: "",
+
+    effectiveTo: "",
+
+    status: "ACTIVE",
 
     remarks: "",
 
@@ -108,7 +116,11 @@ export default function FGRates() {
     saveLockRef.current = true;
     setSaving(true);
     setStatus("Saving FG rate...");
-    const rateId = form.rateId || createStableTransactionId("FGR", `${form.year}-${form.month}`, form.grade);
+    const rateId = form.rateId || createStableTransactionId(
+      "FGR",
+      `${form.year}-${form.month}`,
+      `${form.grade}-${form.customerName || "DEFAULT"}`
+    );
     if (!form.rateId) setForm((current) => ({ ...current, rateId }));
 
     try {
@@ -384,6 +396,18 @@ export default function FGRates() {
 
           </Field>
 
+          <Field label="Customer (optional)">
+
+            <input
+              name="customerName"
+              value={form.customerName}
+              onChange={onChange}
+              placeholder="Blank = default grade rate"
+              style={inputStyle}
+            />
+
+          </Field>
+
           <Field label="Rate / Kg">
 
             <input
@@ -399,6 +423,30 @@ export default function FGRates() {
               style={
                 inputStyle
               }
+            />
+
+          </Field>
+
+          <Field label="Effective From (optional)">
+
+            <input
+              type="date"
+              name="effectiveFrom"
+              value={form.effectiveFrom}
+              onChange={onChange}
+              style={inputStyle}
+            />
+
+          </Field>
+
+          <Field label="Effective To (optional)">
+
+            <input
+              type="date"
+              name="effectiveTo"
+              value={form.effectiveTo}
+              onChange={onChange}
+              style={inputStyle}
             />
 
           </Field>
@@ -489,7 +537,15 @@ export default function FGRates() {
                 </th>
 
                 <th style={thStyle}>
+                  Customer
+                </th>
+
+                <th style={thStyle}>
                   Year
+                </th>
+
+                <th style={thStyle}>
+                  Effective Dates
                 </th>
 
                 <th style={thStyle}>
@@ -520,7 +576,15 @@ export default function FGRates() {
                     </td>
 
                     <td style={tdStyle}>
+                      {r.customerName || "Default"}
+                    </td>
+
+                    <td style={tdStyle}>
                       {r.year}
+                    </td>
+
+                    <td style={tdStyle}>
+                      {r.effectiveFrom || r.date || "-"} to {r.effectiveTo || "Open"}
                     </td>
 
                     <td style={tdStyle}>

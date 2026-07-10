@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
+import { normalizeDispatchCommercial } from "../services/dispatchPricing";
 
 export default function Traceability() {
   const [query, setQuery] = useState("");
@@ -205,6 +206,10 @@ function getFields(r, type) {
     ];
   }
 
+  const commercial = normalizeDispatchCommercial(r);
+  const linePricing = commercial.dispatchLines
+    .map((line) => `${line.grade}: ${Number(line.dispatchQtyKg || 0).toFixed(0)} Kg @ Rs. ${Number(line.ratePerKg || 0).toFixed(2)} = Rs. ${Number(line.lineValue || 0).toLocaleString("en-IN")}`)
+    .join(" | ");
   return [
     ["Dispatch ID", r.dispatchId],
     ["FG Batch", r.sourceExtrusionBatchId || r.linkedFgBatchId],
@@ -213,6 +218,9 @@ function getFields(r, type) {
     ["Unit", r.customerUnit],
     ["Grade", r.grade],
     ["Qty Kg", Number(r.quantityKg || 0).toFixed(0)],
+    ["Grade-wise Price", linePricing],
+    ["Dispatch Value", `Rs. ${Number(commercial.dispatchValue || 0).toLocaleString("en-IN")}`],
+    ["Average Rate/Kg", Number(commercial.weightedAvgRatePerKg || 0).toFixed(4)],
     ["Invoice", r.invoiceNo],
     ["Status", r.dispatchStatus || r.status],
   ];

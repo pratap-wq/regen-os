@@ -1,6 +1,8 @@
 // RegenOS Cost Engine
 // Single source of truth for ₹/kg calculations
 
+import { dispatchRevenue } from "./dispatchPricing";
+
 export function n(value) {
   const x = Number(value || 0);
   return Number.isFinite(x) ? x : 0;
@@ -194,10 +196,7 @@ export function calculateCostEngine({
 
   const dispatchKg = dispatch.reduce((s, r) => s + n(r.quantityKg), 0);
 
-  const revenue = dispatch.reduce(
-    (s, r) => s + n(r.quantityKg) * n(r.ratePerKg || assumedSellingPrice),
-    0
-  );
+  const revenue = dispatchRevenue(dispatch);
 
   const avgSellingPricePerKg =
     dispatchKg > 0 ? safeDiv(revenue, dispatchKg) : n(assumedSellingPrice);

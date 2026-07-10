@@ -1,3 +1,5 @@
+import { dispatchRevenue } from "./dispatchPricing";
+
 export function calculateMonthClose({
   rmRows = [],
   washRows = [],
@@ -71,10 +73,7 @@ export function calculateMonthClose({
   const fgProducedKg = sum(extrusion, "fgOutputKg");
   const dispatchKg = sum(dispatch, "quantityKg");
 
-  const salesValue = dispatch.reduce(
-    (s, r) => s + num(r.quantityKg) * num(r.ratePerKg),
-    0
-  );
+  const salesValue = dispatchRevenue(dispatch);
 
   const avgRmPrice = rmPurchasedKg > 0 ? rmValue / rmPurchasedKg : 0;
   const estimatedRmConsumedValue = washInputKg * avgRmPrice;

@@ -9,6 +9,7 @@ import ProductionMaterialSelect from "../components/ProductionMaterialSelect";
 import { KpiCard, PageLayout } from "../components/factoryDesignSystem";
 import { normalizeInventoryMaterial } from "../services/inventoryEngine";
 import { materialKey } from "../utils/materialInventory";
+import { resolveFgRate } from "../services/dispatchPricing";
 
 const DISPATCH_API_DEBUG =
   import.meta.env.DEV ||
@@ -122,6 +123,12 @@ export default function Dispatch() {
     productionShift: "",
     availableKg: "",
     dispatchQtyKg: "",
+    rateId: "",
+    ratePerKg: "",
+    rateSource: "",
+    rateEffectiveFrom: "",
+    rateEffectiveTo: "",
+    lineValue: "",
     remarks: "",
   };
 
@@ -180,6 +187,7 @@ export default function Dispatch() {
   const [historyPagination, setHistoryPagination] = useState({ page: 1, pageSize: 50, totalRows: 0, totalPages: 1 });
   const [editRecord, setEditRecord] = useState(null);
   const [editForm, setEditForm] = useState(null);
+  const [editLines, setEditLines] = useState([]);
   const [editLoading, setEditLoading] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState("");
@@ -372,15 +380,6 @@ export default function Dispatch() {
     return [{ ...blankLine }];
   }
 
-  const materialInventory = useMemo(() => {
-    if (!fgAvailability) return [];
-    return ["E1", "E2", "E3", "E4", "E5"].map((grade) => ({
-      material: grade,
-      availableKg: Number(fgAvailability[grade] || 0),
-      source: "Inventory_Ledger",
-    }));
-  }, [fgAvailability]);
-
   const fgGrades = useMemo(() => {
     return materialRows
       .filter((row) => {
@@ -396,10 +395,6 @@ export default function Dispatch() {
       .filter((grade, index, list) => list.indexOf(grade) === index)
       .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
   }, [materialRows]);
-
-  const selectedInventory = materialInventory.find(
-    (x) => normalizeFgGrade(x.material) === normalizeFgGrade(form.material || form.grade || "")
-  );
 
   const fgStockRows = useMemo(() => {
     if (!fgAvailability) return [];
@@ -474,79 +469,54 @@ export default function Dispatch() {
     return updated;
   }
 
-  function lookupFgRate(material, customerName, dateValue) {
-    const gradeKey = normalizeFgGrade(material);
-    const customerKey = String(customerName || "").trim().toUpperCase();
-    const targetTime = new Date(dateValue || today).getTime();
-
-    const matches = fgRateRows
-      .filter((row) => String(row.status || "ACTIVE").toUpperCase() !== "DELETED")
-      .filter((row) => normalizeFgGrade(row.grade) === gradeKey)
-      .filter((row) => {
-        const rowCustomer = String(row.customerName || "").trim().toUpperCase();
-        return !rowCustomer || !customerKey || rowCustomer === customerKey;
-      })
-      .map((row) => {
-        const rowTime = fgRateEffectiveTime(row);
-        return {
-          row,
-          rowTime: Number.isNaN(rowTime) ? 0 : rowTime,
-          customerExact: String(row.customerName || "").trim().toUpperCase() === customerKey,
-        };
-      })
-      .filter((item) => !targetTime || item.rowTime <= targetTime || item.rowTime === 0)
-      .sort((a, b) => {
-        if (a.customerExact !== b.customerExact) return a.customerExact ? -1 : 1;
-        return b.rowTime - a.rowTime;
-      });
-
-    return matches[0]?.row || null;
-  }
-
-  function fgRateEffectiveTime(row) {
-    const rowDate = dateForInput(row.date);
-    if (rowDate) {
-      const time = new Date(rowDate).getTime();
-      if (!Number.isNaN(time)) return time;
-    }
-
-    const year = Number(row.year || 0);
-    const month = monthNumber(row.month);
-    if (year && month) return new Date(year, month - 1, 1).getTime();
-    return 0;
-  }
-
-  function monthNumber(value) {
-    const text = String(value || "").trim();
-    const numeric = Number(text);
-    if (numeric >= 1 && numeric <= 12) return numeric;
-    const index = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"].indexOf(
-      text.slice(0, 3).toUpperCase()
-    );
-    return index >= 0 ? index + 1 : 0;
-  }
-
-  function rateForGrade(material, sourceForm = form) {
-    const grade = normalizeFgGrade(material);
-    const rateRow = lookupFgRate(grade, sourceForm.customerName, sourceForm.date);
-    return Number(rateRow?.ratePerKg || 0);
-  }
-
-  function applyAutoRate(updated) {
-    if (!updated.material) return updated;
-    const rateRow = lookupFgRate(updated.material, updated.customerName, updated.date);
-    if (!rateRow) {
+  function previewPricedLines(lines, sourceForm = form, preserveStored = false) {
+    return (lines || []).map((line) => {
+      const grade = normalizeFgGrade(line.grade || line.material);
+      const quantity = Number(line.dispatchQtyKg || 0);
+      const storedRate = Number(line.ratePerKg || 0);
+      const resolved = preserveStored && storedRate > 0
+        ? {
+            rateId: line.rateId || "",
+            ratePerKg: storedRate,
+            rateSource: line.rateSource || "SAVED_LINE_PRICE",
+            rateEffectiveFrom: line.rateEffectiveFrom || "",
+            rateEffectiveTo: line.rateEffectiveTo || "",
+          }
+        : resolveFgRate(fgRateRows, { grade, customerName: sourceForm.customerName, date: sourceForm.date });
+      const rate = Number(resolved?.ratePerKg || 0);
       return {
-        ...updated,
-        ratePerKg: "",
-        rateSource: "",
+        ...line,
+        grade,
+        material: grade,
+        rateId: resolved?.rateId || "",
+        ratePerKg: rate || "",
+        rateSource: resolved?.rateSource || "",
+        rateEffectiveFrom: resolved?.rateEffectiveFrom || "",
+        rateEffectiveTo: resolved?.rateEffectiveTo || "",
+        lineValue: quantity * rate,
       };
-    }
-    return {
-      ...updated,
-      ratePerKg: rateRow.ratePerKg || "",
-      rateSource: rateRow.customerName ? "FG Rates customer match" : "FG Rates grade default",
-    };
+    });
+  }
+
+  function updateDispatchLine(index, field, value) {
+    setDispatchLines((current) => previewPricedLines(current.map((line, lineIndex) => {
+      if (lineIndex !== index) return line;
+      const next = { ...line, [field]: value };
+      if (field === "grade") {
+        next.grade = normalizeFgGrade(value);
+        next.material = next.grade;
+        next.availableKg = availableKgForGrade(next.grade);
+      }
+      return next;
+    })));
+  }
+
+  function addDispatchLine() {
+    setDispatchLines((current) => [...current, { ...blankLine }]);
+  }
+
+  function removeDispatchLine(index) {
+    setDispatchLines((current) => current.length > 1 ? current.filter((_, lineIndex) => lineIndex !== index) : [{ ...blankLine }]);
   }
 
   function onChange(e) {
@@ -566,12 +536,7 @@ export default function Dispatch() {
       updated.sourceExtrusionBatchId = "";
       updated.ratePerKg = "";
       updated.rateSource = "";
-      setDispatchLines([{ ...blankLine, grade: updated.material, material: updated.material }]);
-    }
-
-    if (["customerName", "date"].includes(e.target.name) && String(updated.rateSource || "").startsWith("FG Rates")) {
-      updated.ratePerKg = "";
-      updated.rateSource = "";
+      setDispatchLines(previewPricedLines([{ ...blankLine, grade: updated.material, material: updated.material, availableKg: availableKgForGrade(updated.material) }], updated));
     }
 
     if (e.target.name === "quantityKg") {
@@ -585,8 +550,8 @@ export default function Dispatch() {
       updated = autoCalculate(updated, dispatchLines);
     }
 
-    if (["material", "customerName", "date"].includes(e.target.name)) {
-      updated = applyAutoRate(updated);
+    if (e.target.name === "customerName" || e.target.name === "date") {
+      setDispatchLines((current) => previewPricedLines(current, updated));
     }
 
     setForm(updated);
@@ -611,7 +576,7 @@ export default function Dispatch() {
         material: grade,
         itemType: "FG",
         lotNo: grade,
-        availableKg: Number(selectedInventory?.availableKg || 0),
+        availableKg: availableKgForGrade(grade),
         dispatchQtyKg: String(quantityKg ?? ""),
         remarks: "Dispatched from FG grade inventory",
       },
@@ -652,52 +617,47 @@ export default function Dispatch() {
     setStatus("Saving dispatch...");
     setSaveDebug(null);
     try {
-      if (!form.material) {
-        setStatus("Select material.");
-        return;
-      }
-
       if (fgAvailabilityLoading || fgAvailabilityError || !fgAvailability) {
         setStatus("FG availability is not ready. Retry stock loading before saving dispatch.");
         return;
       }
 
-      if (Number(form.quantityKg || 0) <= 0) {
-        setStatus("Enter dispatch quantity.");
+      const cleanLines = previewPricedLines(dispatchLines.filter((line) => normalizeFgGrade(line.grade || line.material) && Number(line.dispatchQtyKg || 0) > 0));
+      if (!cleanLines.length) {
+        setStatus("Add at least one FG grade and dispatch quantity.");
         return;
       }
-
-      const material = normalizeFgGrade(form.material);
-      const cleanLines = buildGradeDispatchLines(material, form.quantityKg);
       const stockError = validateLinesAgainstStock(cleanLines);
       if (stockError) {
         setStatus(stockError);
         return;
       }
-      const rate = rateForGrade(material);
-      if (rate <= 0) {
-        setStatus(`Missing FG Rates selling rate for ${material}. Add the rate before saving dispatch.`);
+      const missingRateLine = cleanLines.find((line) => Number(line.ratePerKg || 0) <= 0);
+      if (missingRateLine) {
+        setStatus(`Missing FG Rates selling rate for ${missingRateLine.grade}. Add the rate before saving dispatch.`);
         return;
       }
-
-      const finalForm = autoCalculate(
-        {
-          ...form,
-          material,
-          grade: material,
-          sourceExtrusionBatchId: "",
-          linkedFgBatchId: "",
-          dispatchId: form.dispatchId || "",
-        },
-        cleanLines
-      );
+      const totalQuantity = getLineTotal(cleanLines);
+      const totalValue = cleanLines.reduce((sum, line) => sum + Number(line.lineValue || 0), 0);
+      const finalForm = {
+        ...form,
+        material: cleanLines[0].grade,
+        grade: cleanLines.map((line) => line.grade).join(" | "),
+        quantityKg: totalQuantity,
+        ratePerKg: totalQuantity > 0 ? totalValue / totalQuantity : 0,
+        dispatchValue: totalValue,
+        dispatchLines: JSON.stringify(cleanLines),
+        sourceExtrusionBatchId: "",
+        linkedFgBatchId: "",
+        dispatchId: form.dispatchId || "",
+      };
 
       const debugSummary = {
         dispatchId: finalForm.dispatchId || "Auto-generated on save",
-        grade: material,
+        grade: cleanLines.map((line) => line.grade).join(" | "),
         quantityKg: Number(finalForm.quantityKg || 0),
-        ratePerKg: rate,
-        value: Number(finalForm.quantityKg || 0) * rate,
+        ratePerKg: finalForm.ratePerKg,
+        value: totalValue,
         customer: finalForm.customerName || "",
         unit: finalForm.customerUnit || "",
       };
@@ -789,9 +749,9 @@ export default function Dispatch() {
         productionShift,
         dispatchId: record.dispatchId,
       }, normalizedLines, { preserveQuantityText: true });
-      updated = applyAutoRate(updated);
       setEditRecord(record);
       setEditForm(updated);
+      setEditLines(previewPricedLines(normalizedLines, updated, true));
     } catch (err) {
       setEditError(err.message);
     } finally {
@@ -803,44 +763,45 @@ export default function Dispatch() {
     if (!editForm) return;
     let updated = { ...editForm, [e.target.name]: e.target.value };
     if (e.target.name === "customerName") updated.customerUnit = "";
-    if (e.target.name === "material") {
-      updated.material = normalizeFgGrade(e.target.value);
-      updated.grade = updated.material;
+    if (["customerName", "date"].includes(e.target.name)) {
+      setEditLines((current) => previewPricedLines(current, updated, false));
     }
-    const material = normalizeFgGrade(updated.material || updated.grade);
-    const lines = [{
-      ...blankLine,
-      grade: material,
-      material,
-      itemType: "FG",
-      lotNo: material,
-      dispatchQtyKg: String(updated.quantityKg ?? ""),
-      remarks: "Dispatched from FG grade inventory",
-    }];
-    updated = autoCalculate(updated, lines, { preserveQuantityText: true });
-    if (["material", "customerName", "date"].includes(e.target.name)) updated = applyAutoRate(updated);
     setEditForm(updated);
+  }
+
+  function updateEditLine(index, field, value) {
+    setEditLines((current) => current.map((line, lineIndex) => {
+      if (lineIndex !== index) return line;
+      const changed = { ...line, [field]: value };
+      if (field === "grade") {
+        changed.grade = normalizeFgGrade(value);
+        changed.material = changed.grade;
+        return previewPricedLines([changed], editForm, false)[0];
+      }
+      if (field === "dispatchQtyKg") {
+        return previewPricedLines([changed], editForm, true)[0];
+      }
+      return changed;
+    }));
   }
 
   async function saveDispatchEdit() {
     if (!editForm || writeLockRef.current) return;
-    const material = normalizeFgGrade(editForm.material || editForm.grade);
-    const quantityKg = Number(editForm.quantityKg || 0);
-    if (!material) return setEditError("Select FG grade.");
-    if (quantityKg <= 0) return setEditError("Enter dispatch quantity.");
-    const rate = rateForGrade(material, editForm);
-    if (rate <= 0) return setEditError(`Missing FG Rates selling rate for ${material}.`);
-
-    const lines = [{
-      ...blankLine,
-      grade: material,
-      material,
-      itemType: "FG",
-      lotNo: material,
-      dispatchQtyKg: String(editForm.quantityKg),
-      remarks: "Dispatched from FG grade inventory",
-    }];
-    const finalForm = autoCalculate({ ...editForm, material, grade: material }, lines);
+    const lines = editLines.filter((line) => normalizeFgGrade(line.grade || line.material) && Number(line.dispatchQtyKg || 0) > 0);
+    if (!lines.length) return setEditError("Add at least one FG grade and quantity.");
+    const missing = lines.find((line) => Number(line.ratePerKg || 0) <= 0);
+    if (missing) return setEditError(`Missing FG Rates selling rate for ${missing.grade}.`);
+    const quantityKg = getLineTotal(lines);
+    const dispatchValue = lines.reduce((sum, line) => sum + Number(line.lineValue || 0), 0);
+    const finalForm = {
+      ...editForm,
+      material: lines[0].grade,
+      grade: lines.map((line) => line.grade).join(" | "),
+      quantityKg,
+      ratePerKg: quantityKg > 0 ? dispatchValue / quantityKg : 0,
+      dispatchValue,
+      dispatchLines: JSON.stringify(lines),
+    };
     writeLockRef.current = true;
     setEditSaving(true);
     setEditError("");
@@ -856,6 +817,7 @@ export default function Dispatch() {
       await refreshDispatchData();
       setEditRecord(null);
       setEditForm(null);
+      setEditLines([]);
     } catch (err) {
       setEditError(err.message);
     } finally {
@@ -906,14 +868,18 @@ export default function Dispatch() {
     setStatus("Ready for new dispatch");
   }
 
-  const currentDispatchQty = getLineTotal(dispatchLines);
-  const operatorDispatchQty = Number(form.quantityKg || 0) || currentDispatchQty;
-  const currentSalesValue = operatorDispatchQty * rateForGrade(form.material);
-  const availableStockKg = Number(selectedInventory?.availableKg || 0);
-  const remainingAfterDispatchKg = Math.max(
-    availableStockKg - operatorDispatchQty,
-    0
-  );
+  const pricedDispatchLines = previewPricedLines(dispatchLines);
+  const currentDispatchQty = getLineTotal(pricedDispatchLines);
+  const operatorDispatchQty = currentDispatchQty;
+  const currentSalesValue = pricedDispatchLines.reduce((sum, line) => sum + Number(line.lineValue || 0), 0);
+  const selectedGrades = [...new Set(pricedDispatchLines.map((line) => normalizeFgGrade(line.grade)).filter(Boolean))];
+  const availableStockKg = selectedGrades.reduce((sum, grade) => sum + availableKgForGrade(grade), 0);
+  const remainingAfterDispatchKg = selectedGrades.reduce((sum, grade) => {
+    const requested = pricedDispatchLines
+      .filter((line) => normalizeFgGrade(line.grade) === grade)
+      .reduce((gradeSum, line) => gradeSum + Number(line.dispatchQtyKg || 0), 0);
+    return sum + Math.max(availableKgForGrade(grade) - requested, 0);
+  }, 0);
   const truckCapacityKg = Number(form.truckCapacityKg || 0);
   const truckFillPercent =
     truckCapacityKg > 0
@@ -1034,41 +1000,6 @@ export default function Dispatch() {
             />
           </Field>
 
-          <Field label="Material">
-            <ProductionMaterialSelect
-              name="material"
-              value={form.material}
-              onChange={onChange}
-              placeholder="Select Material"
-              style={inputStyle}
-              required
-              stage="DISPATCH"
-              direction="INPUT"
-              items={materialRows}
-            />
-          </Field>
-
-          <Field label="Available Quantity">
-            <input
-              readOnly
-              value={fgAvailabilityLoading ? "Loading..." : fgAvailabilityError ? "Unavailable" : `${Number(selectedInventory?.availableKg || 0).toFixed(2)} Kg`}
-              style={readonlyStyle}
-            />
-            <div style={hintText}>Available stock as of today</div>
-          </Field>
-
-          <Field label="Dispatch Quantity">
-            <input
-              type="number"
-              name="quantityKg"
-              value={form.quantityKg}
-              onChange={onChange}
-              max={selectedInventory?.availableKg || ""}
-              style={inputStyle}
-              required
-            />
-          </Field>
-
           <Field label="Dispatch Code">
             <input
               readOnly
@@ -1165,6 +1096,33 @@ export default function Dispatch() {
           </Field>
         </FormSection>
 
+        <div style={sectionCard}>
+          <div style={sectionTitle}>FG Grade Lines</div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr>
+                {["Grade", "Available Kg", "Dispatch Kg", "Rate/Kg", "Line Value", "Rate Source", "Action"].map((label) => <th key={label} style={lineHeader}>{label}</th>)}
+              </tr></thead>
+              <tbody>
+                {pricedDispatchLines.map((line, index) => (
+                  <tr key={`${index}-${line.grade}`}>
+                    <td style={lineCell}>
+                      <ProductionMaterialSelect name="grade" value={line.grade || ""} onChange={(event) => updateDispatchLine(index, "grade", event.target.value)} placeholder="Select FG" style={inputStyle} stage="DISPATCH" direction="INPUT" items={materialRows} />
+                    </td>
+                    <td style={lineCell}>{availableKgForGrade(line.grade).toFixed(2)}</td>
+                    <td style={lineCell}><input type="number" min="0" value={line.dispatchQtyKg || ""} onChange={(event) => updateDispatchLine(index, "dispatchQtyKg", event.target.value)} style={inputStyle} /></td>
+                    <td style={lineCell}>{line.ratePerKg ? `Rs. ${Number(line.ratePerKg).toFixed(2)}` : "Missing rate"}</td>
+                    <td style={lineCell}>{formatRs(line.lineValue)}</td>
+                    <td style={lineCell}>{line.rateSource || "-"}</td>
+                    <td style={lineCell}><button type="button" onClick={() => removeDispatchLine(index)} style={secondaryButton}>Remove</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button type="button" onClick={addDispatchLine} style={{ ...secondaryButton, marginTop: 10 }}>+ Add FG Grade</button>
+        </div>
+
         <FormSection title="Dispatch Summary">
           <Field label="Available Stock">
             <input
@@ -1221,13 +1179,12 @@ export default function Dispatch() {
 
           <Field label="Rate / Kg">
             <input
-              name="ratePerKg"
-              value={form.ratePerKg}
               readOnly
+              value={operatorDispatchQty > 0 ? (currentSalesValue / operatorDispatchQty).toFixed(4) : ""}
               style={readonlyStyle}
             />
             <div style={hintText}>
-              {form.rateSource || "Loaded from FG Rates. Add rate before dispatch if blank."}
+              Weighted average only. Grade-line rates above are authoritative.
             </div>
           </Field>
 
@@ -1286,7 +1243,7 @@ export default function Dispatch() {
           <b>Save Check</b>
           <div>Grade: {saveDebug?.grade || normalizeFgGrade(form.material || form.grade) || "-"}</div>
           <div>Quantity: {Number(saveDebug?.quantityKg ?? operatorDispatchQty ?? 0).toFixed(2)} Kg</div>
-          <div>Rate: Rs. {Number(saveDebug?.ratePerKg ?? rateForGrade(form.material) ?? 0).toLocaleString("en-IN")}</div>
+          <div>Weighted Rate: Rs. {Number(saveDebug?.ratePerKg ?? (operatorDispatchQty > 0 ? currentSalesValue / operatorDispatchQty : 0)).toLocaleString("en-IN")}</div>
           <div>Value: {formatRs(saveDebug?.value ?? currentSalesValue)}</div>
           {saveDebug?.dispatchId && <div>Dispatch ID: {saveDebug.dispatchId}</div>}
         </div>
@@ -1326,8 +1283,8 @@ export default function Dispatch() {
           { key: "customerUnit", label: "Unit" },
           { key: "grade", label: "Material" },
           { key: "quantityKg", label: "Qty Kg" },
-          { key: "ratePerKg", label: "Rate" },
-          { key: "dispatchValue", label: "Value" },
+          { key: "weightedAvgRatePerKg", label: "Avg Rate", render: (r) => Number(r.weightedAvgRatePerKg || r.ratePerKg || 0).toFixed(4) },
+          { key: "dispatchValue", label: "Value", render: (r) => formatRs(r.dispatchValue) },
           { key: "dispatchStatus", label: "Status" },
         ]}
         hideFilters
@@ -1367,15 +1324,21 @@ export default function Dispatch() {
                   </select>
                 </Field>
                 <Field label="Vehicle No"><input name="vehicleNo" value={editForm.vehicleNo || ""} onChange={onEditChange} style={inputStyle} /></Field>
-                <Field label="FG Grade">
-                  <select name="material" value={editForm.material || ""} onChange={onEditChange} style={inputStyle}>
-                    <option value="">Select Grade</option>
-                    {fgGrades.map((grade) => <option key={grade} value={grade}>{grade}</option>)}
-                  </select>
-                </Field>
-                <Field label="Quantity Kg"><input type="number" min="0" name="quantityKg" value={editForm.quantityKg || ""} onChange={onEditChange} style={inputStyle} /></Field>
-                <Field label="Rate / Kg"><input readOnly value={editForm.ratePerKg || ""} style={readonlyStyle} /></Field>
-                <Field label="Value"><input readOnly value={formatRs(Number(editForm.quantityKg || 0) * Number(editForm.ratePerKg || 0))} style={readonlyStyle} /></Field>
+                <div style={{ gridColumn: "1 / -1", overflowX: "auto" }}>
+                  <b>Saved Grade Prices</b>
+                  <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 8 }}>
+                    <thead><tr>{["Grade", "Quantity Kg", "Rate/Kg", "Line Value", "Source"].map((label) => <th key={label} style={lineHeader}>{label}</th>)}</tr></thead>
+                    <tbody>{editLines.map((line, index) => (
+                      <tr key={`${index}-${line.grade}`}>
+                        <td style={lineCell}><select value={line.grade || ""} onChange={(event) => updateEditLine(index, "grade", event.target.value)} style={inputStyle}><option value="">Select Grade</option>{fgGrades.map((grade) => <option key={grade} value={grade}>{grade}</option>)}</select></td>
+                        <td style={lineCell}><input type="number" min="0" value={line.dispatchQtyKg || ""} onChange={(event) => updateEditLine(index, "dispatchQtyKg", event.target.value)} style={inputStyle} /></td>
+                        <td style={lineCell}>{Number(line.ratePerKg || 0).toFixed(2)}</td>
+                        <td style={lineCell}>{formatRs(line.lineValue)}</td>
+                        <td style={lineCell}>{line.rateSource || "LEGACY_HEADER_RATE"}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
                 <Field label="Status">
                   <select name="dispatchStatus" value={editForm.dispatchStatus || "DISPATCHED"} onChange={onEditChange} style={inputStyle}>
                     <option>DISPATCHED</option><option>IN_TRANSIT</option><option>DELIVERED</option>
@@ -1385,7 +1348,7 @@ export default function Dispatch() {
               </div>
             )}
             <div style={modalActions}>
-              <button type="button" disabled={editSaving} onClick={() => { setEditRecord(null); setEditForm(null); }} style={secondaryButton}>Cancel</button>
+              <button type="button" disabled={editSaving} onClick={() => { setEditRecord(null); setEditForm(null); setEditLines([]); }} style={secondaryButton}>Cancel</button>
               <button type="button" disabled={editLoading || editSaving || !editForm} onClick={saveDispatchEdit} style={saveButton}>{editSaving ? "Saving changes..." : "Save Changes"}</button>
             </div>
           </div>
@@ -1635,3 +1598,5 @@ const modalActions = { display: "flex", justifyContent: "flex-end", gap: 10, mar
 const errorStyle = { ...statusStyle, color: "#991b1b", background: "#fef2f2", border: "1px solid #fecaca", padding: 10, borderRadius: 8 };
 const loadingPanel = { padding: 16, color: "#475569", background: "#f8fafc", borderRadius: 10, fontWeight: 700 };
 const emptyPanel = { padding: 16, color: "#64748b", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10 };
+const lineHeader = { padding: 9, textAlign: "left", borderBottom: "1px solid #cbd5e1", whiteSpace: "nowrap", fontSize: 12, color: "#475569" };
+const lineCell = { padding: 8, borderBottom: "1px solid #e2e8f0", minWidth: 120, verticalAlign: "top" };

@@ -6,52 +6,78 @@ const CATEGORY_LABELS = {
   RM: "Raw Material",
   WIP: "Work In Process",
   FG: "Finished Goods",
+  REWORK: "Rework",
   ADDITIVE: "Production Additives",
   WASTE: "Waste / Rejects",
 };
+
+const LIVE_INVENTORY_TIMEOUT_MS = 15000;
 
 export default function LiveInventory() {
   const [rows, setRows] = useState([]);
   const [manualReviewRows, setManualReviewRows] = useState([]);
   const [summary, setSummary] = useState({});
-  const [status, setStatus] = useState("Loading ledger balances...");
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState("Loading live inventory...");
 
   useEffect(() => {
     loadData();
   }, []);
 
   async function loadData() {
+    setLoading(true);
     try {
-      setStatus("Loading ledger balances...");
-      const res = await apiCall({ fn: "inventoryLedger.liveBalance" });
+      setStatus("Loading live inventory...");
+      const res = await withTimeout(
+        apiCall({ fn: "inventory.liveSummary" }),
+        LIVE_INVENTORY_TIMEOUT_MS
+      );
 
-      if (res.ok === false) {
-        setStatus(res.error || "Failed loading ledger balances");
-        return;
+      if (!res || res.ok === false) {
+        throw new Error(res?.error || "Failed loading live inventory.");
       }
 
       setRows(res.rows || []);
       setManualReviewRows(res.manualReviewRows || []);
       setSummary(res.summary || {});
+      setElapsedMs(Number(res.elapsedMs || 0));
       setStatus("");
     } catch (err) {
       console.log(err);
-      setStatus(err.message || "Failed loading ledger balances");
+      setStatus(
+        err?.code === "LIVE_INVENTORY_TIMEOUT"
+          ? "Live Inventory timed out. Please retry. If this continues, check the Apps Script deployment and Inventory_Ledger."
+          : err.message || "Failed loading live inventory."
+      );
+    } finally {
+      setLoading(false);
     }
   }
 
   const visibleRows = useMemo(() => {
-    return rows.filter((row) => Number(row.balanceKg || 0) !== 0);
+    return rows.filter((row) => Number(row.qtyKg || 0) !== 0);
   }, [rows]);
 
   const categoryTotals = useMemo(() => {
-    return ["RM", "WIP", "FG", "ADDITIVE", "WASTE"].map((category) => ({
+    const totals = {
+      RM: Number(summary.totalRmKg || 0),
+      WIP: Number(summary.totalWipKg || 0),
+      FG: Number(summary.totalFgKg || 0),
+      REWORK: Number(summary.totalReworkKg || 0),
+      WASTE: Number(summary.totalWasteKg || 0),
+      ADDITIVE: rows
+        .filter((row) => row.category === "ADDITIVE")
+        .reduce((sum, row) => sum + Number(row.qtyKg || 0), 0),
+    };
+
+    return ["RM", "WIP", "FG", "REWORK", "ADDITIVE", "WASTE"].map((category) => ({
       category,
       label: CATEGORY_LABELS[category],
-      balanceKg: Number(summary[category] || 0),
+      balanceKg: totals[category],
       activeMaterials: visibleRows.filter((row) => row.category === category).length,
     }));
-  }, [summary, visibleRows]);
+  }, [summary, rows, visibleRows]);
 
   const totalProductionKg = categoryTotals.reduce(
     (sum, row) => sum + Number(row.balanceKg || 0),
@@ -68,26 +94,26 @@ export default function LiveInventory() {
             Inventory_Ledger balances grouped by canonical production materials.
           </div>
         </div>
-        <button type="button" onClick={loadData} style={refreshButton}>
-          Refresh
+        <button type="button" onClick={loadData} style={refreshButton} disabled={loading}>
+          {loading ? "Loading..." : "Refresh"}
         </button>
       </div>
 
       {status && <div style={statusStyle}>{status}</div>}
 
       <div style={grid}>
-        <Card title="RM Stock" value={`${Number(summary.RM || 0).toFixed(0)} Kg`} />
-        <Card title="WIP Stock" value={`${Number(summary.WIP || 0).toFixed(0)} Kg`} />
-        <Card title="FG Stock" value={`${Number(summary.FG || 0).toFixed(0)} Kg`} />
-        <Card title="Additives" value={`${Number(summary.ADDITIVE || 0).toFixed(0)} Kg`} />
-        <Card title="Waste / Rejects" value={`${Number(summary.WASTE || 0).toFixed(0)} Kg`} />
+        <Card title="RM Stock" value={`${Number(summary.totalRmKg || 0).toFixed(0)} Kg`} />
+        <Card title="WIP Stock" value={`${Number(summary.totalWipKg || 0).toFixed(0)} Kg`} />
+        <Card title="FG Stock" value={`${Number(summary.totalFgKg || 0).toFixed(0)} Kg`} />
+        <Card title="Rework" value={`${Number(summary.totalReworkKg || 0).toFixed(0)} Kg`} />
+        <Card title="Waste / Rejects" value={`${Number(summary.totalWasteKg || 0).toFixed(0)} Kg`} />
       </div>
 
       <div style={grid}>
         <Card title="Production Ledger Total" value={`${totalProductionKg.toFixed(0)} Kg`} />
         <Card title="Canonical Materials" value={visibleRows.length} />
         <Card title="Manual Review Items" value={manualReviewRows.length} tone={manualReviewRows.length ? "warning" : "neutral"} />
-        <Card title="Ledger Rows Read" value={summary.ledgerRows || 0} />
+        <Card title="Backend Processing" value={`${elapsedMs.toFixed(0)} ms`} />
       </div>
 
       <div style={flowCard}>
@@ -107,33 +133,28 @@ export default function LiveInventory() {
       <DataTable
         title="Canonical Production Material Balances"
         rows={rows}
-        searchFields={["material", "category"]}
+        searchFields={["materialCode", "materialName", "category", "status"]}
         columns={[
-          { key: "material", label: "Material" },
+          { key: "materialCode", label: "Code" },
+          { key: "materialName", label: "Material" },
           { key: "category", label: "Category" },
           {
-            key: "qtyIn",
-            label: "Qty In",
-            render: (r) => Number(r.qtyIn || 0).toFixed(2),
-            renderExport: (r) => Number(r.qtyIn || 0).toFixed(2),
-          },
-          {
-            key: "qtyOut",
-            label: "Qty Out",
-            render: (r) => Number(r.qtyOut || 0).toFixed(2),
-            renderExport: (r) => Number(r.qtyOut || 0).toFixed(2),
-          },
-          {
-            key: "balanceKg",
-            label: "Balance Kg",
+            key: "qtyKg",
+            label: "Stock Kg",
             render: (r) => (
-              <span style={Number(r.balanceKg || 0) < 0 ? negativeText : positiveText}>
-                {Number(r.balanceKg || 0).toFixed(2)}
+              <span style={Number(r.qtyKg || 0) < 0 ? negativeText : positiveText}>
+                {Number(r.qtyKg || 0).toFixed(2)}
               </span>
             ),
-            renderExport: (r) => Number(r.balanceKg || 0).toFixed(2),
+            renderExport: (r) => Number(r.qtyKg || 0).toFixed(2),
           },
-          { key: "movementCount", label: "Movements" },
+          {
+            key: "value",
+            label: "Value",
+            render: (r) => Number(r.value || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 }),
+            renderExport: (r) => Number(r.value || 0).toFixed(2),
+          },
+          { key: "status", label: "Status" },
         ]}
       />
 
@@ -146,29 +167,17 @@ export default function LiveInventory() {
         <DataTable
           title="Manual Review Ledger Names"
           rows={manualReviewRows}
-          searchFields={["material", "sourceCategory"]}
+          searchFields={["materialName", "category", "status"]}
           columns={[
-            { key: "material", label: "Ledger Material" },
-            { key: "sourceCategory", label: "Ledger Category" },
+            { key: "materialName", label: "Ledger Material" },
+            { key: "category", label: "Ledger Category" },
             {
-              key: "qtyIn",
-              label: "Qty In",
-              render: (r) => Number(r.qtyIn || 0).toFixed(2),
-              renderExport: (r) => Number(r.qtyIn || 0).toFixed(2),
+              key: "qtyKg",
+              label: "Net Qty Kg",
+              render: (r) => Number(r.qtyKg || 0).toFixed(2),
+              renderExport: (r) => Number(r.qtyKg || 0).toFixed(2),
             },
-            {
-              key: "qtyOut",
-              label: "Qty Out",
-              render: (r) => Number(r.qtyOut || 0).toFixed(2),
-              renderExport: (r) => Number(r.qtyOut || 0).toFixed(2),
-            },
-            {
-              key: "balanceKg",
-              label: "Balance Kg",
-              render: (r) => Number(r.balanceKg || 0).toFixed(2),
-              renderExport: (r) => Number(r.balanceKg || 0).toFixed(2),
-            },
-            { key: "movementCount", label: "Movements" },
+            { key: "status", label: "Status" },
           ]}
         />
       </div>
@@ -179,6 +188,19 @@ export default function LiveInventory() {
       </div>
     </div>
   );
+}
+
+function withTimeout(promise, timeoutMs) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const error = new Error("Live Inventory request timed out.");
+      error.code = "LIVE_INVENTORY_TIMEOUT";
+      reject(error);
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
 }
 
 function Card({ title, value, tone = "neutral" }) {

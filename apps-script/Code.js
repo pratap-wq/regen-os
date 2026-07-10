@@ -486,6 +486,7 @@ function updateFactoryCostMaster(data = {}) {
     if (p.fn === "inventoryLedger.add") return addInventoryLedger(p);
     if (p.fn === "inventoryLedger.balance") return getInventoryLedgerBalance();
     if (p.fn === "inventoryLedger.liveBalance") return getInventoryLedgerLiveBalance(p);
+    if (p.fn === "inventory.liveSummary") return getInventoryLiveSummary();
     if (p.fn === "inventoryLedger.audit") return auditInventoryLedger(p);
     if (p.fn === "inventoryLedger.rebuild") return rebuildInventoryLedger(p);
     if (p.fn === "materialNormalization.preview") return output(previewSpreadsheetMaterialNormalization(p));
@@ -667,6 +668,7 @@ function debugRoutes() {
       "inventoryLedger.add",
       "inventoryLedger.balance",
       "inventoryLedger.liveBalance",
+      "inventory.liveSummary",
       "inventoryLedger.audit",
       "inventoryLedger.rebuild",
       "materialNormalization.preview",
@@ -9924,6 +9926,165 @@ function getInventoryLedgerBalance(){
         rows:Object.values(balance)
     });
 
+}
+
+function getInventoryLiveSummary() {
+  const startedAt = Date.now();
+  const allowedCategories = {
+    RM: true,
+    WIP: true,
+    FG: true,
+    REWORK: true,
+    WASTE: true,
+    ADDITIVE: true,
+  };
+  const categoryOrder = {
+    RM: 1,
+    WIP: 2,
+    FG: 3,
+    REWORK: 4,
+    WASTE: 5,
+    ADDITIVE: 6,
+  };
+  const materialIndex = {};
+  const balances = {};
+  const manualBalances = {};
+
+  getMaterialMasterRows_().forEach(function(material) {
+    const category = normalizeMaterialCategoryForLedger_(material.category);
+    if (!allowedCategories[category]) return;
+
+    const materialName = String(material.materialName || material.name || "").trim();
+    const materialCode = String(material.materialCode || materialCode_(materialName)).trim();
+    if (!materialName || !materialCode) return;
+
+    const balanceKey = compactInventoryMaterialKey_(material.materialId || materialCode);
+    if (!balanceKey || balances[balanceKey]) return;
+
+    const canonical = {
+      materialId: material.materialId || "",
+      materialCode,
+      materialName,
+      category,
+      qtyKg: 0,
+      value: 0,
+      status: material.status || "ACTIVE",
+    };
+    balances[balanceKey] = canonical;
+
+    [material.materialId, materialCode, materialName].forEach(function(value) {
+      const key = compactInventoryMaterialKey_(value);
+      if (key && !materialIndex[key]) materialIndex[key] = canonical;
+    });
+  });
+
+  getRowsAsObjects("Inventory_Ledger").forEach(function(row) {
+    const status = String(row.status || "ACTIVE").trim().toUpperCase();
+    if (
+      isDeleted_(row) ||
+      ["INACTIVE", "DISABLED", "ARCHIVED", "VOID", "VOIDED", "REVERSED", "CANCELLED", "REJECTED"].indexOf(status) !== -1
+    ) {
+      return;
+    }
+
+    const sourceCategory = normalizeMaterialCategoryForLedger_(row.itemType);
+    if (sourceCategory === "STORE") return;
+
+    const qtyKg = num(row.qtyIn) - num(row.qtyOut);
+    const material = [row.materialId, row.materialCode, row.itemName, row.materialName]
+      .map(compactInventoryMaterialKey_)
+      .filter(function(key) { return key; })
+      .map(function(key) { return materialIndex[key]; })
+      .filter(function(match) { return match; })[0];
+
+    if (material) {
+      material.qtyKg += qtyKg;
+      return;
+    }
+
+    const rawName = String(row.itemName || row.materialName || row.materialCode || "").trim();
+    if (!rawName) return;
+    const manualKey = compactInventoryMaterialKey_(rawName) + "|" + (sourceCategory || "UNKNOWN");
+    if (!manualBalances[manualKey]) {
+      manualBalances[manualKey] = {
+        materialCode: "",
+        materialName: rawName,
+        category: sourceCategory || "UNKNOWN",
+        qtyKg: 0,
+        value: 0,
+        status: "NEEDS_REVIEW",
+      };
+    }
+    manualBalances[manualKey].qtyKg += qtyKg;
+  });
+
+  const rows = Object.values(balances)
+    .map(function(row) {
+      return {
+        materialCode: row.materialCode,
+        materialName: row.materialName,
+        category: row.category,
+        qtyKg: round2(row.qtyKg),
+        value: round2(row.value),
+        status: row.status,
+      };
+    })
+    .sort(function(a, b) {
+      return num(categoryOrder[a.category]) - num(categoryOrder[b.category]) ||
+        String(a.materialName).localeCompare(String(b.materialName), undefined, { numeric: true });
+    });
+
+  const manualReviewRows = Object.values(manualBalances)
+    .map(function(row) {
+      return {
+        materialCode: row.materialCode,
+        materialName: row.materialName,
+        category: row.category,
+        qtyKg: round2(row.qtyKg),
+        value: round2(row.value),
+        status: row.status,
+      };
+    })
+    .sort(function(a, b) {
+      return Math.abs(num(b.qtyKg)) - Math.abs(num(a.qtyKg)) ||
+        String(a.materialName).localeCompare(String(b.materialName), undefined, { numeric: true });
+    });
+
+  const summary = rows.reduce(function(result, row) {
+    if (row.category === "RM") result.totalRmKg += num(row.qtyKg);
+    if (row.category === "WIP") result.totalWipKg += num(row.qtyKg);
+    if (row.category === "FG") result.totalFgKg += num(row.qtyKg);
+    if (row.category === "REWORK") result.totalReworkKg += num(row.qtyKg);
+    if (row.category === "WASTE") result.totalWasteKg += num(row.qtyKg);
+    return result;
+  }, {
+    totalRmKg: 0,
+    totalWipKg: 0,
+    totalFgKg: 0,
+    totalReworkKg: 0,
+    totalWasteKg: 0,
+  });
+
+  Object.keys(summary).forEach(function(key) {
+    summary[key] = round2(summary[key]);
+  });
+
+  return output({
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    source: "Inventory_Ledger",
+    summary,
+    rows,
+    manualReviewRows,
+    elapsedMs: Date.now() - startedAt,
+  });
+}
+
+function compactInventoryMaterialKey_(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "");
 }
 
 function getInventoryLedgerLiveBalance(data = {}) {

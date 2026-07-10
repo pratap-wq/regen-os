@@ -250,16 +250,16 @@ assert.equal(balance(ledgerRows, "E1"), 3100, "Dispatch should consume only E1 F
 assert(regrindLot && regrindLot.availableKg === 8200, "Wash input lots should include Grinder regrind output");
 
 assertSourceIncludes("apps-script/Code.js", [
-  'if (p.fn === "grinder.add") return addGrinderBatch(p);',
-  'if (p.fn === "grinder.list") return listMaster("Grinder_Batches");',
+  'if (p.fn === "grinder.add") return executeCriticalWriteRoute_',
+  'if (p.fn === "grinder.list") return listGrinderBatches(p);',
   'if (p.fn === "grinder.update") return updateGrinderBatch(p);',
   "Grinder_Batches",
   "GRINDER_OUTPUT_MATERIAL",
 ]);
 
 assertSourceIncludes("src/pages/ProductionHistory.jsx", [
-  'safeList("grinder.list")',
-  'updateFn: "grinder.update"',
+  'apiCall({ fn: "production.historySummary", ...payload })',
+  'Grinder: ["grinder.update", "grinderBatchId"]',
   'const PROCESS_OPTIONS = ["Grinder", "Wash", "Sorting", "Extrusion"]',
   '["machine", "Machine", "machineSelect"]',
   '["shift", "Shift", "shiftSelect"]',
@@ -276,7 +276,7 @@ const legacyMonthClose = calculateMonthClose({
   periodMonth: PERIOD,
 });
 
-const liveInventoryLedgerAligned = liveInventorySource.includes('apiCall({ fn: "inventoryLedger.liveBalance" })') &&
+const liveInventoryLedgerAligned = liveInventorySource.includes('apiCall({ fn: "inventory.liveSummary" })') &&
   !liveInventorySource.includes('apiCall({ fn: "rm.list" })') &&
   !liveInventorySource.includes('apiCall({ fn: "wash.list" })') &&
   !liveInventorySource.includes('apiCall({ fn: "sorting.list" })') &&
@@ -317,7 +317,7 @@ const report = {
   },
   alignmentNotes: {
     liveInventory: liveInventoryLedgerAligned
-      ? "Live Inventory reads canonical Inventory_Ledger live balances; Grinder is included through ledger movements."
+      ? "Live Inventory reads the compact canonical Inventory_Ledger summary; Grinder is included through ledger movements."
       : "LiveInventory.jsx still calculates from RM/Wash/Sorting/Extrusion/Dispatch source rows and does not load Grinder_Batches; ledger balances above are correct, but Live Inventory needs separate ledger alignment.",
     monthClose: monthCloseEngineGrinderAware
       ? "monthCloseEngine accepts Grinder rows."

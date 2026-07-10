@@ -135,12 +135,13 @@ export default function Production() {
     const balance = Number(row?.qtyKg || 0);
     const qtyIn = Number(row?.qtyIn || 0);
     const qtyOut = Number(row?.qtyOut || 0);
+    const openingMissing = row?.openingMissing === true;
     return (
       <KpiCard
         title={`${label} Ledger Balance`}
-        value={`${balance.toFixed(0)} Kg`}
-        tone={balance < 0 ? "warning" : "neutral"}
-        helper={`${balance < 0 ? "Reconciliation Required | " : ""}Ledger IN: ${formatKg(qtyIn)} | Ledger OUT: ${formatKg(qtyOut)}`}
+        value={openingMissing ? "Opening Balance Required" : `${balance.toFixed(0)} Kg`}
+        tone={openingMissing || balance < 0 ? "warning" : "neutral"}
+        helper={`${openingMissing ? "Post-cutover stock is shown for review only | " : balance < 0 ? "Reconciliation Required | " : ""}Opening: ${row?.approvedOpeningKg == null ? "Not approved" : formatKg(row.approvedOpeningKg)} | Post-cutover IN: ${formatKg(row?.postCutoverInKg ?? qtyIn)} | Post-cutover OUT: ${formatKg(row?.postCutoverOutKg ?? qtyOut)}`}
       />
     );
   }

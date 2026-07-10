@@ -56,8 +56,10 @@ export default function LiveInventory() {
   }
 
   const visibleRows = useMemo(() => {
-    return rows.filter((row) => Number(row.qtyKg || 0) !== 0);
+    return rows.filter((row) => row.openingMissing || Number(row.qtyKg || 0) !== 0);
   }, [rows]);
+
+  const openingRequired = rows.some((row) => row.openingMissing);
 
   const categoryTotals = useMemo(() => {
     const totals = {
@@ -100,6 +102,11 @@ export default function LiveInventory() {
       </div>
 
       {status && <div style={statusStyle}>{status}</div>}
+      {openingRequired && (
+        <div style={statusStyle}>
+          Opening Balance Required. Operational stock is not shown until an approved cutover opening is recorded.
+        </div>
+      )}
 
       <div style={grid}>
         <Card title="RM Stock" value={`${Number(summary.totalRmKg || 0).toFixed(0)} Kg`} />
@@ -142,11 +149,11 @@ export default function LiveInventory() {
             key: "qtyKg",
             label: "Stock Kg",
             render: (r) => (
-              <span style={Number(r.qtyKg || 0) < 0 ? negativeText : positiveText}>
-                {Number(r.qtyKg || 0).toFixed(2)}
+              <span style={r.openingMissing || Number(r.qtyKg || 0) < 0 ? negativeText : positiveText}>
+                {r.openingMissing ? "Opening Balance Required" : Number(r.qtyKg || 0).toFixed(2)}
               </span>
             ),
-            renderExport: (r) => Number(r.qtyKg || 0).toFixed(2),
+            renderExport: (r) => r.openingMissing ? "Opening Balance Required" : Number(r.qtyKg || 0).toFixed(2),
           },
           {
             key: "value",

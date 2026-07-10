@@ -522,6 +522,7 @@ function updateFactoryCostMaster(data = {}) {
     if (p.fn === "inventoryLedger.balance") return getInventoryLedgerBalance();
     if (p.fn === "inventoryLedger.liveBalance") return getInventoryLedgerLiveBalance(p);
     if (p.fn === "inventory.liveSummary") return getInventoryLiveSummary();
+    if (p.fn === "inventory.cutoverPreview") return getInventoryCutoverPreview(p);
     if (p.fn === "inventoryLedger.audit") return auditInventoryLedger(p);
     if (p.fn === "inventoryLedger.rebuild") return rebuildInventoryLedger(p);
     if (p.fn === "materialNormalization.preview") return output(previewSpreadsheetMaterialNormalization(p));
@@ -717,6 +718,7 @@ function debugRoutes() {
       "inventoryLedger.balance",
       "inventoryLedger.liveBalance",
       "inventory.liveSummary",
+      "inventory.cutoverPreview",
       "inventoryLedger.audit",
       "inventoryLedger.rebuild",
       "materialNormalization.preview",
@@ -2400,6 +2402,8 @@ const REGENOS_APPROVED_LEGACY_INVENTORY_ALIAS_MAP_ = {
   "WHITE BUCKET": "White Buckets",
 };
 
+const REGENOS_INVENTORY_CUTOVER_DATE = "2026-06-01";
+
 function canonicalLegacyMaterialForInventory_(value) {
   const text = String(value || "").trim().replace(/\s+/g, " ");
   if (!text) return "";
@@ -2420,6 +2424,282 @@ function rejectLegacyInventoryAliasWrite_(value, label) {
         " must use canonical Material_Master material: White Buckets"
     );
   }
+}
+
+function inventoryCutoverStatusActive_(row) {
+  const status = String(row && row.status || "ACTIVE").trim().toUpperCase();
+  return !["DELETED", "VOID", "VOIDED", "INACTIVE", "DISABLED", "ARCHIVED", "REVERSED", "CANCELLED", "REJECTED"].includes(status);
+}
+
+function inventoryCutoverRowDate_(row) {
+  return normalizeDateOnly_(row && (row.date || row.periodMonth || row.createdAt || ""));
+}
+
+function inventoryCutoverMaterialIdentity_(material) {
+  return compactInventoryMaterialKey_(material && (material.materialId || material.materialCode || material.materialName));
+}
+
+function inventoryCutoverMaterialIndex_() {
+  const index = {};
+  getMaterialMasterRows_().forEach(function(row) {
+    const category = normalizeMaterialCategoryForLedger_(row.category);
+    const status = String(row.status || "ACTIVE").trim().toUpperCase();
+    if (["STORE", "UNKNOWN", ""].indexOf(category) !== -1 || ["DELETED", "VOID", "VOIDED", "INACTIVE", "DISABLED", "ARCHIVED", "MERGED"].indexOf(status) !== -1) return;
+    const material = {
+      materialId: row.materialId || "",
+      materialCode: row.materialCode || materialCode_(row.materialName),
+      materialName: row.materialName || row.materialCode || "",
+      category,
+      status: row.status || "ACTIVE",
+    };
+    if (!material.materialName) return;
+    [material.materialId, material.materialCode, material.materialName].forEach(function(value) {
+      const key = compactInventoryMaterialKey_(value);
+      if (key) index[key] = material;
+    });
+  });
+  return index;
+}
+
+function inventoryCutoverCanonicalMaterialForRow_(row, materialIndex) {
+  const rawNames = [row && row.itemName, row && row.materialName].map(function(value) {
+    return String(value || "").trim();
+  }).filter(function(value) { return value; });
+  if (rawNames.some(isApprovedLegacyInventoryAlias_)) return null;
+  const candidates = [row && row.materialId, row && row.materialCode]
+    .concat(rawNames)
+    .map(compactInventoryMaterialKey_)
+    .filter(function(key) { return key; });
+  for (let index = 0; index < candidates.length; index += 1) {
+    if (materialIndex[candidates[index]]) return materialIndex[candidates[index]];
+  }
+  return null;
+}
+
+function inventoryHistoricalMaterialForRow_(row, materialIndex) {
+  const historicalName = canonicalLegacyMaterialForInventory_(row && (row.itemName || row.materialName || row.materialCode));
+  const candidates = [row && row.materialId, row && row.materialCode, historicalName]
+    .map(compactInventoryMaterialKey_)
+    .filter(function(key) { return key; });
+  for (let index = 0; index < candidates.length; index += 1) {
+    if (materialIndex[candidates[index]]) return materialIndex[candidates[index]];
+  }
+  return null;
+}
+
+function inventoryCutoverIsOpeningRow_(row) {
+  const marker = [row && row.movementType, row && row.transactionType, row && row.sourceType, row && row.module, row && row.adjustmentType]
+    .map(function(value) { return String(value || "").trim().toUpperCase(); })
+    .join(" ");
+  if (!/(OPENING|CUTOVER)/.test(marker)) return false;
+  const status = String(row && row.status || "").trim().toUpperCase();
+  return ["APPROVED", "ACTIVE", "POSTED", "COMPLETED", "CLOSED"].indexOf(status) !== -1;
+}
+
+function inventoryCutoverQuantity_(row) {
+  if (row && row.openingQty !== undefined && row.openingQty !== "") return num(row.openingQty);
+  if (row && row.quantityKg !== undefined && row.quantityKg !== "") return num(row.quantityKg);
+  const qtyIn = num(row && row.qtyIn);
+  const qtyOut = num(row && row.qtyOut);
+  return qtyIn - qtyOut;
+}
+
+function inventoryCutoverApprovedOpeningRows_(materialIndex, ledgerRows) {
+  const openingByIdentity = {};
+  const sources = {};
+  function addOpening(row, source) {
+    if (!row || !inventoryCutoverStatusActive_(row)) return;
+    const period = String(row.periodMonth || "").slice(0, 7);
+    const date = inventoryCutoverRowDate_(row);
+    if (period && period !== REGENOS_INVENTORY_CUTOVER_DATE.slice(0, 7)) return;
+    if (date && date < REGENOS_INVENTORY_CUTOVER_DATE) return;
+    if (source === "Inventory_Ledger" && !inventoryCutoverIsOpeningRow_(row)) return;
+    if (source !== "Inventory_Ledger" && !inventoryCutoverIsOpeningRow_(row)) return;
+    const material = inventoryCutoverCanonicalMaterialForRow_(row, materialIndex);
+    if (!material) return;
+    const identity = inventoryCutoverMaterialIdentity_(material);
+    if (!identity) return;
+    if (!Object.prototype.hasOwnProperty.call(openingByIdentity, identity)) {
+      openingByIdentity[identity] = 0;
+      sources[identity] = [];
+    }
+    openingByIdentity[identity] += inventoryCutoverQuantity_(row);
+    sources[identity].push(source);
+  }
+
+  (ledgerRows || []).forEach(function(row) { addOpening(row, "Inventory_Ledger"); });
+  inventoryReconciliationReadRows_("Opening_Balances").forEach(function(row) {
+    if (String(row.periodMonth || "").slice(0, 7) !== REGENOS_INVENTORY_CUTOVER_DATE.slice(0, 7)) return;
+    addOpening(Object.assign({}, row, {
+      sourceType: row.sourceType || "CUTOVER_OPENING",
+      transactionType: row.transactionType || "OPENING_BALANCE",
+      itemName: row.itemName || row.itemCode,
+      openingQty: row.openingQty,
+    }), "Opening_Balances");
+  });
+  inventoryReconciliationReadRows_("Inventory_Adjustments").forEach(function(row) {
+    const adjustmentType = String(row.adjustmentType || "").toUpperCase();
+    if (String(row.status || "").toUpperCase() !== "APPROVED" || !/(OPENING|CUTOVER)/.test(adjustmentType)) return;
+    addOpening(Object.assign({}, row, { sourceType: row.sourceType || "CUTOVER_OPENING", itemName: row.itemName || row.itemCode || row.material }), "Inventory_Adjustments");
+  });
+
+  return { values: openingByIdentity, sources };
+}
+
+function inventoryCutoverCompute_() {
+  const materialIndex = inventoryCutoverMaterialIndex_();
+  const ledgerRows = inventoryReconciliationReadRows_("Inventory_Ledger");
+  const openings = inventoryCutoverApprovedOpeningRows_(materialIndex, ledgerRows);
+  const stats = {};
+  const historical = {};
+  const unknownOperationalRows = [];
+  const ledgerRefs = {};
+
+  Object.keys(materialIndex).forEach(function(key) {
+    const material = materialIndex[key];
+    const identity = inventoryCutoverMaterialIdentity_(material);
+    if (!identity || stats[identity]) return;
+    stats[identity] = {
+      materialId: material.materialId,
+      materialCode: material.materialCode,
+      materialName: material.materialName,
+      category: material.category,
+      approvedOpeningKg: Object.prototype.hasOwnProperty.call(openings.values, identity) ? round2(openings.values[identity]) : null,
+      postCutoverInKg: 0,
+      postCutoverOutKg: 0,
+      postCutoverAdjustmentKg: 0,
+      allHistoryBalanceKg: 0,
+      legacyAliasBalanceKg: 0,
+      preCutoverInKg: 0,
+      preCutoverOutKg: 0,
+    };
+  });
+
+  ledgerRows.forEach(function(row) {
+    if (!inventoryCutoverStatusActive_(row)) return;
+    const qtyIn = num(row.qtyIn);
+    const qtyOut = num(row.qtyOut);
+    const historicalMaterial = inventoryHistoricalMaterialForRow_(row, materialIndex);
+    if (historicalMaterial) {
+      const identity = inventoryCutoverMaterialIdentity_(historicalMaterial);
+      if (stats[identity]) {
+        stats[identity].allHistoryBalanceKg += qtyIn - qtyOut;
+        if (isApprovedLegacyInventoryAlias_(row.itemName || row.materialName)) stats[identity].legacyAliasBalanceKg += qtyIn - qtyOut;
+      }
+    }
+
+    const date = inventoryCutoverRowDate_(row);
+    if (!date || date < REGENOS_INVENTORY_CUTOVER_DATE || inventoryCutoverIsOpeningRow_(row)) return;
+    const material = inventoryCutoverCanonicalMaterialForRow_(row, materialIndex);
+    if (!material) {
+      if (Math.abs(qtyIn) + Math.abs(qtyOut) > 0.001) unknownOperationalRows.push({ ledgerId: row.ledgerId || "", itemName: row.itemName || row.materialName || "", qtyIn, qtyOut, date: date });
+      return;
+    }
+    const identity = inventoryCutoverMaterialIdentity_(material);
+    if (!stats[identity]) return;
+    stats[identity].postCutoverInKg += qtyIn;
+    stats[identity].postCutoverOutKg += qtyOut;
+    [row.sourceRef, row.targetRef, row.legacySourceId, row.ledgerId].forEach(function(ref) {
+      const clean = String(ref || "").trim();
+      if (clean) ledgerRefs[clean] = true;
+    });
+  });
+
+  inventoryReconciliationReadRows_("Inventory_Adjustments").forEach(function(row) {
+    if (!inventoryCutoverStatusActive_(row) || String(row.status || "").toUpperCase() !== "APPROVED") return;
+    const date = inventoryCutoverRowDate_(row);
+    if (!date || date < REGENOS_INVENTORY_CUTOVER_DATE) return;
+    const ref = String(row.adjustmentId || row.sourceRef || "").trim();
+    if (ref && ledgerRefs[ref]) return;
+    const material = inventoryCutoverCanonicalMaterialForRow_(Object.assign({}, row, { itemName: row.itemName || row.itemCode || row.material }), materialIndex);
+    if (!material) return;
+    const identity = inventoryCutoverMaterialIdentity_(material);
+    if (!stats[identity]) return;
+    stats[identity].postCutoverAdjustmentKg += inventoryCutoverQuantity_(row);
+  });
+
+  const rows = Object.keys(stats).map(function(identity) {
+    const row = stats[identity];
+    const postNet = row.postCutoverInKg - row.postCutoverOutKg + row.postCutoverAdjustmentKg;
+    const openingMissing = row.approvedOpeningKg === null;
+    return Object.assign({}, row, {
+      cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
+      postCutoverInKg: round2(row.postCutoverInKg),
+      postCutoverOutKg: round2(row.postCutoverOutKg),
+      postCutoverAdjustmentKg: round2(row.postCutoverAdjustmentKg),
+      allHistoryBalanceKg: round2(row.allHistoryBalanceKg),
+      legacyAliasBalanceKg: round2(row.legacyAliasBalanceKg),
+      preCutoverInKg: round2(row.preCutoverInKg),
+      preCutoverOutKg: round2(row.preCutoverOutKg),
+      operationalBalanceKg: openingMissing ? null : round2(row.approvedOpeningKg + postNet),
+      openingMissing,
+      reconciliationRequired: openingMissing,
+      openingSources: openings.sources[identity] || [],
+    });
+  });
+
+  // Keep pre-cutover reporting separate from operational balances.
+  ledgerRows.forEach(function(row) {
+    if (!inventoryCutoverStatusActive_(row)) return;
+    const date = inventoryCutoverRowDate_(row);
+    if (!date || date >= REGENOS_INVENTORY_CUTOVER_DATE) return;
+    const material = inventoryHistoricalMaterialForRow_(row, materialIndex);
+    if (!material) return;
+    const target = stats[inventoryCutoverMaterialIdentity_(material)];
+    if (!target) return;
+    target.preCutoverInKg += num(row.qtyIn);
+    target.preCutoverOutKg += num(row.qtyOut);
+  });
+
+  rows.forEach(function(row) {
+    const source = stats[inventoryCutoverMaterialIdentity_(row)];
+    row.preCutoverInKg = round2(source ? source.preCutoverInKg : 0);
+    row.preCutoverOutKg = round2(source ? source.preCutoverOutKg : 0);
+  });
+
+  const byIdentity = {};
+  rows.forEach(function(row) { byIdentity[inventoryCutoverMaterialIdentity_(row)] = row; });
+  return { rows, byIdentity, materialIndex, unknownOperationalRows, ledgerRows, openings };
+}
+
+function getInventoryCutoverPreview(data = {}) {
+  const startedAt = Date.now();
+  const computed = inventoryCutoverCompute_();
+  const rows = computed.rows.map(function(row) {
+    const postNet = num(row.postCutoverInKg) - num(row.postCutoverOutKg) + num(row.postCutoverAdjustmentKg);
+    const calculatedOpeningGap = round2(num(row.allHistoryBalanceKg) - postNet);
+    const warnings = [];
+    if (row.openingMissing) warnings.push("Opening Balance Required");
+    if (Math.abs(num(row.legacyAliasBalanceKg)) > 0.001) warnings.push("Historical legacy alias movements are excluded from operational stock");
+    if (Math.abs(calculatedOpeningGap) > 0.001) warnings.push("Calculated opening gap - not approved.");
+    return {
+      materialCode: row.materialCode,
+      materialName: row.materialName,
+      category: row.category,
+      cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
+      allHistoryBalanceKg: round2(row.allHistoryBalanceKg),
+      legacyAliasBalanceKg: round2(row.legacyAliasBalanceKg),
+      preCutoverInKg: round2(row.preCutoverInKg),
+      preCutoverOutKg: round2(row.preCutoverOutKg),
+      postCutoverInKg: round2(row.postCutoverInKg),
+      postCutoverOutKg: round2(row.postCutoverOutKg),
+      approvedOpeningKg: row.approvedOpeningKg,
+      calculatedOpeningGap,
+      operationalBalanceKg: row.operationalBalanceKg,
+      physicalConfirmationRequired: row.openingMissing,
+      warnings,
+    };
+  });
+  return output({
+    ok: true,
+    route: "inventory.cutoverPreview",
+    cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
+    generatedAt: new Date().toISOString(),
+    rows,
+    unknownOperationalRows: computed.unknownOperationalRows.slice(0, 50),
+    warning: "Preview only. No opening balances were posted and no spreadsheet rows were changed.",
+    elapsedMs: Date.now() - startedAt,
+  });
 }
 
 function materialAliasRowsFromDefaults_() {
@@ -6719,6 +6999,7 @@ function getRmHistorySummary(data = {}) {
 function getProductionEntryBootstrap() {
   const startedAt = Date.now();
   const materials = getMaterialMasterRows_();
+  const cutover = inventoryCutoverCompute_();
   const machines = getRowsAsObjects("Machine_Master").filter(function(row) {
     return !isDeleted_(row) && ["INACTIVE", "DISABLED", "ARCHIVED", "MERGED"].indexOf(String(row.status || "ACTIVE").toUpperCase()) === -1;
   });
@@ -6736,28 +7017,36 @@ function getProductionEntryBootstrap() {
       qtyKg: 0,
       qtyIn: 0,
       qtyOut: 0,
+      cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
+      approvedOpeningKg: null,
+      postCutoverInKg: 0,
+      postCutoverOutKg: 0,
+      postCutoverAdjustmentKg: 0,
+      allHistoryBalanceKg: 0,
+      operationalBalanceKg: null,
+      openingMissing: true,
+      reconciliationRequired: true,
     };
     if (!item.materialName) return;
+    const stock = cutover.byIdentity[inventoryCutoverMaterialIdentity_(item)];
+    if (stock) {
+      item.approvedOpeningKg = stock.approvedOpeningKg;
+      item.postCutoverInKg = stock.postCutoverInKg;
+      item.postCutoverOutKg = stock.postCutoverOutKg;
+      item.postCutoverAdjustmentKg = stock.postCutoverAdjustmentKg;
+      item.allHistoryBalanceKg = stock.allHistoryBalanceKg;
+      item.operationalBalanceKg = stock.operationalBalanceKg;
+      item.openingMissing = stock.openingMissing;
+      item.reconciliationRequired = stock.reconciliationRequired;
+      item.qtyKg = stock.operationalBalanceKg === null ? 0 : stock.operationalBalanceKg;
+      item.qtyIn = stock.postCutoverInKg;
+      item.qtyOut = stock.postCutoverOutKg;
+    }
     inventoryRows.push(item);
     [item.materialId, item.materialCode, item.materialName].forEach(function(value) {
       const key = compactInventoryMaterialKey_(value);
       if (key) materialIndex[key] = item;
     });
-  });
-
-  getRowsAsObjects("Inventory_Ledger").forEach(function(row) {
-    const status = String(row.status || "ACTIVE").toUpperCase();
-    if (isDeleted_(row) || ["INACTIVE", "DISABLED", "ARCHIVED", "VOID", "VOIDED", "REVERSED", "CANCELLED", "REJECTED"].indexOf(status) !== -1) return;
-    const historicalName = canonicalLegacyMaterialForInventory_(row.itemName || row.materialName);
-    const material = [row.materialId, row.materialCode, historicalName]
-      .map(compactInventoryMaterialKey_)
-      .map(function(key) { return materialIndex[key]; })
-      .filter(function(match) { return match; })[0];
-    if (material) {
-      material.qtyIn += num(row.qtyIn);
-      material.qtyOut += num(row.qtyOut);
-      material.qtyKg += num(row.qtyIn) - num(row.qtyOut);
-    }
   });
 
   const extrusionRefs = getRowsAsObjects("Extrusion_Batches").map(function(row) {
@@ -11750,50 +12039,28 @@ function resolveMaterialMaster_(materialId, materialCodeOrName) {
 }
 
 function getInventoryLedgerBalance(){
-
-    const rows=getRowsAsObjects("Inventory_Ledger")
-        .filter(r=>!isDeleted_(r));
-
-    const balance={};
-
-    rows.forEach(r=>{
-
-        const itemName = canonicalLegacyMaterialForInventory_(r.itemName || r.materialName || r.material || r.grade);
-        const key=String(r.itemType || "")+"|"+compactInventoryMaterialKey_(itemName);
-
-        if(!balance[key]){
-
-            balance[key]={
-                itemType:r.itemType,
-                materialId:r.materialId || "",
-                itemName:itemName,
-                qty:0
-            };
-
-        }
-
-        balance[key].qty+=
-            num(r.qtyIn)-num(r.qtyOut);
-
-    });
-
+    const computed = inventoryCutoverCompute_();
     return output({
-        ok:true,
-        rows:Object.values(balance)
+        ok: true,
+        cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
+        rows: computed.rows.map(function(row) {
+          return {
+            itemType: row.category,
+            materialId: row.materialId,
+            itemName: row.materialName,
+            qty: row.operationalBalanceKg,
+            openingMissing: row.openingMissing,
+            approvedOpeningKg: row.approvedOpeningKg,
+            postCutoverInKg: row.postCutoverInKg,
+            postCutoverOutKg: row.postCutoverOutKg,
+            operationalBalanceKg: row.operationalBalanceKg,
+          };
+        }),
     });
-
 }
 
 function getInventoryLiveSummary() {
   const startedAt = Date.now();
-  const allowedCategories = {
-    RM: true,
-    WIP: true,
-    FG: true,
-    REWORK: true,
-    WASTE: true,
-    ADDITIVE: true,
-  };
   const categoryOrder = {
     RM: 1,
     WIP: 2,
@@ -11802,104 +12069,38 @@ function getInventoryLiveSummary() {
     WASTE: 5,
     ADDITIVE: 6,
   };
-  const materialIndex = {};
-  const balances = {};
-  const manualBalances = {};
-
-  getMaterialMasterRows_().forEach(function(material) {
-    const category = normalizeMaterialCategoryForLedger_(material.category);
-    if (!allowedCategories[category]) return;
-
-    const materialName = String(material.materialName || material.name || "").trim();
-    const materialCode = String(material.materialCode || materialCode_(materialName)).trim();
-    if (!materialName || !materialCode) return;
-
-    const balanceKey = compactInventoryMaterialKey_(material.materialId || materialCode);
-    if (!balanceKey || balances[balanceKey]) return;
-
-    const canonical = {
-      materialId: material.materialId || "",
-      materialCode,
-      materialName,
-      category,
-      qtyKg: 0,
-      value: 0,
-      status: material.status || "ACTIVE",
-    };
-    balances[balanceKey] = canonical;
-
-    [material.materialId, materialCode, materialName].forEach(function(value) {
-      const key = compactInventoryMaterialKey_(value);
-      if (key && !materialIndex[key]) materialIndex[key] = canonical;
-    });
-  });
-
-  getRowsAsObjects("Inventory_Ledger").forEach(function(row) {
-    const status = String(row.status || "ACTIVE").trim().toUpperCase();
-    if (
-      isDeleted_(row) ||
-      ["INACTIVE", "DISABLED", "ARCHIVED", "VOID", "VOIDED", "REVERSED", "CANCELLED", "REJECTED"].indexOf(status) !== -1
-    ) {
-      return;
-    }
-
-    const sourceCategory = normalizeMaterialCategoryForLedger_(row.itemType);
-    if (sourceCategory === "STORE") return;
-
-    const qtyKg = num(row.qtyIn) - num(row.qtyOut);
-    const historicalName = canonicalLegacyMaterialForInventory_(row.itemName || row.materialName);
-    const material = [row.materialId, row.materialCode, historicalName]
-      .map(compactInventoryMaterialKey_)
-      .filter(function(key) { return key; })
-      .map(function(key) { return materialIndex[key]; })
-      .filter(function(match) { return match; })[0];
-
-    if (material) {
-      material.qtyKg += qtyKg;
-      return;
-    }
-
-    const rawName = canonicalLegacyMaterialForInventory_(row.itemName || row.materialName || row.materialCode);
-    if (!rawName) return;
-    const manualKey = compactInventoryMaterialKey_(rawName) + "|" + (sourceCategory || "UNKNOWN");
-    if (!manualBalances[manualKey]) {
-      manualBalances[manualKey] = {
-        materialCode: "",
-        materialName: rawName,
-        category: sourceCategory || "UNKNOWN",
-        qtyKg: 0,
-        value: 0,
-        status: "NEEDS_REVIEW",
-      };
-    }
-    manualBalances[manualKey].qtyKg += qtyKg;
-  });
-
-  const rows = Object.values(balances)
+  const computed = inventoryCutoverCompute_();
+  const rows = computed.rows
     .map(function(row) {
       return {
         materialCode: row.materialCode,
         materialName: row.materialName,
         category: row.category,
-        qtyKg: round2(row.qtyKg),
-        value: round2(row.value),
-        status: row.status,
+        qtyKg: row.operationalBalanceKg === null ? null : round2(row.operationalBalanceKg),
+        value: 0,
+        status: row.openingMissing ? "OPENING_REQUIRED" : row.operationalBalanceKg < 0 ? "RECONCILIATION_REQUIRED" : row.status,
+        cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
+        approvedOpeningKg: row.approvedOpeningKg,
+        postCutoverInKg: row.postCutoverInKg,
+        postCutoverOutKg: row.postCutoverOutKg,
+        postCutoverAdjustmentKg: row.postCutoverAdjustmentKg,
+        operationalBalanceKg: row.operationalBalanceKg,
+        openingMissing: row.openingMissing,
       };
     })
     .sort(function(a, b) {
       return num(categoryOrder[a.category]) - num(categoryOrder[b.category]) ||
         String(a.materialName).localeCompare(String(b.materialName), undefined, { numeric: true });
     });
-
-  const manualReviewRows = Object.values(manualBalances)
+  const manualReviewRows = computed.unknownOperationalRows
     .map(function(row) {
       return {
-        materialCode: row.materialCode,
-        materialName: row.materialName,
-        category: row.category,
-        qtyKg: round2(row.qtyKg),
-        value: round2(row.value),
-        status: row.status,
+        materialCode: "",
+        materialName: row.itemName,
+        category: "UNKNOWN",
+        qtyKg: round2(num(row.qtyIn) - num(row.qtyOut)),
+        value: 0,
+        status: "NEEDS_REVIEW",
       };
     })
     .sort(function(a, b) {
@@ -11933,6 +12134,8 @@ function getInventoryLiveSummary() {
     summary,
     rows,
     manualReviewRows,
+    cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
+    openingRequiredCount: rows.filter(function(row) { return row.openingMissing; }).length,
     elapsedMs: Date.now() - startedAt,
   });
 }
@@ -11945,6 +12148,51 @@ function compactInventoryMaterialKey_(value) {
 }
 
 function getInventoryLedgerLiveBalance(data = {}) {
+  const computed = inventoryCutoverCompute_();
+  const rows = computed.rows.map(function(row) {
+    return {
+      material: row.materialName,
+      canonicalMaterial: row.materialName,
+      category: row.category,
+      materialId: row.materialId,
+      qtyIn: row.postCutoverInKg,
+      qtyOut: row.postCutoverOutKg,
+      balanceKg: row.operationalBalanceKg,
+      movementCount: 0,
+      openingMissing: row.openingMissing,
+      approvedOpeningKg: row.approvedOpeningKg,
+      cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
+    };
+  });
+  const manualReviewRows = computed.unknownOperationalRows.map(function(row) {
+    return {
+      material: row.itemName,
+      canonicalMaterial: "Needs Manual Review",
+      category: "MANUAL_REVIEW",
+      qtyIn: round2(row.qtyIn),
+      qtyOut: round2(row.qtyOut),
+      balanceKg: round2(num(row.qtyIn) - num(row.qtyOut)),
+      movementCount: 1,
+    };
+  });
+  const summary = rows.reduce(function(acc, row) {
+    acc[row.category] = (acc[row.category] || 0) + num(row.balanceKg);
+    acc.totalProductionKg += num(row.balanceKg);
+    return acc;
+  }, { RM: 0, WIP: 0, FG: 0, WASTE: 0, ADDITIVE: 0, totalProductionKg: 0, manualReviewCount: manualReviewRows.length });
+  return output({
+    ok: true,
+    route: "inventoryLedger.liveBalance",
+    source: "Inventory_Ledger",
+    cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
+    rows,
+    manualReviewRows,
+    summary,
+    openingRequiredCount: rows.filter(function(row) { return row.openingMissing; }).length,
+  });
+}
+
+function getInventoryLedgerLiveBalanceLegacy_(data = {}) {
   const ledgerRows = getRowsAsObjects("Inventory_Ledger")
     .filter(function(row) { return !isDeleted_(row); });
   const productionRows = liveInventoryProductionMaterialRows_();
@@ -13296,7 +13544,11 @@ function monthCloseControlRoomLedgerContext_(materialRows, ledgerRows, periodMon
   let unknownMovementCount = 0;
   let unknownMovementKg = 0;
   ledgerRows.filter(function(row) {
-    return monthCloseControlRoomRowInPeriod_(row, periodMonth);
+    const date = inventoryCutoverRowDate_(row);
+    return monthCloseControlRoomRowInPeriod_(row, periodMonth) &&
+      date && date >= REGENOS_INVENTORY_CUTOVER_DATE &&
+      !inventoryCutoverIsOpeningRow_(row) &&
+      !isApprovedLegacyInventoryAlias_(row.itemName || row.materialName);
   }).forEach(function(row) {
     const material = [row.materialId, row.materialCode, row.itemName, row.materialName]
       .map(compactInventoryMaterialKey_)
@@ -13705,7 +13957,13 @@ function buildCleanMonthCloseMaterialView_(periodMonth, periodReceived) {
   ensureHeaders_("Material_Master", materialMasterHeaders_());
   const periodNormalized = normalizeMonthClosePeriod_(periodMonth) || periodMonth;
   const periodDiagnostics = monthCloseSheetPeriodDiagnostics_(periodNormalized);
-  const ledgerRows = safeRows_("Inventory_Ledger").filter((row) => !isDeleted_(row));
+  const cutoverMaterialIndex = inventoryCutoverMaterialIndex_();
+  const ledgerRows = safeRows_("Inventory_Ledger").filter((row) => {
+    if (!inventoryCutoverStatusActive_(row)) return false;
+    const date = inventoryCutoverRowDate_(row);
+    if (!date || date < REGENOS_INVENTORY_CUTOVER_DATE || inventoryCutoverIsOpeningRow_(row)) return false;
+    return !!inventoryCutoverCanonicalMaterialForRow_(row, cutoverMaterialIndex);
+  });
   const materialMasterRows = safeRows_("Material_Master").filter((row) => {
     const status = String(row.status || "ACTIVE").toUpperCase();
     const category = monthCloseMaterialCategory_(row);
@@ -14097,7 +14355,8 @@ function monthCloseOperationalStockStats_(periodMonth, masterIndex) {
   collectJuneAdjustmentMoves_(moves, periodMonth);
 
   moves.forEach((move) => {
-    const normalized = materialFlowNormalizeMaterial_(canonicalLegacyMaterialForInventory_(move.originalName), move.category);
+    if (isApprovedLegacyInventoryAlias_(move.originalName)) return;
+    const normalized = materialFlowNormalizeMaterial_(move.originalName, move.category);
     monthCloseAddMovementSourceSummary_(movementSourceSummary, move, false);
     const material = matchMonthCloseMaterial_(
       {

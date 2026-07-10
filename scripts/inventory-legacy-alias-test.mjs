@@ -15,6 +15,8 @@ const context = vm.createContext({
   RegExp,
   isNaN,
   parseInt,
+  Utilities: { formatDate: () => "2026-07-10" },
+  Session: { getScriptTimeZone: () => "UTC" },
 });
 vm.runInContext(source, context);
 
@@ -56,18 +58,26 @@ vm.runInContext(
 const bootstrap = evaluate("getProductionEntryBootstrap()");
 const bootstrapWhiteBuckets = bootstrap.inventoryRows.find((row) => row.materialName === "White Buckets");
 assert.deepEqual(
-  { qtyIn: bootstrapWhiteBuckets.qtyIn, qtyOut: bootstrapWhiteBuckets.qtyOut, qtyKg: bootstrapWhiteBuckets.qtyKg },
-  { qtyIn: 150, qtyOut: 120, qtyKg: 30 }
+  { qtyIn: bootstrapWhiteBuckets.qtyIn, qtyOut: bootstrapWhiteBuckets.qtyOut, qtyKg: bootstrapWhiteBuckets.qtyKg, openingMissing: bootstrapWhiteBuckets.openingMissing },
+  { qtyIn: 0, qtyOut: 120, qtyKg: 0, openingMissing: true }
 );
 
 const liveSummary = evaluate("getInventoryLiveSummary()");
 const liveWhiteBuckets = liveSummary.rows.find((row) => row.materialName === "White Buckets");
-assert.equal(liveWhiteBuckets.qtyKg, 30);
-assert.equal(liveSummary.manualReviewRows.length, 0);
+assert.equal(liveWhiteBuckets.qtyKg, null);
+assert.equal(liveWhiteBuckets.status, "OPENING_REQUIRED");
+assert.equal(liveSummary.manualReviewRows.length, 2);
 
 const ledgerBalance = evaluate("getInventoryLedgerBalance()");
 const ledgerWhiteBuckets = ledgerBalance.rows.find((row) => row.itemName === "White Buckets");
-assert.equal(ledgerWhiteBuckets.qty, 30);
+assert.equal(ledgerWhiteBuckets.qty, null);
+
+const cutoverPreview = evaluate("getInventoryCutoverPreview({})");
+const previewWhiteBuckets = cutoverPreview.rows.find((row) => row.materialName === "White Buckets");
+assert.equal(previewWhiteBuckets.allHistoryBalanceKg, 30);
+assert.equal(previewWhiteBuckets.legacyAliasBalanceKg, 150);
+assert.equal(previewWhiteBuckets.openingMissing, undefined);
+assert.equal(previewWhiteBuckets.physicalConfirmationRequired, true);
 
 assert.throws(
   () => evaluate('assertProductionMaterialAllowed_("Mixed PPCP Buckets", "RM_INWARD", "INPUT", "RM inward material")'),
@@ -94,4 +104,4 @@ assert.throws(
   /canonical Material_Master/
 );
 
-console.log("Inventory legacy bucket normalization regression checks passed (10/10).");
+console.log("Inventory legacy bucket normalization regression checks passed (14/14).");

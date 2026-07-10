@@ -7053,70 +7053,202 @@ function getRmHistorySummary(data = {}) {
   });
 }
 
-function getProductionEntryBootstrap() {
-  const startedAt = Date.now();
-  const materials = getMaterialMasterRows_();
-  const cutover = inventoryCutoverCompute_();
-  const machines = getRowsAsObjects("Machine_Master").filter(function(row) {
-    return !isDeleted_(row) && ["INACTIVE", "DISABLED", "ARCHIVED", "MERGED"].indexOf(String(row.status || "ACTIVE").toUpperCase()) === -1;
-  });
-  const materialIndex = {};
-  const inventoryRows = [];
+function productionAvailabilityActiveRow_(row) {
+  if (isDeleted_(row)) return false;
+  const status = String(row.status || "ACTIVE").trim().toUpperCase();
+  return ["DELETED", "VOID", "VOIDED", "INACTIVE", "DISABLED", "ARCHIVED", "REJECTED", "CANCELLED"].indexOf(status) === -1;
+}
 
-  materials.forEach(function(material) {
-    const category = normalizeMaterialCategoryForLedger_(material.category);
-    if (["STORE", "UNKNOWN", ""].indexOf(category) !== -1) return;
-    const item = {
-      materialId: material.materialId || "",
-      materialCode: material.materialCode || materialCode_(material.materialName),
-      materialName: material.materialName || material.materialCode || "",
-      category,
-      qtyKg: 0,
-      qtyIn: 0,
-      qtyOut: 0,
-      cutoverDate: REGENOS_INVENTORY_CUTOVER_DATE,
-      approvedOpeningKg: null,
-      postCutoverInKg: 0,
-      postCutoverOutKg: 0,
-      postCutoverAdjustmentKg: 0,
-      allHistoryBalanceKg: 0,
-      operationalBalanceKg: null,
-      openingMissing: true,
-      openingStatus: "OPENING_REQUIRED",
-      openingShortfallKg: 0,
-      minimumRunningBalanceKg: 0,
-      requiredOpeningKg: 0,
-      earliestMovement: "",
-      reconciliationRequired: true,
-    };
-    if (!item.materialName) return;
-    const stock = cutover.byIdentity[inventoryCutoverMaterialIdentity_(item)];
-    if (stock) {
-      item.approvedOpeningKg = stock.approvedOpeningKg;
-      item.postCutoverInKg = stock.postCutoverInKg;
-      item.postCutoverOutKg = stock.postCutoverOutKg;
-      item.postCutoverAdjustmentKg = stock.postCutoverAdjustmentKg;
-      item.allHistoryBalanceKg = stock.allHistoryBalanceKg;
-      item.operationalBalanceKg = stock.operationalBalanceKg;
-      item.openingMissing = stock.openingMissing;
-      item.openingStatus = stock.openingStatus;
-      item.openingShortfallKg = stock.openingShortfallKg;
-      item.minimumRunningBalanceKg = stock.minimumRunningBalanceKg;
-      item.requiredOpeningKg = stock.requiredOpeningKg;
-      item.earliestMovement = stock.earliestMovement;
-      item.reconciliationRequired = stock.reconciliationRequired || stock.openingStatus === "OPENING_INSUFFICIENT";
-      item.qtyKg = stock.operationalBalanceKg === null ? 0 : stock.operationalBalanceKg;
-      item.qtyIn = stock.postCutoverInKg;
-      item.qtyOut = stock.postCutoverOutKg;
+function productionAvailabilityCanonicalMaterial_(value) {
+  const raw = String(value || "").trim().replace(/\s+/g, " ");
+  const text = raw.toUpperCase();
+  if (!text) return "";
+  if ((text.indexOf("BUCKET") !== -1 && (text.indexOf("WHITE") !== -1 || text.indexOf("MIXED") !== -1)) || text === "BUCKET" || text === "BUCKETS") return "White Buckets";
+  if (["WHITE REGRIND (UNWASHED)", "WHITE REGRIND UNWASHED", "WHITE REGRIND", "UNWASHED REGRIND", "UNWASHED REGRINDS", "FLAKES - UNWASHED", "FLAKES UNWASHED", "UNWASHED WHITE FLAKES", "WHITE FLAKES (UNWASHED)", "GRINDER FLAKES", "REGRINDS", "WHITE FLAKES"].indexOf(text) !== -1 || (text.indexOf("REGRIND") !== -1 && text.indexOf("UNWASHED") !== -1)) return "White Regrind (Unwashed)";
+  if (["WHITE REGRIND (WASHED)", "WHITE REGRIND WASHED", "WASHED REGRIND", "WASHED WHITE FLAKES", "WHITE WASHED FLAKES", "FLAKES - SEMI-WASHED", "WASHED FLAKES"].indexOf(text) !== -1 || (text.indexOf("REGRIND") !== -1 && text.indexOf("WASHED") !== -1)) return "White Regrind (Washed)";
+  if (["WHITE SORTED REGRIND", "WHITE SORTED", "WHITE SORTED FLAKES", "SORTED WHITE", "SORTED MATERIAL"].indexOf(text) !== -1) return "White Sorted Regrind";
+  if (text === "COLOR REJECT") return "Colour Reject";
+  return raw;
+}
+
+function productionAvailabilityParseLines_(value) {
+  if (!value) return [];
+  let rows = value;
+  if (typeof value === "string") {
+    try {
+      rows = JSON.parse(value);
+    } catch (err) {
+      rows = String(value).split("+").map(function(part) {
+        const match = part.trim().match(/^(.+?):\s*([\d,.]+)/);
+        return match ? { material: match[1].trim(), quantityKg: num(String(match[2]).replace(/,/g, "")) } : null;
+      }).filter(function(row) { return row; });
     }
-    inventoryRows.push(item);
-    [item.materialId, item.materialCode, item.materialName].forEach(function(value) {
-      const key = compactInventoryMaterialKey_(value);
-      if (key) materialIndex[key] = item;
+  }
+  if (!Array.isArray(rows)) return [];
+  return rows.map(function(row) {
+    return {
+      material: productionAvailabilityCanonicalMaterial_(row && (row.material || row.materialName || row.materialType || row.sourceType || row.inputBucket || row.outputBucket)),
+      qtyKg: num(row && (row.quantityKg || row.qtyKg || row.consumeQty || row.quantity || row.netWeight)),
+    };
+  }).filter(function(row) { return row.material && row.qtyKg > 0; });
+}
+
+function productionAvailabilityFromOperationalRows_(sources) {
+  const availability = {};
+  const details = {
+    approvedRmBucketInwardKg: 0,
+    grinderBucketInputKg: 0,
+    grinderUnwashedOutputKg: 0,
+    washUnwashedInputKg: 0,
+    washWashedOutputKg: 0,
+    sorterWashedInputKg: 0,
+    directExtrusionWashedInputKg: 0,
+    sorterAcceptedOutputKg: 0,
+    extrusionSortedInputKg: 0,
+  };
+
+  function move(material, quantityKg) {
+    const canonical = productionAvailabilityCanonicalMaterial_(material);
+    if (!canonical || !num(quantityKg)) return;
+    availability[canonical] = num(availability[canonical]) + num(quantityKg);
+  }
+
+  function inputLines(row) {
+    return productionAvailabilityParseLines_(row.feedComposition || row.inputLines);
+  }
+
+  function outputLines(row) {
+    return productionAvailabilityParseLines_(row.outputComposition || row.outputLines);
+  }
+
+  (sources.rmRows || []).filter(productionAvailabilityActiveRow_).forEach(function(row) {
+    const qcStatus = String(row.qcStatus || "").trim().toUpperCase();
+    const status = String(row.status || "").trim().toUpperCase();
+    const approved = qcStatus === "APPROVED" || (!qcStatus && status !== "QC_PENDING");
+    if (!approved || status === "HOLD" || status === "REJECTED") return;
+    let lines = productionAvailabilityParseLines_(row.materialLines || row.materialLinesJson || row.materialSummary || row.material);
+    if (!lines.length) {
+      const material = productionAvailabilityCanonicalMaterial_(row.material || row.category);
+      const qtyKg = num(row.netWeight || row.quantityKg);
+      if (material && qtyKg > 0) lines = [{ material, qtyKg }];
+    }
+    lines.forEach(function(line) {
+      move(line.material, line.qtyKg);
+      if (line.material === "White Buckets") details.approvedRmBucketInwardKg += line.qtyKg;
     });
   });
 
-  const extrusionRefs = getRowsAsObjects("Extrusion_Batches").map(function(row) {
+  (sources.grinderRows || []).filter(productionAvailabilityActiveRow_).forEach(function(row) {
+    inputLines(row).forEach(function(line) {
+      move(line.material, -line.qtyKg);
+      if (line.material === "White Buckets") details.grinderBucketInputKg += line.qtyKg;
+    });
+    const outputs = outputLines(row);
+    if (outputs.length) {
+      outputs.forEach(function(line) {
+        move(line.material, line.qtyKg);
+        if (line.material === "White Regrind (Unwashed)") details.grinderUnwashedOutputKg += line.qtyKg;
+      });
+    } else {
+      const qtyKg = num(row.regrindOutputKg);
+      if (qtyKg > 0) {
+        move("White Regrind (Unwashed)", qtyKg);
+        details.grinderUnwashedOutputKg += qtyKg;
+      }
+    }
+  });
+
+  (sources.washRows || []).filter(productionAvailabilityActiveRow_).forEach(function(row) {
+    inputLines(row).forEach(function(line) {
+      move(line.material, -line.qtyKg);
+      if (line.material === "White Regrind (Unwashed)") details.washUnwashedInputKg += line.qtyKg;
+    });
+    const outputs = outputLines(row);
+    if (outputs.length) {
+      outputs.forEach(function(line) {
+        move(line.material, line.qtyKg);
+        if (line.material === "White Regrind (Washed)") details.washWashedOutputKg += line.qtyKg;
+      });
+    } else {
+      const qtyKg = num(row.washedOutputKg);
+      if (qtyKg > 0) {
+        move("White Regrind (Washed)", qtyKg);
+        details.washWashedOutputKg += qtyKg;
+      }
+    }
+  });
+
+  (sources.sortingRows || []).filter(productionAvailabilityActiveRow_).forEach(function(row) {
+    inputLines(row).forEach(function(line) {
+      move(line.material, -line.qtyKg);
+      if (line.material === "White Regrind (Washed)") details.sorterWashedInputKg += line.qtyKg;
+    });
+    const outputs = outputLines(row);
+    if (outputs.length) {
+      outputs.forEach(function(line) {
+        move(line.material, line.qtyKg);
+        if (line.material === "White Sorted Regrind") details.sorterAcceptedOutputKg += line.qtyKg;
+      });
+    } else {
+      const qtyKg = num(row.acceptedQtyKg) || num(row.whiteSortedKg) + num(row.allMixSortedKg) + num(row.whiteGreyKg);
+      if (qtyKg > 0) {
+        move("White Sorted Regrind", qtyKg);
+        details.sorterAcceptedOutputKg += qtyKg;
+      }
+    }
+  });
+
+  (sources.extrusionRows || []).filter(productionAvailabilityActiveRow_).forEach(function(row) {
+    inputLines(row).forEach(function(line) {
+      move(line.material, -line.qtyKg);
+      if (line.material === "White Regrind (Washed)") details.directExtrusionWashedInputKg += line.qtyKg;
+      if (line.material === "White Sorted Regrind") details.extrusionSortedInputKg += line.qtyKg;
+    });
+    const outputs = outputLines(row);
+    if (outputs.length) {
+      outputs.forEach(function(line) { move(line.material, line.qtyKg); });
+    } else {
+      [["Lumps", row.lumpsKg], ["Purging", row.purgingKg], ["Rework Material", row.reworkGranulesKg]].forEach(function(item) {
+        if (num(item[1]) > 0) move(item[0], num(item[1]));
+      });
+    }
+  });
+
+  Object.keys(availability).forEach(function(key) { availability[key] = round2(availability[key]); });
+  Object.keys(details).forEach(function(key) { details[key] = round2(details[key]); });
+  const processAvailability = {
+    whiteBucketsKg: round2(details.approvedRmBucketInwardKg - details.grinderBucketInputKg),
+    unwashedRegrindKg: round2(details.grinderUnwashedOutputKg - details.washUnwashedInputKg),
+    washedRegrindKg: round2(details.washWashedOutputKg - details.sorterWashedInputKg - details.directExtrusionWashedInputKg),
+    sortedRegrindKg: round2(details.sorterAcceptedOutputKg - details.extrusionSortedInputKg),
+  };
+  availability["White Buckets"] = processAvailability.whiteBucketsKg;
+  availability["White Regrind (Unwashed)"] = processAvailability.unwashedRegrindKg;
+  availability["White Regrind (Washed)"] = processAvailability.washedRegrindKg;
+  availability["White Sorted Regrind"] = processAvailability.sortedRegrindKg;
+  return {
+    availability,
+    processAvailability,
+    details,
+    inventoryLots: Object.keys(availability).map(function(material) {
+      return { lotId: "PROCESS-" + materialCode_(material), sourceType: "OPERATIONAL_FLOW", material, availableKg: round2(availability[material]) };
+    }),
+  };
+}
+
+function getProductionEntryBootstrap() {
+  const startedAt = Date.now();
+  const materials = getMaterialMasterRows_();
+  const machines = getRowsAsObjects("Machine_Master").filter(function(row) {
+    return !isDeleted_(row) && ["INACTIVE", "DISABLED", "ARCHIVED", "MERGED"].indexOf(String(row.status || "ACTIVE").toUpperCase()) === -1;
+  });
+  const rmRows = getRowsAsObjects("RM_Inward");
+  const grinderRows = getRowsAsObjects("Grinder_Batches");
+  const washRows = getRowsAsObjects("Wash_Batches");
+  const sortingRows = getRowsAsObjects("Sorting_Batches");
+  const extrusionRows = getRowsAsObjects("Extrusion_Batches");
+  const availability = productionAvailabilityFromOperationalRows_({ rmRows, grinderRows, washRows, sortingRows, extrusionRows });
+  const extrusionRefs = extrusionRows.map(function(row) {
     return { extrusionBatchId: row.extrusionBatchId || row.batchId || "" };
   }).filter(function(row) { return row.extrusionBatchId; });
 
@@ -7127,14 +7259,10 @@ function getProductionEntryBootstrap() {
     fgGrades: materials.filter(function(row) {
       return normalizeMaterialCategoryForLedger_(row.category) === "FG" && materialMasterFlag_(row, ["appearsInExtrusionOutput"]) === "YES";
     }),
-    inventoryRows: inventoryRows.map(function(row) {
-      return Object.assign({}, row, {
-        qtyKg: round2(row.qtyKg),
-        qtyIn: round2(row.qtyIn),
-        qtyOut: round2(row.qtyOut),
-      });
-    }),
     extrusionRefs,
+    processAvailability: availability.processAvailability,
+    processAvailabilityDetails: availability.details,
+    inventoryLots: availability.inventoryLots,
     generatedAt: new Date().toISOString(),
     elapsedMs: Date.now() - startedAt,
   });

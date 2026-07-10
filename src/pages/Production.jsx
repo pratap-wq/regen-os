@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiCall } from "../api/api";
 import FormSection from "../components/FormSection";
 import ManufacturingInputTable from "../components/ManufacturingInputTable";
@@ -83,7 +83,13 @@ export default function Production() {
   const [extrusionRows, setExtrusionRows] = useState([]);
   const [materialRows, setMaterialRows] = useState([]);
   const [machineRows, setMachineRows] = useState([]);
-  const [inventoryRows, setInventoryRows] = useState([]);
+  const [inventoryLots, setInventoryLots] = useState([]);
+  const [processAvailability, setProcessAvailability] = useState({
+    whiteBucketsKg: 0,
+    unwashedRegrindKg: 0,
+    washedRegrindKg: 0,
+    sortedRegrindKg: 0,
+  });
 
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -102,7 +108,8 @@ export default function Production() {
       const materialData = res.materials || [];
       setMachineRows(res.machines || []);
       setExtrusionRows(res.extrusionRefs || []);
-      setInventoryRows(res.inventoryRows || []);
+      setInventoryLots(res.inventoryLots || []);
+      setProcessAvailability(res.processAvailability || {});
       setMaterialRows(materialData);
       if (!preserveOutputRows) {
         setGrinderOutputRows(defaultOutputRowsFor(materialData, "GRINDER"));
@@ -115,35 +122,17 @@ export default function Production() {
     }
   }
 
-  const inventoryLots = useMemo(() => {
-    return inventoryRows.map((row) => ({
-      lotId: row.materialCode || row.materialName,
-      material: row.materialName,
-      availableKg: Number(row.qtyKg || 0),
-      sourceType: "INVENTORY_LEDGER",
-    }));
-  }, [inventoryRows]);
-
   function n(v) {
     return Number(v || 0);
   }
 
-  function ledgerCard(material, label) {
-    const row = inventoryRows.find(
-      (item) => materialKey(item.materialName) === materialKey(material)
-    );
-    const balance = Number(row?.qtyKg || 0);
-    const qtyIn = Number(row?.qtyIn || 0);
-    const qtyOut = Number(row?.qtyOut || 0);
-    const openingMissing = row?.openingMissing === true;
-    const openingInsufficient = row?.openingStatus === "OPENING_INSUFFICIENT";
-    const zeroOpening = row?.openingStatus === "ZERO_OPENING_SUFFICIENT" || row?.openingStatus === "NO_MOVEMENT_ZERO_OPENING";
+  function availabilityCard(field, label) {
+    const availableKg = Number(processAvailability?.[field] || 0);
     return (
       <KpiCard
-        title={`${label} Ledger Balance`}
-        value={openingInsufficient ? "Opening Balance Insufficient" : openingMissing ? "Opening Balance Required" : `${balance.toFixed(0)} Kg`}
-        tone={openingInsufficient || openingMissing || balance < 0 ? "warning" : "neutral"}
-        helper={`${openingInsufficient ? `Shortfall: ${formatKg(row?.openingShortfallKg)} | ` : openingMissing ? "Post-cutover stock is shown for review only | " : zeroOpening ? "Zero Opening | " : balance < 0 ? "Reconciliation Required | " : "Operational Balance | "}Opening: ${row?.approvedOpeningKg == null ? "0 kg" : formatKg(row.approvedOpeningKg)} | Post-cutover IN: ${formatKg(row?.postCutoverInKg ?? qtyIn)} | Post-cutover OUT: ${formatKg(row?.postCutoverOutKg ?? qtyOut)}`}
+        title={`${label} Available`}
+        value={`${availableKg.toFixed(0)} Kg`}
+        tone={availableKg < 0 ? "warning" : "neutral"}
       />
     );
   }
@@ -712,10 +701,10 @@ export default function Production() {
       subtitle="One shift entry screen for Grinder, Washline, Colour Sorter and Extrusion. Raw Material and Finished Goods quality testing is performed separately in the Quality Workbench."
     >
       <div className="factory-kpi-grid">
-        {ledgerCard("White Buckets", "White Buckets")}
-        {ledgerCard("White Regrind (Unwashed)", "Unwashed Regrind")}
-        {ledgerCard("White Regrind (Washed)", "Washed Regrind")}
-        {ledgerCard("White Sorted Regrind", "Sorted Regrind")}
+        {availabilityCard("whiteBucketsKg", "White Buckets")}
+        {availabilityCard("unwashedRegrindKg", "Unwashed Regrind")}
+        {availabilityCard("washedRegrindKg", "Washed Regrind")}
+        {availabilityCard("sortedRegrindKg", "Sorted Regrind")}
       </div>
 
       <div style={ledgerBalanceNote}>
@@ -1090,10 +1079,6 @@ function defaultOutputRowsFor(materialRows, stage) {
 
 function isYes(value) {
   return ["YES", "TRUE", "Y", "1", "ON"].includes(String(value || "").toUpperCase());
-}
-
-function formatKg(value) {
-  return `${Number(value || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })} kg`;
 }
 
 function SelectField({ label, name, value, onChange, options }) {

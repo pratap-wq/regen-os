@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiCall } from "../api/api";
 import { formatDate } from "../utils/date";
 import DataTable from "../components/DataTable";
@@ -40,84 +40,89 @@ const SOURCE_TYPE_OPTIONS = [
   "ADDITIVE",
 ];
 const PROCESS_OPTIONS = ["Grinder", "Wash", "Sorting", "Extrusion"];
+const HISTORY_TIMEOUT_MS = 20000;
 
 export default function ProductionHistory() {
   const now = new Date();
-
-  const [grinderRows, setGrinderRows] = useState([]);
-  const [washRows, setWashRows] = useState([]);
-  const [sortingRows, setSortingRows] = useState([]);
-  const [extrusionRows, setExtrusionRows] = useState([]);
-
   const [month, setMonth] = useState(
     String(now.getMonth() + 1).padStart(2, "0")
   );
   const [year, setYear] = useState(String(now.getFullYear()));
   const [dateFilterMode, setDateFilterMode] = useState("production");
+  const [stage, setStage] = useState("ALL");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [pageNumber, setPageNumber] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [history, setHistory] = useState(emptyProductionHistory());
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [status, setStatus] = useState("");
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [editMastersLoaded, setEditMastersLoaded] = useState(false);
   const [masterRows, setMasterRows] = useState({
     machines: [],
     productionMaterials: [],
     grades: [],
   });
+  const requestIdRef = useRef(0);
+  const periodMonth = `${year}-${month}`;
+
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      setSearch(searchInput.trim());
+      setPageNumber(1);
+    }, 350);
+    return () => clearTimeout(timeoutId);
+  }, [searchInput]);
 
   useEffect(() => {
     loadData();
-    loadEditMasters();
-  }, []);
-
-  async function safeList(fn) {
-    try {
-      const res = await apiCall({ fn });
-      return res.rows || [];
-    } catch (err) {
-      console.log(fn, err);
-      return [];
-    }
-  }
+  }, [periodMonth, stage, search, pageNumber, pageSize, dateFilterMode]);
 
   async function loadData() {
+    const requestId = ++requestIdRef.current;
+    setLoading(true);
+    setLoadError("");
     try {
-      const [grinder, wash, sorting, extrusion] = await Promise.all([
-        safeList("grinder.list"),
-        safeList("wash.list"),
-        safeList("sorting.list"),
-        safeList("extrusion.list"),
-      ]);
-
-      setGrinderRows(
-        grinder.filter((r) => String(r.status || "").toUpperCase() !== "DELETED")
-      );
-
-      setWashRows(
-        wash.filter((r) => String(r.status || "").toUpperCase() !== "DELETED")
-      );
-
-      setSortingRows(
-        sorting.filter((r) => String(r.status || "").toUpperCase() !== "DELETED")
-      );
-
-      setExtrusionRows(
-        extrusion.filter(
-          (r) => String(r.status || "").toUpperCase() !== "DELETED"
-        )
-      );
+      const res = await productionHistoryCall({
+        periodMonth,
+        stage,
+        search,
+        page: pageNumber,
+        pageSize,
+        dateMode: dateFilterMode,
+      });
+      if (!res || res.ok === false) throw new Error(res?.error || "Failed loading production history");
+      if (requestId !== requestIdRef.current) return null;
+      setHistory(res);
+      if (Number(res.pagination?.page || 1) !== pageNumber) {
+        setPageNumber(Number(res.pagination?.page || 1));
+      }
+      return res;
     } catch (err) {
       console.log(err);
-      setStatus("Failed loading production history");
+      if (requestId === requestIdRef.current) {
+        setLoadError(err.message || "Failed loading production history");
+      }
+      return null;
+    } finally {
+      if (requestId === requestIdRef.current) setLoading(false);
     }
   }
 
   async function loadEditMasters() {
+    if (editMastersLoaded) return masterRows;
     const [machines, productionMaterials, grades] = await Promise.all([
       safeMasterList("machine"),
       safeProductionMaterials(),
       safeMasterList("productGrade"),
     ]);
-
-    setMasterRows({ machines, productionMaterials, grades });
+    const next = { machines, productionMaterials, grades };
+    setMasterRows(next);
+    setEditMastersLoaded(true);
+    return next;
   }
 
   async function safeMasterList(masterType) {
@@ -150,19 +155,6 @@ export default function ProductionHistory() {
     return text.slice(0, 10);
   }
 
-  function periodFromValue(value) {
-    if (!value) return "";
-    const text = String(value).trim();
-    if (/^\d{4}-\d{2}/.test(text)) return text.slice(0, 7);
-    const cleanDate = dateForInput(text);
-    if (/^\d{4}-\d{2}/.test(cleanDate)) return cleanDate.slice(0, 7);
-    const parsed = new Date(text);
-    if (!isNaN(parsed.getTime())) {
-      return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, "0")}`;
-    }
-    return "";
-  }
-
   function n(value) {
     return Number(value || 0);
   }
@@ -171,160 +163,13 @@ export default function ProductionHistory() {
     return (Number(kg || 0) / 1000).toFixed(1);
   }
 
-  function rowFilterPeriod(row) {
-    if (dateFilterMode === "created") {
-      return periodFromValue(row.createdAt);
-    }
-
-    return (
-      periodFromValue(row.date) ||
-      periodFromValue(row.periodMonth) ||
-      periodFromValue(row.source?.periodMonth)
-    );
-  }
-
-  function monthMatch(row) {
-    return rowFilterPeriod(row) === `${year}-${month}`;
-  }
-
-  function washOutput(row) {
-    return n(row.washedOutputKg);
-  }
-
-  function grinderOutput(row) {
-    return n(row.regrindOutputKg);
-  }
-
-  function sortingOutput(row) {
-    return (
-      n(row.acceptedQtyKg) ||
-      n(row.whiteSortedKg) +
-        n(row.allMixSortedKg) +
-        n(row.whiteGreyKg)
-    );
-  }
-
-  function extrusionInput(row) {
-    return n(row.inputWeightKg || row.totalInputKg);
-  }
-
-  function extrusionOutput(row) {
-    return n(row.fgOutputKg);
-  }
-
   const rows = useMemo(() => {
-    const all = [];
+    return (history.rows || []).map(productionHistoryDisplayRow);
+  }, [history.rows]);
 
-    grinderRows.forEach((r) => {
-      all.push({
-        id: r.grinderBatchId || r.batchId || r.id || "",
-        process: "Grinder",
-        updateFn: "grinder.update",
-        idKey: "grinderBatchId",
-        date: r.date,
-        periodMonth: r.periodMonth,
-        createdAt: r.createdAt,
-        shift: r.shift,
-        material: r.inputMaterial,
-        machine: r.machine,
-        inputKg: n(r.inputWeightKg),
-        outputKg: grinderOutput(r),
-        recovery:
-          n(r.inputWeightKg) > 0
-            ? (grinderOutput(r) / n(r.inputWeightKg)) * 100
-            : 0,
-        operator: r.operatorName,
-        supervisor: r.supervisorName,
-        status: r.status,
-        source: r,
-      });
-    });
-
-    washRows.forEach((r) => {
-      all.push({
-        id: r.washBatchId || r.id || "",
-        process: "Wash",
-        updateFn: "wash.update",
-        idKey: "washBatchId",
-        date: r.date,
-        periodMonth: r.periodMonth,
-        createdAt: r.createdAt,
-        shift: r.shift,
-        material: r.inputMaterial,
-        machine: r.machine,
-        inputKg: n(r.inputWeightKg),
-        outputKg: washOutput(r),
-        recovery:
-          n(r.inputWeightKg) > 0
-            ? (washOutput(r) / n(r.inputWeightKg)) * 100
-            : 0,
-        operator: r.operatorName,
-        supervisor: r.supervisorName,
-        status: r.status,
-        source: r,
-      });
-    });
-
-    sortingRows.forEach((r) => {
-      const output = sortingOutput(r);
-
-      all.push({
-        id: r.sortingBatchId || r.id || "",
-        process: "Sorting",
-        updateFn: "sorting.update",
-        idKey: "sortingBatchId",
-        date: r.date,
-        periodMonth: r.periodMonth,
-        createdAt: r.createdAt,
-        shift: r.shift,
-        material: r.inputMaterial,
-        machine: r.machine,
-        inputKg: n(r.inputWeightKg),
-        outputKg: output,
-        recovery: n(r.inputWeightKg) > 0 ? (output / n(r.inputWeightKg)) * 100 : 0,
-        operator: r.operatorName,
-        supervisor: r.supervisorName,
-        status: r.status,
-        source: r,
-      });
-    });
-
-    extrusionRows.forEach((r) => {
-      const input = extrusionInput(r);
-      const output = extrusionOutput(r);
-
-      all.push({
-        id: r.extrusionBatchId || r.id || "",
-        process: "Extrusion",
-        updateFn: "extrusion.update",
-        idKey: "extrusionBatchId",
-        date: r.date,
-        periodMonth: r.periodMonth,
-        createdAt: r.createdAt,
-        shift: r.shift,
-        material: r.inputMaterial || r.productionGrade,
-        machine: r.machine,
-        inputKg: input,
-        outputKg: output,
-        recovery: input > 0 ? (output / input) * 100 : 0,
-        operator: r.operatorName,
-        supervisor: r.supervisorName,
-        status: r.status,
-        source: r,
-      });
-    });
-
-    return all
-      .filter((r) => monthMatch(r))
-      .sort((a, b) =>
-        String(dateForInput((dateFilterMode === "created" ? b.createdAt : b.date) || b.createdAt || "")).localeCompare(
-          String(dateForInput((dateFilterMode === "created" ? a.createdAt : a.date) || a.createdAt || ""))
-        )
-      );
-  }, [grinderRows, washRows, sortingRows, extrusionRows, month, year, dateFilterMode]);
-
-  const totalInput = rows.reduce((s, r) => s + n(r.inputKg), 0);
-  const totalOutput = rows.reduce((s, r) => s + n(r.outputKg), 0);
+  const selectedTotals = productionHistorySelectedTotals(history.totals, stage);
+  const totalInput = selectedTotals.inputKg;
+  const totalOutput = selectedTotals.outputKg;
   const avgRecovery = totalInput > 0 ? (totalOutput / totalInput) * 100 : 0;
 
   function getEditSections(row) {
@@ -588,15 +433,42 @@ export default function ProductionHistory() {
     return source;
   }
 
-  function editRow(row) {
-    setEditing({
-      process: row.process,
-      updateFn: row.updateFn,
-      idKey: row.idKey,
-      id: row.id,
-      fields: prepareEditFields(row),
-      sections: getEditSections(row),
+  async function loadHistorySource(row) {
+    const res = await productionHistoryCall({
+      periodMonth,
+      stage: row.stage,
+      recordId: row.id,
+      page: 1,
+      pageSize: 1,
+      dateMode: dateFilterMode,
+      includeSource: true,
     });
+    if (!res || res.ok === false) throw new Error(res?.error || "Unable to load the production record");
+    const match = (res.rows || []).find((item) => String(item.recordId || "") === String(row.id || ""));
+    if (!match?.source) throw new Error(`Production record not found: ${row.id}`);
+    return match.source;
+  }
+
+  async function editRow(row) {
+    setStatus("Loading edit details...");
+    try {
+      const [source] = await Promise.all([
+        loadHistorySource(row),
+        loadEditMasters(),
+      ]);
+      const detailedRow = { ...row, source };
+      setEditing({
+        process: row.process,
+        updateFn: row.updateFn,
+        idKey: row.idKey,
+        id: row.id,
+        fields: prepareEditFields(detailedRow),
+        sections: getEditSections(detailedRow),
+      });
+      setStatus("");
+    } catch (err) {
+      setStatus(err.message || "Unable to load edit details");
+    }
   }
 
   function onEditChange(key, value) {
@@ -641,7 +513,7 @@ export default function ProductionHistory() {
 
       setEditing(null);
       setStatus(`${editing.process} ${editing.id} updated successfully`);
-      loadData();
+      await loadData();
     } catch (err) {
       alert(err.message);
     } finally {
@@ -654,8 +526,10 @@ export default function ProductionHistory() {
     if (!ok) return;
 
     try {
+      setStatus(`Loading ${row.process} ${row.id}...`);
+      const source = await loadHistorySource(row);
       const res = await apiCall({
-        ...row.source,
+        ...source,
         fn: row.updateFn,
         [row.idKey]: row.id,
         status: "DELETED",
@@ -667,7 +541,7 @@ export default function ProductionHistory() {
       }
 
       setStatus(`${row.process} ${row.id} deleted`);
-      loadData();
+      await loadData();
     } catch (err) {
       alert(err.message);
     }
@@ -746,7 +620,7 @@ export default function ProductionHistory() {
         </div>
 
         <div style={filters}>
-          <select value={month} onChange={(e) => setMonth(e.target.value)} style={filter}>
+          <select value={month} onChange={(e) => { setMonth(e.target.value); setPageNumber(1); }} style={filter}>
             <option value="01">Jan</option>
             <option value="02">Feb</option>
             <option value="03">Mar</option>
@@ -761,7 +635,7 @@ export default function ProductionHistory() {
             <option value="12">Dec</option>
           </select>
 
-          <select value={year} onChange={(e) => setYear(e.target.value)} style={filter}>
+          <select value={year} onChange={(e) => { setYear(e.target.value); setPageNumber(1); }} style={filter}>
             <option>2025</option>
             <option>2026</option>
             <option>2027</option>
@@ -769,27 +643,51 @@ export default function ProductionHistory() {
 
           <select
             value={dateFilterMode}
-            onChange={(e) => setDateFilterMode(e.target.value)}
+            onChange={(e) => { setDateFilterMode(e.target.value); setPageNumber(1); }}
             style={filter}
             title="Choose whether the month filter uses production date or saved date"
           >
             <option value="production">Production Date</option>
             <option value="created">Created Date</option>
           </select>
+
+          <select value={stage} onChange={(e) => { setStage(e.target.value); setPageNumber(1); }} style={filter}>
+            <option value="ALL">All Stages</option>
+            <option value="GRINDER">Grinder</option>
+            <option value="WASH">Wash</option>
+            <option value="SORTING">Sorting</option>
+            <option value="EXTRUSION">Extrusion</option>
+          </select>
+
+          <input
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search history..."
+            style={filter}
+          />
+
+          <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPageNumber(1); }} style={filter}>
+            <option value={25}>25 / page</option>
+            <option value={50}>50 / page</option>
+            <option value={100}>100 / page</option>
+          </select>
         </div>
       </div>
 
       <div style={noteStyle}>
-        History is filtered by {dateFilterMode === "created" ? "created date" : "production date"}.
+        History is filtered by {dateFilterMode === "created" ? "created date" : "production date"}. {" "}
+        Grinder {n(history.stageCounts?.grinder)} | Wash {n(history.stageCounts?.wash)} | Sorting {n(history.stageCounts?.sorting)} | Extrusion {n(history.stageCounts?.extrusion)} | Backend {n(history.elapsedMs)} ms
       </div>
 
       <div style={kpiGrid}>
-        <KPI title="Entries" value={rows.length} />
+        <KPI title="Entries" value={n(history.pagination?.totalRows)} />
         <KPI title="Input" value={`${ton(totalInput)} T`} />
         <KPI title="Output" value={`${ton(totalOutput)} T`} />
         <KPI title="Average Recovery" value={`${avgRecovery.toFixed(1)}%`} />
       </div>
 
+      {loading && <div style={noteStyle}>Loading production history...</div>}
+      {loadError && <div style={errorStyle}>{loadError}</div>}
       {status && <div style={statusStyle}>{status}</div>}
 
       <DataTable
@@ -799,7 +697,8 @@ export default function ProductionHistory() {
           "id",
           "process",
           "shift",
-          "material",
+          "inputMaterial",
+          "outputMaterial",
           "machine",
           "operator",
           "supervisor",
@@ -821,7 +720,8 @@ export default function ProductionHistory() {
           { key: "process", label: "Process" },
           { key: "id", label: "Batch" },
           { key: "shift", label: "Shift" },
-          { key: "material", label: "Material" },
+          { key: "inputMaterial", label: "Input Material" },
+          { key: "outputMaterial", label: "Output Material" },
           { key: "machine", label: "Machine" },
           {
             key: "inputKg",
@@ -836,6 +736,12 @@ export default function ProductionHistory() {
             renderExport: (r) => Number(r.outputKg || 0).toFixed(0),
           },
           {
+            key: "wasteKg",
+            label: "Waste Kg",
+            render: (r) => Number(r.wasteKg || 0).toFixed(0),
+            renderExport: (r) => Number(r.wasteKg || 0).toFixed(0),
+          },
+          {
             key: "recovery",
             label: "Recovery %",
             render: (r) => `${Number(r.recovery || 0).toFixed(1)}%`,
@@ -847,7 +753,28 @@ export default function ProductionHistory() {
         ]}
         onEdit={editRow}
         onDelete={deleteRow}
+        hideFilters
       />
+
+      <div style={paginationBar}>
+        <button
+          onClick={() => setPageNumber((value) => Math.max(1, value - 1))}
+          disabled={loading || n(history.pagination?.page) <= 1}
+          style={paginationButton}
+        >
+          Previous
+        </button>
+        <span>
+          Page <b>{n(history.pagination?.page) || 1}</b> of <b>{n(history.pagination?.totalPages) || 1}</b> · {n(history.pagination?.totalRows)} records
+        </span>
+        <button
+          onClick={() => setPageNumber((value) => Math.min(n(history.pagination?.totalPages) || 1, value + 1))}
+          disabled={loading || n(history.pagination?.page) >= n(history.pagination?.totalPages)}
+          style={paginationButton}
+        >
+          Next
+        </button>
+      </div>
 
       {editing && (
         <div style={modalOverlay}>
@@ -906,6 +833,88 @@ export default function ProductionHistory() {
         </div>
       )}
     </div>
+  );
+}
+
+function emptyProductionHistory() {
+  return {
+    ok: true,
+    periodMonth: "",
+    elapsedMs: 0,
+    totals: {},
+    stageCounts: {},
+    rows: [],
+    pagination: { page: 1, pageSize: 50, totalRows: 0, totalPages: 1 },
+  };
+}
+
+async function productionHistoryCall(payload) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error("Production History timed out. Check the Apps Script deployment and try again."));
+    }, HISTORY_TIMEOUT_MS);
+  });
+  return Promise.race([
+    apiCall({ fn: "production.historySummary", ...payload }),
+    timeout,
+  ]).finally(() => clearTimeout(timeoutId));
+}
+
+function productionHistoryDisplayRow(row = {}) {
+  const process = {
+    GRINDER: "Grinder",
+    WASH: "Wash",
+    SORTING: "Sorting",
+    EXTRUSION: "Extrusion",
+  }[String(row.stage || "").toUpperCase()] || row.stage || "";
+  const route = {
+    Grinder: ["grinder.update", "grinderBatchId"],
+    Wash: ["wash.update", "washBatchId"],
+    Sorting: ["sorting.update", "sortingBatchId"],
+    Extrusion: ["extrusion.update", "extrusionBatchId"],
+  }[process] || ["", ""];
+
+  return {
+    ...row,
+    stage: String(row.stage || "").toUpperCase(),
+    id: row.recordId || "",
+    process,
+    updateFn: route[0],
+    idKey: route[1],
+    material: row.inputMaterial || "",
+    recovery: Number(row.recoveryPercent || 0),
+    operator: row.operatorName || "",
+    supervisor: row.supervisorName || "",
+  };
+}
+
+function productionHistorySelectedTotals(totals = {}, stage = "ALL") {
+  const byStage = {
+    GRINDER: {
+      inputKg: Number(totals.grinderInputKg || 0),
+      outputKg: Number(totals.grinderOutputKg || 0),
+    },
+    WASH: {
+      inputKg: Number(totals.washInputKg || 0),
+      outputKg: Number(totals.washOutputKg || 0),
+    },
+    SORTING: {
+      inputKg: Number(totals.sortingInputKg || 0),
+      outputKg: Number(totals.sortingOutputKg || 0),
+    },
+    EXTRUSION: {
+      inputKg: Number(totals.extrusionInputKg || 0),
+      outputKg: Number(totals.fgProducedKg || 0),
+    },
+  };
+  if (byStage[stage]) return byStage[stage];
+  return Object.values(byStage).reduce(
+    (sum, values) => ({
+      inputKg: sum.inputKg + values.inputKg,
+      outputKg: sum.outputKg + values.outputKg,
+    }),
+    { inputKg: 0, outputKg: 0 }
   );
 }
 
@@ -1183,6 +1192,33 @@ const statusStyle = {
   padding: 12,
   borderRadius: 10,
   fontWeight: 700,
+};
+
+const errorStyle = {
+  ...statusStyle,
+  background: "#fef2f2",
+  color: "#991b1b",
+  border: "1px solid #fecaca",
+};
+
+const paginationBar = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 14,
+  marginTop: 14,
+  flexWrap: "wrap",
+  color: "#475569",
+};
+
+const paginationButton = {
+  border: "1px solid #cbd5e1",
+  background: "white",
+  color: "#0f766e",
+  borderRadius: 8,
+  padding: "8px 14px",
+  fontWeight: 800,
+  cursor: "pointer",
 };
 
 const modalOverlay = {

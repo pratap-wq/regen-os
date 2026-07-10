@@ -8,6 +8,7 @@ export default function DataTable({
   searchFields = [],
   onEdit,
   onDelete,
+  hideFilters = false,
 }) {
   const [search, setSearch] = useState("");
   const [fromDate, setFromDate] = useState("");
@@ -226,30 +227,34 @@ export default function DataTable({
         </div>
 
         <div style={toolbarStyle}>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search all..."
-            style={searchStyle}
-          />
+          {!hideFilters && (
+            <>
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search all..."
+                style={searchStyle}
+              />
 
-          <input
-            type="date"
-            value={fromDate}
-            onChange={(e) => setFromDate(e.target.value)}
-            style={dateStyle}
-          />
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                style={dateStyle}
+              />
 
-          <input
-            type="date"
-            value={toDate}
-            onChange={(e) => setToDate(e.target.value)}
-            style={dateStyle}
-          />
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                style={dateStyle}
+              />
 
-          <button onClick={clearFilters} style={secondaryButton}>
-            Clear
-          </button>
+              <button onClick={clearFilters} style={secondaryButton}>
+                Clear
+              </button>
+            </>
+          )}
 
           <button onClick={exportCSV} style={exportStyle}>
             Export Excel

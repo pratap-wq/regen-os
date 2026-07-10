@@ -84,6 +84,7 @@ function doGet(e) {
     if (p.fn === "grinder.add") return addGrinderBatch(p);
     if (p.fn === "grinder.list") return listGrinderBatches(p);
     if (p.fn === "grinder.update") return updateGrinderBatch(p);
+    if (p.fn === "production.historySummary") return getProductionHistorySummary(p);
 
     // Wash
     if (p.fn === "wash.add") return addWashBatch(p);
@@ -634,6 +635,7 @@ function debugRoutes() {
       "grinder.add",
       "grinder.list",
       "grinder.update",
+      "production.historySummary",
       "wash.add",
       "wash.list",
       "wash.update",
@@ -7510,6 +7512,272 @@ function ensureGrinderBatchesSheet_() {
 function listGrinderBatches(data = {}) {
   ensureGrinderBatchesSheet_();
   return listMaster("Grinder_Batches");
+}
+
+function getProductionHistorySummary(data = {}) {
+  const startedAt = Date.now();
+  const periodMonth = normalizeMonthClosePeriod_(data.periodMonth || todayYmd());
+  const requestedStage = productionHistoryStage_(data.stage);
+  const search = String(data.search || "").trim().toLowerCase();
+  const recordId = String(data.recordId || "").trim();
+  const includeSource = String(data.includeSource || "").toUpperCase() === "TRUE" || data.includeSource === true;
+  const dateMode = String(data.dateMode || "PRODUCTION").trim().toUpperCase() === "CREATED"
+    ? "CREATED"
+    : "PRODUCTION";
+  const requestedPage = Math.max(1, parseInt(data.page, 10) || 1);
+  const pageSize = Math.min(200, Math.max(1, parseInt(data.pageSize, 10) || 50));
+
+  if (!periodMonth) {
+    return output({ ok: false, error: "production.historySummary requires a valid periodMonth" });
+  }
+
+  try {
+    const stageSources = [
+      { stage: "GRINDER", sheet: "Grinder_Batches" },
+      { stage: "WASH", sheet: "Wash_Batches" },
+      { stage: "SORTING", sheet: "Sorting_Batches" },
+      { stage: "EXTRUSION", sheet: "Extrusion_Batches" },
+    ];
+    const rowsByStage = {};
+
+    stageSources.forEach(function(source) {
+      rowsByStage[source.stage] = getRowsAsObjects(source.sheet)
+        .filter(function(row) { return !isDeleted_(row); })
+        .filter(function(row) {
+          return productionHistoryPeriod_(row, dateMode) === periodMonth;
+        });
+    });
+
+    const totals = {
+      grinderInputKg: 0,
+      grinderOutputKg: 0,
+      washInputKg: 0,
+      washOutputKg: 0,
+      sortingInputKg: 0,
+      sortingOutputKg: 0,
+      extrusionInputKg: 0,
+      fgProducedKg: 0,
+    };
+    const stageCounts = {
+      grinder: rowsByStage.GRINDER.length,
+      wash: rowsByStage.WASH.length,
+      sorting: rowsByStage.SORTING.length,
+      extrusion: rowsByStage.EXTRUSION.length,
+    };
+    const normalizedRows = [];
+
+    stageSources.forEach(function(source) {
+      rowsByStage[source.stage].forEach(function(row) {
+        const normalized = productionHistoryNormalizeRow_(source.stage, row, includeSource);
+        productionHistoryAddTotals_(totals, source.stage, normalized.inputKg, normalized.outputKg);
+        normalizedRows.push(normalized);
+      });
+    });
+
+    let filteredRows = normalizedRows;
+    if (requestedStage !== "ALL") {
+      filteredRows = filteredRows.filter(function(row) { return row.stage === requestedStage; });
+    }
+    if (recordId) {
+      filteredRows = filteredRows.filter(function(row) { return String(row.recordId || "") === recordId; });
+    } else if (search) {
+      filteredRows = filteredRows.filter(function(row) {
+        return productionHistorySearchText_(row).indexOf(search) !== -1;
+      });
+    }
+
+    filteredRows.sort(function(a, b) {
+      const dateDifference = productionHistorySortTime_(b.date) - productionHistorySortTime_(a.date);
+      if (dateDifference) return dateDifference;
+      const createdDifference = productionHistorySortTime_(b.createdAt) - productionHistorySortTime_(a.createdAt);
+      if (createdDifference) return createdDifference;
+      return String(b.recordId || "").localeCompare(String(a.recordId || ""));
+    });
+
+    const totalRows = filteredRows.length;
+    const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+    const offset = (page - 1) * pageSize;
+    const rows = filteredRows.slice(offset, offset + pageSize);
+
+    Object.keys(totals).forEach(function(key) { totals[key] = round2(totals[key]); });
+
+    return output({
+      ok: true,
+      periodMonth,
+      generatedAt: new Date().toISOString(),
+      elapsedMs: Date.now() - startedAt,
+      totals,
+      stageCounts,
+      rows,
+      pagination: {
+        page,
+        pageSize,
+        totalRows,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    return output({
+      ok: false,
+      periodMonth,
+      error: err.message || String(err),
+      elapsedMs: Date.now() - startedAt,
+    });
+  }
+}
+
+function productionHistoryStage_(value) {
+  const stage = String(value || "ALL").trim().toUpperCase().replace(/\s+/g, "_");
+  if (["COLOR_SORTER", "COLOUR_SORTER", "SORTER"].indexOf(stage) !== -1) return "SORTING";
+  return ["GRINDER", "WASH", "SORTING", "EXTRUSION"].indexOf(stage) !== -1 ? stage : "ALL";
+}
+
+function productionHistoryPeriod_(row, dateMode) {
+  if (dateMode === "CREATED") {
+    return normalizeMonthClosePeriod_(row.createdAt || row.updatedAt || "");
+  }
+  return normalizeMonthClosePeriod_(row.date || row.periodMonth || row.createdAt || "");
+}
+
+function productionHistoryNormalizeRow_(stage, row, includeSource) {
+  let recordId = "";
+  let inputKg = 0;
+  let outputKg = 0;
+  let wasteKg = 0;
+  let outputMaterial = "";
+  let recoveryPercent = 0;
+
+  if (stage === "GRINDER") {
+    recordId = row.grinderBatchId || row.batchId || row.id || "";
+    inputKg = num(row.inputWeightKg);
+    outputKg = num(row.regrindOutputKg);
+    wasteKg = num(row.dustKg) + num(row.metalRejectKg);
+    outputMaterial = productionHistoryCompositionMaterials_(row.outputComposition) || "White Regrind (Unwashed)";
+    recoveryPercent = num(row.recoveryPercent);
+  } else if (stage === "WASH") {
+    recordId = row.washBatchId || row.batchId || row.id || "";
+    inputKg = num(row.inputWeightKg);
+    outputKg = num(row.washedOutputKg);
+    wasteKg = [
+      "raffiaKg", "wrappersKg", "microPlasticKg", "sinkMaterialKg", "ironScrapKg",
+      "otherColorKg", "dustKg", "sludgeKg",
+    ].reduce(function(sum, key) { return sum + num(row[key]); }, 0);
+    outputMaterial = productionHistoryCompositionMaterials_(row.outputComposition) || row.outputMaterial || "Washed Material";
+    recoveryPercent = num(row.estimatedRecoveryPercent || row.recoveryPercent);
+  } else if (stage === "SORTING") {
+    recordId = row.sortingBatchId || row.batchId || row.id || "";
+    inputKg = num(row.inputWeightKg);
+    outputKg = num(row.acceptedQtyKg) || num(row.whiteSortedKg) + num(row.allMixSortedKg) + num(row.whiteGreyKg);
+    wasteKg = num(row.rejectedQtyKg) + num(row.rubberRejectKg) + num(row.blackSpecsRejectKg) +
+      num(row.raffiaRejectKg) + num(row.unrecoverableRejectKg);
+    outputMaterial = productionHistoryCompositionMaterials_(row.outputComposition) || row.acceptedMaterial || "Sorted Material";
+    recoveryPercent = num(row.recoveryPercent);
+  } else {
+    recordId = row.extrusionBatchId || row.batchId || row.id || "";
+    inputKg = num(row.inputWeightKg || row.totalInputKg);
+    outputKg = num(row.fgOutputKg);
+    wasteKg = [
+      "lumpsKg", "purgingKg", "reworkGranulesKg", "rejectKg", "vacuumRejectKg",
+      "meshRejectKg", "meshRejectionKg", "floorSpillageKg", "dustKg",
+    ].reduce(function(sum, key) { return sum + num(row[key]); }, 0);
+    outputMaterial = row.productionGrade || row.grade || productionHistoryCompositionMaterials_(row.outputComposition) || "";
+    recoveryPercent = num(row.recoveryPercent || row.finalYieldPercent || row.lineRecoveryPercent);
+  }
+
+  if (recoveryPercent <= 0 && inputKg > 0) recoveryPercent = round2(outputKg * 100 / inputKg);
+
+  const normalized = {
+    stage,
+    recordId: String(recordId || ""),
+    date: productionHistoryDateText_(row.date),
+    createdAt: row.createdAt || "",
+    shift: row.shift || "",
+    machine: row.machine || "",
+    inputMaterial: row.inputMaterial || productionHistoryCompositionMaterials_(row.feedComposition) || "",
+    inputKg: round2(inputKg),
+    outputMaterial,
+    outputKg: round2(outputKg),
+    wasteKg: round2(wasteKg),
+    recoveryPercent: round2(recoveryPercent),
+    status: row.status || "",
+    operatorName: row.operatorName || "",
+    supervisorName: row.supervisorName || "",
+    remarks: row.remarks || "",
+  };
+  if (includeSource) normalized.source = row;
+  return normalized;
+}
+
+function productionHistoryAddTotals_(totals, stage, inputKg, outputKg) {
+  if (stage === "GRINDER") {
+    totals.grinderInputKg += num(inputKg);
+    totals.grinderOutputKg += num(outputKg);
+  } else if (stage === "WASH") {
+    totals.washInputKg += num(inputKg);
+    totals.washOutputKg += num(outputKg);
+  } else if (stage === "SORTING") {
+    totals.sortingInputKg += num(inputKg);
+    totals.sortingOutputKg += num(outputKg);
+  } else if (stage === "EXTRUSION") {
+    totals.extrusionInputKg += num(inputKg);
+    totals.fgProducedKg += num(outputKg);
+  }
+}
+
+function productionHistoryCompositionMaterials_(value) {
+  if (!value) return "";
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    const values = [];
+    rows.forEach(function(row) {
+      const name = String(
+        row && (row.materialName || row.material || row.outputMaterial || row.inputMaterial || row.name) || ""
+      ).trim();
+      if (name && values.indexOf(name) === -1) values.push(name);
+    });
+    return values.join(", ");
+  } catch (err) {
+    const text = String(value || "").trim();
+    return text.charAt(0) === "[" || text.charAt(0) === "{" ? "" : text;
+  }
+}
+
+function productionHistoryDateText_(value) {
+  if (!value) return "";
+  if (Object.prototype.toString.call(value) === "[object Date]" && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  const text = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  const parsed = new Date(text);
+  return isNaN(parsed.getTime())
+    ? text.slice(0, 10)
+    : Utilities.formatDate(parsed, Session.getScriptTimeZone(), "yyyy-MM-dd");
+}
+
+function productionHistorySortTime_(value) {
+  if (!value) return 0;
+  const time = new Date(value).getTime();
+  return isNaN(time) ? 0 : time;
+}
+
+function productionHistorySearchText_(row) {
+  return [
+    row.stage,
+    row.recordId,
+    row.date,
+    row.createdAt,
+    row.shift,
+    row.machine,
+    row.inputMaterial,
+    row.outputMaterial,
+    row.status,
+    row.operatorName,
+    row.supervisorName,
+    row.remarks,
+  ].join(" ").toLowerCase();
 }
 
 function addGrinderBatch(data = {}) {

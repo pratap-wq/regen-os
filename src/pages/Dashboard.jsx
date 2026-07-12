@@ -40,11 +40,6 @@ export default function Dashboard() {
         });
         if (!res || res.ok !== true || !res.summary) throw new Error(res?.error || "CEO Dashboard failed to load");
         setSummaryData(res.summary);
-        if (res.latestCostPeriod && !res.hasSelectedCostRows && res.latestCostPeriod !== `${year}-${month}`) {
-          const [latestYear, latestMonth] = res.latestCostPeriod.split("-");
-          setYear(latestYear);
-          setMonth(latestMonth);
-        }
       } catch (err) {
         setLoadError(err.message || "CEO Dashboard failed to load");
       } finally {

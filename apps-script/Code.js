@@ -480,6 +480,9 @@ function validateMonthClosePayload_(data) {
     if (p.fn === "materialNormalization.whiteBucketsHistory") {
       return output(migrateWhiteBucketHistoryToCanonical_(p));
     }
+    if (p.fn === "dataCutover.deleteBeforeJune2026") {
+      return output(deleteOperationalDataBeforeJune2026_(p));
+    }
     if (p.fn === "systemHealth.deepCheck") return output(systemHealthConnectivity(p));
     if (p.fn === "systemHealth.connectivity") return output(systemHealthConnectivity(p));
     if (p.fn === "materialFlow.auditJune2026") return auditJuneMaterialFlowV1(p);
@@ -669,6 +672,7 @@ function debugRoutes() {
       "inventoryLedger.rebuild",
       "materialNormalization.preview",
       "materialNormalization.whiteBucketsHistory",
+      "dataCutover.deleteBeforeJune2026",
       "systemHealth.deepCheck",
       "systemHealth.connectivity",
       "materialFlow.auditJune2026",
@@ -7674,6 +7678,172 @@ function whiteBucketHistoryBackupSheet_(spreadsheet, sheet, timestamp) {
   }
   sheet.copyTo(spreadsheet).setName(name);
   return name;
+}
+
+function deleteOperationalDataBeforeJune2026_(data) {
+  const cutoffPeriod = "2026-06";
+  const dryRun = String(data && data.dryRun === undefined ? "true" : data.dryRun).toLowerCase() !== "false";
+  const confirmation = String(data && data.confirm || "").trim();
+  if (!dryRun && confirmation !== "DELETE_PRE_JUNE_2026") {
+    return {
+      ok: false,
+      route: "dataCutover.deleteBeforeJune2026",
+      error: "Live deletion requires confirm=DELETE_PRE_JUNE_2026",
+    };
+  }
+
+  const configs = [
+    { sheetName: "RM_Inward", dateFields: ["date", "periodMonth", "invoiceDate", "createdAt"] },
+    { sheetName: "Grinder_Batches", dateFields: ["date", "periodMonth", "createdAt"] },
+    { sheetName: "Wash_Batches", dateFields: ["date", "periodMonth", "createdAt"] },
+    { sheetName: "Sorting_Batches", dateFields: ["date", "periodMonth", "createdAt"] },
+    { sheetName: "Extrusion_Batches", dateFields: ["date", "periodMonth", "createdAt"] },
+    { sheetName: "Dispatches", dateFields: ["date", "periodMonth", "createdAt"] },
+    { sheetName: "Stores_Inward", dateFields: ["date", "periodMonth", "invoiceDate", "createdAt"] },
+    { sheetName: "Stores_Issue", dateFields: ["date", "periodMonth", "createdAt"] },
+    { sheetName: "Inventory_Adjustments", dateFields: ["date", "periodMonth", "adjustmentDate", "createdAt"] },
+    { sheetName: "Physical_Counts", dateFields: ["periodMonth", "date", "createdAt"] },
+    { sheetName: "Month_Close", dateFields: ["periodMonth", "date", "createdAt"] },
+    { sheetName: "Month_Locks", dateFields: ["periodMonth", "lockedAt", "createdAt"] },
+    { sheetName: "Factory_Expenses", dateFields: ["periodMonth", "date", "createdAt"] },
+    { sheetName: "RM_Quality", dateFields: ["date", "testDate", "createdAt"] },
+    { sheetName: "FG_Quality", dateFields: ["date", "testDate", "createdAt"] },
+    { sheetName: "Inventory_Ledger", dateFields: ["date", "periodMonth", "createdAt"] },
+    { sheetName: "Alert_Log", dateFields: ["date", "createdAt", "timestamp"] },
+  ];
+  const lock = LockService.getScriptLock();
+  if (!dryRun && !lock.tryLock(30000)) {
+    return { ok: false, error: "Pre-June cutover cleanup is already running." };
+  }
+
+  try {
+    const plans = configs.map(function(config) { return preJuneCutoverPlanForSheet_(config, cutoffPeriod); });
+    const affectedPlans = plans.filter(function(plan) { return plan.rowsToDelete > 0; });
+    let archiveSpreadsheet = null;
+
+    if (!dryRun && affectedPlans.length) {
+      const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd_HHmmss");
+      archiveSpreadsheet = SpreadsheetApp.create("RegenOS_PreJune2026_Archive_" + timestamp);
+      preJuneCutoverWriteArchive_(archiveSpreadsheet, affectedPlans);
+      affectedPlans.forEach(function(plan) { preJuneCutoverApplyPlan_(plan); });
+      resetSpreadsheetRequestCache_();
+    }
+
+    return {
+      ok: true,
+      route: "dataCutover.deleteBeforeJune2026",
+      dryRun,
+      cutoffDate: "2026-06-01",
+      sheets: plans.map(function(plan) {
+        return {
+          sheetName: plan.sheetName,
+          rowsScanned: plan.rowsScanned,
+          rowsToDelete: plan.rowsToDelete,
+          rowsToKeep: plan.rowsToKeep,
+          undatedRowsKept: plan.undatedRowsKept,
+          missing: plan.missing,
+          earliestDeletedPeriod: plan.earliestDeletedPeriod,
+          latestDeletedPeriod: plan.latestDeletedPeriod,
+        };
+      }),
+      totals: {
+        rowsToDelete: plans.reduce(function(sum, plan) { return sum + plan.rowsToDelete; }, 0),
+        rowsToKeep: plans.reduce(function(sum, plan) { return sum + plan.rowsToKeep; }, 0),
+        undatedRowsKept: plans.reduce(function(sum, plan) { return sum + plan.undatedRowsKept; }, 0),
+      },
+      archiveSpreadsheetId: archiveSpreadsheet ? archiveSpreadsheet.getId() : "",
+      archiveSpreadsheetUrl: archiveSpreadsheet ? archiveSpreadsheet.getUrl() : "",
+      message: dryRun
+        ? "Dry run only. No data was changed. Master and configuration sheets are excluded."
+        : "Pre-June operational rows were archived to a separate spreadsheet and removed from live operational sheets.",
+    };
+  } finally {
+    if (!dryRun) lock.releaseLock();
+  }
+}
+
+function preJuneCutoverPlanForSheet_(config, cutoffPeriod) {
+  let sheet;
+  try {
+    sheet = getSheet(config.sheetName);
+  } catch (ignore) {
+    return {
+      config,
+      sheetName: config.sheetName,
+      missing: true,
+      rowsScanned: 0,
+      rowsToDelete: 0,
+      rowsToKeep: 0,
+      undatedRowsKept: 0,
+      earliestDeletedPeriod: "",
+      latestDeletedPeriod: "",
+      headers: [],
+      deleteRows: [],
+      keepRows: [],
+    };
+  }
+  const values = sheet.getDataRange().getValues();
+  const headers = values.length ? values[0].map(String) : [];
+  const indexes = {};
+  headers.forEach(function(header, index) { indexes[header] = index; });
+  const deleteRows = [];
+  const keepRows = [];
+  let undatedRowsKept = 0;
+  let earliestDeletedPeriod = "";
+  let latestDeletedPeriod = "";
+
+  for (let rowIndex = 1; rowIndex < values.length; rowIndex += 1) {
+    const row = values[rowIndex];
+    let period = "";
+    for (let fieldIndex = 0; fieldIndex < config.dateFields.length; fieldIndex += 1) {
+      const columnIndex = indexes[config.dateFields[fieldIndex]];
+      if (columnIndex === undefined || row[columnIndex] === "" || row[columnIndex] === null) continue;
+      period = normalizeMonthClosePeriod_(row[columnIndex]);
+      if (period) break;
+    }
+    if (period && period < cutoffPeriod) {
+      deleteRows.push(row);
+      if (!earliestDeletedPeriod || period < earliestDeletedPeriod) earliestDeletedPeriod = period;
+      if (!latestDeletedPeriod || period > latestDeletedPeriod) latestDeletedPeriod = period;
+    } else {
+      keepRows.push(row);
+      if (!period && row.some(function(value) { return value !== "" && value !== null; })) undatedRowsKept += 1;
+    }
+  }
+
+  return {
+    config,
+    sheetName: config.sheetName,
+    missing: false,
+    rowsScanned: Math.max(0, values.length - 1),
+    rowsToDelete: deleteRows.length,
+    rowsToKeep: keepRows.length,
+    undatedRowsKept,
+    earliestDeletedPeriod,
+    latestDeletedPeriod,
+    headers,
+    deleteRows,
+    keepRows,
+  };
+}
+
+function preJuneCutoverWriteArchive_(archiveSpreadsheet, plans) {
+  const defaultSheet = archiveSpreadsheet.getSheets()[0];
+  plans.forEach(function(plan, index) {
+    const archiveSheet = index === 0 ? defaultSheet : archiveSpreadsheet.insertSheet();
+    archiveSheet.setName(plan.sheetName.slice(0, 99));
+    const rows = [plan.headers].concat(plan.deleteRows);
+    archiveSheet.getRange(1, 1, rows.length, plan.headers.length).setValues(rows);
+    archiveSheet.setFrozenRows(1);
+  });
+}
+
+function preJuneCutoverApplyPlan_(plan) {
+  const sheet = getSheet(plan.sheetName);
+  const rows = [plan.headers].concat(plan.keepRows);
+  sheet.clearContents();
+  sheet.getRange(1, 1, rows.length, plan.headers.length).setValues(rows);
+  sheet.setFrozenRows(1);
 }
 
 function addRM(data = {}) {

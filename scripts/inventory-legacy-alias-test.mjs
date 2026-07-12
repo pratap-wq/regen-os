@@ -147,4 +147,21 @@ assert.throws(
   /canonical Material_Master/
 );
 
-console.log("Inventory legacy material normalization regression checks passed (32/32).");
+context.__cutoverValues = [
+  ["id", "date"],
+  ["OLD-MAY", "2026-05-31"],
+  ["KEEP-JUNE", "2026-06-01"],
+  ["OLD-APRIL", "April 2026"],
+  ["KEEP-UNDATED", ""],
+];
+vm.runInContext(
+  `getSheet = function() { return { getDataRange: function() { return { getValues: function() { return __cutoverValues; } }; } }; };`,
+  context
+);
+const cutoverPlan = evaluate('preJuneCutoverPlanForSheet_({ sheetName: "TEST", dateFields: ["date"] }, "2026-06")');
+assert.equal(cutoverPlan.rowsToDelete, 2);
+assert.equal(cutoverPlan.rowsToKeep, 2);
+assert.equal(cutoverPlan.undatedRowsKept, 1);
+assert.equal(cutoverPlan.latestDeletedPeriod, "2026-05");
+
+console.log("Inventory legacy material normalization regression checks passed (36/36).");

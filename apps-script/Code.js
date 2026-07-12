@@ -2345,6 +2345,10 @@ const REGENOS_APPROVED_LEGACY_INVENTORY_ALIAS_MAP_ = {
   "WHITE PPCP BUCKETS": "White Buckets",
   "MIXED BUCKETS": "White Buckets",
   "WHITE BUCKET": "White Buckets",
+  "WHITE REGRIND": "White Regrind (Unwashed)",
+  "WHITE REGRIND UNWASHED": "White Regrind (Unwashed)",
+  "FLAKES UNWASHED": "White Regrind (Unwashed)",
+  "UNWASHED REGRIND": "White Regrind (Unwashed)",
 };
 
 const REGENOS_INVENTORY_CUTOVER_DATE = "2026-06-01";
@@ -2364,9 +2368,10 @@ function isApprovedLegacyInventoryAlias_(value) {
 
 function rejectLegacyInventoryAliasWrite_(value, label) {
   if (isApprovedLegacyInventoryAlias_(value)) {
+    const canonicalName = canonicalLegacyMaterialForInventory_(value);
     throw new Error(
       (label || "Material") +
-        " must use canonical Material_Master material: White Buckets"
+        " must use canonical Material_Master material: " + canonicalName
     );
   }
 }
@@ -3209,9 +3214,10 @@ function approvedV1MaterialAlias_(value) {
 
 function assertProductionMaterialAllowed_(value, stage, direction, label) {
   if (isApprovedLegacyInventoryAlias_(value)) {
+    const canonicalName = canonicalLegacyMaterialForInventory_(value);
     throw new Error(
       (label || "Production material") +
-        " must use canonical Material_Master material: White Buckets"
+        " must use canonical Material_Master material: " + canonicalName
     );
   }
   const result = productionMaterialValidationResult_(value, stage, direction, label);
@@ -12225,6 +12231,13 @@ function operationalInventoryResolveMaterial_(row, index) {
     .map(compactInventoryMaterialKey_)
     .filter(function(key) { return key; });
   for (let i = 0; i < candidates.length; i += 1) if (byKey[candidates[i]]) return byKey[candidates[i]];
+  const historicalCandidates = [row && row.itemName, row && row.materialName, row && row.materialCode]
+    .map(canonicalLegacyMaterialForInventory_)
+    .map(compactInventoryMaterialKey_)
+    .filter(function(key) { return key; });
+  for (let i = 0; i < historicalCandidates.length; i += 1) {
+    if (byKey[historicalCandidates[i]]) return byKey[historicalCandidates[i]];
+  }
   return null;
 }
 

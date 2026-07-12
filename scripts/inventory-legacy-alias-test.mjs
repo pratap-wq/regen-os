@@ -28,6 +28,8 @@ assert.equal(evaluate('canonicalLegacyMaterialForInventory_("Mixed PPCP Buckets"
 assert.equal(evaluate('canonicalLegacyMaterialForInventory_("White PPCP Buckets")'), "White Buckets");
 assert.equal(evaluate('canonicalLegacyMaterialForInventory_("MIXED_PPCP_BUCKETS")'), "White Buckets");
 assert.equal(evaluate('canonicalLegacyMaterialForInventory_("WHITE_PPCP_BUCKETS")'), "White Buckets");
+assert.equal(evaluate('canonicalLegacyMaterialForInventory_("White Regrind")'), "White Regrind (Unwashed)");
+assert.equal(evaluate('canonicalLegacyMaterialForInventory_("Flakes Unwashed")'), "White Regrind (Unwashed)");
 
 context.__sheets = {
   Machine_Master: [],
@@ -45,7 +47,19 @@ context.__materials = [
     category: "RM",
     status: "ACTIVE",
   },
+  {
+    materialId: "MAT-UNWASHED",
+    materialCode: "WHITE_REGRIND_UNWASHED",
+    materialName: "White Regrind (Unwashed)",
+    category: "RM",
+    status: "ACTIVE",
+  },
 ];
+context.__sheets.Inventory_Ledger.push(
+  { itemType: "RM", itemName: "White Regrind", qtyIn: 500, qtyOut: 10, status: "ACTIVE" },
+  { itemType: "RM", itemName: "Flakes Unwashed", qtyIn: 0, qtyOut: 80, status: "ACTIVE" },
+  { itemType: "RM", materialCode: "WHITE_REGRIND_UNWASHED", itemName: "White Regrind (Unwashed)", qtyIn: 20, qtyOut: 30, status: "ACTIVE" }
+);
 vm.runInContext(
   `
     getRowsAsObjects = function(name) { return __sheets[name] || []; };
@@ -57,13 +71,17 @@ vm.runInContext(
 
 const liveSummary = evaluate("getInventoryLiveSummary()");
 const liveWhiteBuckets = liveSummary.rows.find((row) => row.materialName === "White Buckets");
-assert.equal(liveWhiteBuckets.qtyKg, -120);
-assert.equal(liveWhiteBuckets.status, "NEGATIVE");
-assert.equal(liveSummary.manualReviewRows.length, 2);
+assert.equal(liveWhiteBuckets.qtyKg, 30);
+assert.equal(liveWhiteBuckets.status, "ACTIVE");
+const liveUnwashed = liveSummary.rows.find((row) => row.materialName === "White Regrind (Unwashed)");
+assert.equal(liveUnwashed.qtyKg, 400);
+assert.equal(liveSummary.manualReviewRows.length, 0);
 
 const ledgerBalance = evaluate("getInventoryLedgerBalance()");
 const ledgerWhiteBuckets = ledgerBalance.rows.find((row) => row.itemName === "White Buckets");
-assert.equal(ledgerWhiteBuckets.qty, -120);
+assert.equal(ledgerWhiteBuckets.qty, 30);
+const ledgerUnwashed = ledgerBalance.rows.find((row) => row.itemName === "White Regrind (Unwashed)");
+assert.equal(ledgerUnwashed.qty, 400);
 
 const cutoverPreview = evaluate("getInventoryCutoverPreview({})");
 const previewWhiteBuckets = cutoverPreview.rows.find((row) => row.materialName === "White Buckets");
@@ -79,6 +97,10 @@ assert.throws(
 assert.throws(
   () => evaluate('assertProductionMaterialAllowed_("White PPCP Buckets", "GRINDER", "INPUT", "GRINDER input material")'),
   /canonical Material_Master/
+);
+assert.throws(
+  () => evaluate('assertProductionMaterialAllowed_("White Regrind", "WASH", "INPUT", "WASH input material")'),
+  /White Regrind \(Unwashed\)/
 );
 
 vm.runInContext(
@@ -97,4 +119,4 @@ assert.throws(
   /canonical Material_Master/
 );
 
-console.log("Inventory legacy bucket normalization regression checks passed (15/15).");
+console.log("Inventory legacy material normalization regression checks passed (23/23).");

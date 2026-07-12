@@ -2359,6 +2359,13 @@ function canonicalLegacyMaterialForInventory_(value) {
   return REGENOS_APPROVED_LEGACY_INVENTORY_ALIAS_MAP_[materialAliasKey_(text)] || text;
 }
 
+function canonicalOperationalLegacyMaterialForInventory_(value) {
+  const text = String(value || "").trim().replace(/\s+/g, " ");
+  if (!text) return "";
+  const canonicalName = REGENOS_APPROVED_LEGACY_INVENTORY_ALIAS_MAP_[materialAliasKey_(text)] || "";
+  return canonicalName === "White Regrind (Unwashed)" ? canonicalName : text;
+}
+
 function isApprovedLegacyInventoryAlias_(value) {
   return Object.prototype.hasOwnProperty.call(
     REGENOS_APPROVED_LEGACY_INVENTORY_ALIAS_MAP_,
@@ -12232,7 +12239,7 @@ function operationalInventoryResolveMaterial_(row, index) {
     .filter(function(key) { return key; });
   for (let i = 0; i < candidates.length; i += 1) if (byKey[candidates[i]]) return byKey[candidates[i]];
   const historicalCandidates = [row && row.itemName, row && row.materialName, row && row.materialCode]
-    .map(canonicalLegacyMaterialForInventory_)
+    .map(canonicalOperationalLegacyMaterialForInventory_)
     .map(compactInventoryMaterialKey_)
     .filter(function(key) { return key; });
   for (let i = 0; i < historicalCandidates.length; i += 1) {

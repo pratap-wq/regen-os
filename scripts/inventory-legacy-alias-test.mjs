@@ -30,6 +30,8 @@ assert.equal(evaluate('canonicalLegacyMaterialForInventory_("MIXED_PPCP_BUCKETS"
 assert.equal(evaluate('canonicalLegacyMaterialForInventory_("WHITE_PPCP_BUCKETS")'), "White Buckets");
 assert.equal(evaluate('canonicalLegacyMaterialForInventory_("White Regrind")'), "White Regrind (Unwashed)");
 assert.equal(evaluate('canonicalLegacyMaterialForInventory_("Flakes Unwashed")'), "White Regrind (Unwashed)");
+assert.equal(evaluate('canonicalOperationalLegacyMaterialForInventory_("Mixed PPCP Buckets")'), "Mixed PPCP Buckets");
+assert.equal(evaluate('canonicalOperationalLegacyMaterialForInventory_("White Regrind")'), "White Regrind (Unwashed)");
 
 context.__sheets = {
   Machine_Master: [],
@@ -71,15 +73,15 @@ vm.runInContext(
 
 const liveSummary = evaluate("getInventoryLiveSummary()");
 const liveWhiteBuckets = liveSummary.rows.find((row) => row.materialName === "White Buckets");
-assert.equal(liveWhiteBuckets.qtyKg, 30);
-assert.equal(liveWhiteBuckets.status, "ACTIVE");
+assert.equal(liveWhiteBuckets.qtyKg, -120);
+assert.equal(liveWhiteBuckets.status, "NEGATIVE");
 const liveUnwashed = liveSummary.rows.find((row) => row.materialName === "White Regrind (Unwashed)");
 assert.equal(liveUnwashed.qtyKg, 400);
-assert.equal(liveSummary.manualReviewRows.length, 0);
+assert.equal(liveSummary.manualReviewRows.length, 2);
 
 const ledgerBalance = evaluate("getInventoryLedgerBalance()");
 const ledgerWhiteBuckets = ledgerBalance.rows.find((row) => row.itemName === "White Buckets");
-assert.equal(ledgerWhiteBuckets.qty, 30);
+assert.equal(ledgerWhiteBuckets.qty, -120);
 const ledgerUnwashed = ledgerBalance.rows.find((row) => row.itemName === "White Regrind (Unwashed)");
 assert.equal(ledgerUnwashed.qty, 400);
 
@@ -119,4 +121,4 @@ assert.throws(
   /canonical Material_Master/
 );
 
-console.log("Inventory legacy material normalization regression checks passed (23/23).");
+console.log("Inventory legacy material normalization regression checks passed (25/25).");

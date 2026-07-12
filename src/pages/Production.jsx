@@ -90,6 +90,7 @@ export default function Production() {
     washedRegrindKg: 0,
     sortedRegrindKg: 0,
   });
+  const [processAvailabilityStatus, setProcessAvailabilityStatus] = useState({});
 
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -110,6 +111,7 @@ export default function Production() {
       setExtrusionRows(res.extrusionRefs || []);
       setInventoryLots(res.inventoryLots || []);
       setProcessAvailability(res.processAvailability || {});
+      setProcessAvailabilityStatus(res.processAvailabilityStatus || {});
       setMaterialRows(materialData);
       if (!preserveOutputRows) {
         setGrinderOutputRows(defaultOutputRowsFor(materialData, "GRINDER"));
@@ -127,6 +129,17 @@ export default function Production() {
   }
 
   function availabilityCard(field, label) {
+    const status = processAvailabilityStatus?.[field] || {};
+    if (status.status === "OPENING_REQUIRED") {
+      return (
+        <KpiCard
+          title={`${label} Available`}
+          value="Opening Balance Required"
+          helper={`Recorded shortage: ${Number(status.requiredOpeningKg || 0).toLocaleString("en-IN")} Kg. Enter an approved opening/physical count.`}
+          tone="warning"
+        />
+      );
+    }
     const availableKg = Number(processAvailability?.[field] || 0);
     return (
       <KpiCard
@@ -294,6 +307,11 @@ export default function Production() {
       const key = materialKey(material);
       const qty = n(row.qtyKg);
       const available = availability[key] || 0;
+      const selectedLot = inventoryLots.find((lot) => materialKey(lot.material) === key);
+
+      if (selectedLot?.availabilityStatus === "OPENING_REQUIRED") {
+        return `${processName}: ${material} requires an approved opening balance before it can be consumed.`;
+      }
 
       if (seen.has(key)) {
         return `${processName}: ${material} is selected more than once. Combine it into one row.`;

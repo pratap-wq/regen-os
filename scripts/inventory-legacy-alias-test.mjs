@@ -85,6 +85,23 @@ assert.equal(ledgerWhiteBuckets.qty, -120);
 const ledgerUnwashed = ledgerBalance.rows.find((row) => row.itemName === "White Regrind (Unwashed)");
 assert.equal(ledgerUnwashed.qty, 400);
 
+const openingRequired = evaluate(`productionEntryControlledAvailability_({
+  byMaterialCode: {
+    WHITE_BUCKETS: { balanceKg: 0 },
+    WHITE_REGRIND_UNWASHED: { balanceKg: 400 },
+    WHITE_REGRIND_WASHED: { balanceKg: 20 },
+    WHITE_SORTED_REGRIND: { balanceKg: 0 }
+  },
+  unknownRows: [
+    { itemName: "Mixed PPCP Buckets", qtyIn: 23820, qtyOut: 293863 },
+    { itemName: "White PPCP Buckets", qtyIn: 470, qtyOut: 18198 }
+  ]
+})`);
+assert.equal(openingRequired.processAvailability.whiteBucketsKg, null);
+assert.equal(openingRequired.processAvailabilityStatus.whiteBucketsKg.status, "OPENING_REQUIRED");
+assert.equal(openingRequired.processAvailabilityStatus.whiteBucketsKg.requiredOpeningKg, 287771);
+assert.equal(openingRequired.processAvailability.unwashedRegrindKg, 400);
+
 const cutoverPreview = evaluate("getInventoryCutoverPreview({})");
 const previewWhiteBuckets = cutoverPreview.rows.find((row) => row.materialName === "White Buckets");
 assert.equal(previewWhiteBuckets.allHistoryBalanceKg, 30);
@@ -121,4 +138,4 @@ assert.throws(
   /canonical Material_Master/
 );
 
-console.log("Inventory legacy material normalization regression checks passed (25/25).");
+console.log("Inventory legacy material normalization regression checks passed (29/29).");

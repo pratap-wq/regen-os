@@ -7361,16 +7361,25 @@ function getProductionEntryBootstrap() {
   });
   const extrusionRows = getRowsAsObjects("Extrusion_Batches");
   const balances = getOperationalInventoryBalances_({ materialRows: materials });
-  const processAvailability = {
-    whiteBucketsKg: num(balances.byMaterialCode.WHITE_BUCKETS && balances.byMaterialCode.WHITE_BUCKETS.balanceKg),
-    unwashedRegrindKg: num(balances.byMaterialCode.WHITE_REGRIND_UNWASHED && balances.byMaterialCode.WHITE_REGRIND_UNWASHED.balanceKg),
-    washedRegrindKg: num(balances.byMaterialCode.WHITE_REGRIND_WASHED && balances.byMaterialCode.WHITE_REGRIND_WASHED.balanceKg),
-    sortedRegrindKg: num(balances.byMaterialCode.WHITE_SORTED_REGRIND && balances.byMaterialCode.WHITE_SORTED_REGRIND.balanceKg),
-  };
+  const availabilityResult = productionEntryControlledAvailability_(balances);
+  const processAvailability = availabilityResult.processAvailability;
   const inventoryLots = balances.rows.filter(function(row) {
     return row.category !== "STORE";
   }).map(function(row) {
-    return { lotId: "LEDGER-" + row.materialCode, sourceType: "INVENTORY_LEDGER", material: row.materialName, materialCode: row.materialCode, availableKg: row.balanceKg };
+    const status = availabilityResult.processAvailabilityStatus[availabilityResult.fieldByMaterialCode[row.materialCode]] || {};
+    const availableKg = row.materialCode === "WHITE_BUCKETS"
+      ? processAvailability.whiteBucketsKg
+      : row.balanceKg;
+    return {
+      lotId: "LEDGER-" + row.materialCode,
+      sourceType: "INVENTORY_LEDGER",
+      material: row.materialName,
+      materialCode: row.materialCode,
+      availableKg,
+      availabilityStatus: status.status || "AVAILABLE",
+      requiredOpeningKg: num(status.requiredOpeningKg),
+      recordedNetKg: status.recordedNetKg === undefined ? row.balanceKg : status.recordedNetKg,
+    };
   });
   const extrusionRefs = extrusionRows.map(function(row) {
     return { extrusionBatchId: row.extrusionBatchId || row.batchId || "" };
@@ -7385,10 +7394,66 @@ function getProductionEntryBootstrap() {
     }),
     extrusionRefs,
     processAvailability,
+    processAvailabilityStatus: availabilityResult.processAvailabilityStatus,
     inventoryLots,
     generatedAt: new Date().toISOString(),
     elapsedMs: Date.now() - startedAt,
   });
+}
+
+function productionEntryControlledAvailability_(balances) {
+  const fieldByMaterialCode = {
+    WHITE_BUCKETS: "whiteBucketsKg",
+    WHITE_REGRIND_UNWASHED: "unwashedRegrindKg",
+    WHITE_REGRIND_WASHED: "washedRegrindKg",
+    WHITE_SORTED_REGRIND: "sortedRegrindKg",
+  };
+  const processAvailability = {};
+  const processAvailabilityStatus = {};
+
+  Object.keys(fieldByMaterialCode).forEach(function(materialCode) {
+    const field = fieldByMaterialCode[materialCode];
+    const balance = num(balances.byMaterialCode[materialCode] && balances.byMaterialCode[materialCode].balanceKg);
+    processAvailability[field] = balance;
+    processAvailabilityStatus[field] = { status: "AVAILABLE", recordedNetKg: round2(balance), requiredOpeningKg: 0 };
+  });
+
+  const bucketAliasSummary = (balances.unknownRows || []).reduce(function(summary, row) {
+    const originalName = row.itemName || row.materialName || row.materialCode || "";
+    if (!isApprovedLegacyInventoryAlias_(originalName)) return summary;
+    if (canonicalLegacyMaterialForInventory_(originalName) !== "White Buckets") return summary;
+    summary.qtyIn += num(row.qtyIn);
+    summary.qtyOut += num(row.qtyOut);
+    summary.rowCount += 1;
+    return summary;
+  }, { qtyIn: 0, qtyOut: 0, rowCount: 0 });
+
+  if (bucketAliasSummary.rowCount > 0) {
+    const canonicalBalance = num(processAvailability.whiteBucketsKg);
+    const recordedNetKg = round2(canonicalBalance + bucketAliasSummary.qtyIn - bucketAliasSummary.qtyOut);
+    if (recordedNetKg < 0) {
+      processAvailability.whiteBucketsKg = null;
+      processAvailabilityStatus.whiteBucketsKg = {
+        status: "OPENING_REQUIRED",
+        recordedNetKg,
+        requiredOpeningKg: round2(Math.abs(recordedNetKg)),
+        historicalInKg: round2(bucketAliasSummary.qtyIn),
+        historicalOutKg: round2(bucketAliasSummary.qtyOut),
+        message: "Opening balance required before White Buckets can be consumed.",
+      };
+    } else {
+      processAvailability.whiteBucketsKg = recordedNetKg;
+      processAvailabilityStatus.whiteBucketsKg = {
+        status: "AVAILABLE",
+        recordedNetKg,
+        requiredOpeningKg: 0,
+        historicalInKg: round2(bucketAliasSummary.qtyIn),
+        historicalOutKg: round2(bucketAliasSummary.qtyOut),
+      };
+    }
+  }
+
+  return { processAvailability, processAvailabilityStatus, fieldByMaterialCode };
 }
 
 function addRM(data = {}) {

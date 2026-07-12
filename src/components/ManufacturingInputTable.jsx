@@ -70,6 +70,8 @@ export default function ManufacturingInputTable({
           {(rows || []).map((r, i) => {
             const material = r.materialType || r.sourceType || "";
             const availableQty = availability[materialKey(material)] || 0;
+            const selectedLot = inventoryLots.find((lot) => materialKey(lot.material) === materialKey(material));
+            const openingRequired = selectedLot?.availabilityStatus === "OPENING_REQUIRED";
 
             return (
               <tr key={i}>
@@ -89,7 +91,7 @@ export default function ManufacturingInputTable({
                 <td style={td}>
                   <input
                     readOnly
-                    value={`${availableQty.toFixed(2)} Kg`}
+                    value={openingRequired ? "Opening Balance Required" : `${availableQty.toFixed(2)} Kg`}
                     style={readonlyInput}
                   />
                 </td>
@@ -100,6 +102,8 @@ export default function ManufacturingInputTable({
                     min="0"
                     value={r.qtyKg || ""}
                     onChange={(e) => updateRow(i, "qtyKg", e.target.value)}
+                    disabled={openingRequired}
+                    title={openingRequired ? "Enter an approved opening/physical count before consuming this material." : ""}
                     style={input}
                   />
                 </td>

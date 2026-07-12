@@ -7935,7 +7935,10 @@ function unlinkedWhiteBucketWashPlan_() {
     const feedComposition = String(row[index.feedComposition] || "");
     const sourceRm = String(row[index.sourceRmInwardId] || row[index.sourceRMId] || "").trim();
     const sourceGrinder = String(row[index.sourceGrinderBatchId] || "").trim();
-    const createdAt = normalizeDateOnly_(row[index.createdAt]);
+    const createdAtValue = row[index.createdAt];
+    const createdAt = createdAtValue instanceof Date
+      ? Utilities.formatDate(createdAtValue, Session.getScriptTimeZone(), "yyyy-MM-dd")
+      : normalizeDateOnly_(createdAtValue);
     const containsWhiteBuckets = inputMaterial === "White Buckets" || /White Buckets/i.test(feedComposition);
     const isConfirmedBulkWindow = createdAt >= "2026-06-22" && createdAt <= "2026-07-07";
     const active = ["DELETED", "VOID", "VOIDED", "INACTIVE", "ARCHIVED"].indexOf(status) === -1;

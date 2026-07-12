@@ -486,6 +486,9 @@ function validateMonthClosePayload_(data) {
     if (p.fn === "dataCleanup.removeUnlinkedWhiteBucketWashHistory") {
       return output(removeUnlinkedWhiteBucketWashHistory_(p));
     }
+    if (p.fn === "dataCleanup.removeLegacyBulkProductionHistory") {
+      return output(removeLegacyBulkProductionHistory_(p));
+    }
     if (p.fn === "systemHealth.deepCheck") return output(systemHealthConnectivity(p));
     if (p.fn === "systemHealth.connectivity") return output(systemHealthConnectivity(p));
     if (p.fn === "materialFlow.auditJune2026") return auditJuneMaterialFlowV1(p);
@@ -7987,6 +7990,169 @@ function ledgerRowsForBatchCleanupPlan_(batchIds) {
     qtyInIndex: index.qtyIn,
     qtyOutIndex: index.qtyOut,
   };
+}
+
+/**
+ * Removes the remaining confirmed bulk-imported UAT production set while
+ * preserving recent July transactions. All affected operational and ledger
+ * rows are copied to a separate archive spreadsheet before live deletion.
+ */
+function removeLegacyBulkProductionHistory_(data) {
+  const dryRun = String(data && data.dryRun === undefined ? "true" : data.dryRun).toLowerCase() !== "false";
+  const confirmation = String(data && data.confirm || "").trim();
+  if (!dryRun && confirmation !== "DELETE_LEGACY_BULK_PRODUCTION") {
+    return {
+      ok: false,
+      route: "dataCleanup.removeLegacyBulkProductionHistory",
+      error: "Live cleanup requires confirm=DELETE_LEGACY_BULK_PRODUCTION",
+    };
+  }
+
+  const lock = LockService.getScriptLock();
+  if (!dryRun && !lock.tryLock(30000)) {
+    return { ok: false, error: "Legacy production cleanup is already running." };
+  }
+
+  try {
+    const washPlan = legacyBulkOperationalPlan_("Wash_Batches", "washBatchId", function(row, index) {
+      const createdAt = cleanupDateOnly_(row[index.createdAt]);
+      const sourceRm = String(row[index.sourceRmInwardId] || row[index.sourceRMId] || "").trim();
+      const sourceGrinder = String(row[index.sourceGrinderBatchId] || "").trim();
+      return !sourceRm && !sourceGrinder && createdAt && createdAt <= "2026-07-08";
+    });
+    const extrusionPlan = legacyBulkOperationalPlan_("Extrusion_Batches", "extrusionBatchId", function(row, index) {
+      const createdAt = cleanupDateOnly_(row[index.createdAt]);
+      const source = String(row[index.sourceSortingBatchId] || row[index.sourceWashBatchId] || row[index.sourceBatchId] || "").trim();
+      return !source && createdAt && createdAt <= "2026-07-02";
+    });
+    const dispatchPlan = legacyBulkOperationalPlan_("Dispatches", "dispatchId", function(row, index) {
+      const createdAt = cleanupDateOnly_(row[index.createdAt]);
+      return createdAt && createdAt <= "2026-06-30";
+    });
+
+    const references = {};
+    [washPlan, extrusionPlan, dispatchPlan].forEach(function(plan) {
+      plan.deleteRows.forEach(function(row) {
+        const id = String(row[plan.idIndex] || "").trim();
+        if (id) references[id] = true;
+      });
+    });
+    const ledgerPlan = legacyBulkLedgerPlan_(references);
+    const plans = [washPlan, extrusionPlan, dispatchPlan, ledgerPlan];
+    let archiveSpreadsheet = null;
+
+    if (!dryRun && plans.some(function(plan) { return plan.deleteRows.length > 0; })) {
+      const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd_HHmmss");
+      archiveSpreadsheet = SpreadsheetApp.create("RegenOS_LegacyBulkProduction_Archive_" + timestamp);
+      preJuneCutoverWriteArchive_(archiveSpreadsheet, plans.filter(function(plan) {
+        return plan.deleteRows.length > 0;
+      }));
+      plans.forEach(function(plan) {
+        if (plan.deleteRows.length) preJuneCutoverApplyPlan_(plan);
+      });
+      resetSpreadsheetRequestCache_();
+    }
+
+    return {
+      ok: true,
+      route: "dataCleanup.removeLegacyBulkProductionHistory",
+      dryRun,
+      rows: {
+        wash: washPlan.deleteRows.length,
+        extrusion: extrusionPlan.deleteRows.length,
+        dispatch: dispatchPlan.deleteRows.length,
+        ledger: ledgerPlan.deleteRows.length,
+      },
+      quantities: {
+        washInputKg: cleanupPlanSum_(washPlan, "inputWeightKg"),
+        extrusionInputKg: cleanupPlanSum_(extrusionPlan, "inputWeightKg"),
+        fgOutputKg: cleanupPlanSum_(extrusionPlan, "fgOutputKg"),
+        dispatchKg: cleanupPlanSum_(dispatchPlan, "quantityKg"),
+        ledgerQtyIn: cleanupPlanSum_(ledgerPlan, "qtyIn"),
+        ledgerQtyOut: cleanupPlanSum_(ledgerPlan, "qtyOut"),
+      },
+      preservedRecentWashRows: washPlan.keepRows.filter(function(row) {
+        return cleanupDateOnly_(row[washPlan.index.createdAt]) > "2026-07-08";
+      }).length,
+      referenceCount: Object.keys(references).length,
+      archiveSpreadsheetId: archiveSpreadsheet ? archiveSpreadsheet.getId() : "",
+      archiveSpreadsheetUrl: archiveSpreadsheet ? archiveSpreadsheet.getUrl() : "",
+      message: dryRun
+        ? "Dry run only. No data was changed."
+        : "Legacy bulk production, dispatch, and matching ledger rows were archived and removed.",
+    };
+  } finally {
+    if (!dryRun) lock.releaseLock();
+  }
+}
+
+function cleanupDateOnly_(value) {
+  if (!value) return "";
+  if (value instanceof Date) return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  const text = String(value).trim();
+  return /^\d{4}-\d{2}-\d{2}/.test(text) ? text.slice(0, 10) : "";
+}
+
+function legacyBulkOperationalPlan_(sheetName, idField, predicate) {
+  const sheet = getSheet(sheetName);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const index = {};
+  headers.forEach(function(header, column) { index[header] = column; });
+  const deleteRows = [];
+  const keepRows = [];
+  values.slice(1).forEach(function(row) {
+    const status = String(row[index.status] || row[index.dispatchStatus] || "").trim().toUpperCase();
+    const active = ["DELETED", "VOID", "VOIDED", "INACTIVE", "ARCHIVED"].indexOf(status) === -1;
+    if (active && predicate(row, index)) deleteRows.push(row);
+    else keepRows.push(row);
+  });
+  return {
+    sheetName,
+    headers,
+    index,
+    idIndex: index[idField],
+    rowsScanned: values.length - 1,
+    rowsToDelete: deleteRows.length,
+    rowsToKeep: keepRows.length,
+    deleteRows,
+    keepRows,
+  };
+}
+
+function legacyBulkLedgerPlan_(references) {
+  const sheet = getSheet("Inventory_Ledger");
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const index = {};
+  headers.forEach(function(header, column) { index[header] = column; });
+  const deleteRows = [];
+  const keepRows = [];
+  values.slice(1).forEach(function(row) {
+    const moduleName = String(row[index.module] || "").trim().toUpperCase();
+    const relevantModule = ["WASH", "EXTRUSION", "DISPATCH"].indexOf(moduleName) !== -1;
+    const refs = [row[index.sourceRef], row[index.targetRef], row[index.legacySourceId]].map(function(value) {
+      return String(value || "").trim();
+    });
+    if (relevantModule && refs.some(function(ref) { return Boolean(references[ref]); })) deleteRows.push(row);
+    else keepRows.push(row);
+  });
+  return {
+    sheetName: "Inventory_Ledger",
+    headers,
+    index,
+    rowsScanned: values.length - 1,
+    rowsToDelete: deleteRows.length,
+    rowsToKeep: keepRows.length,
+    deleteRows,
+    keepRows,
+  };
+}
+
+function cleanupPlanSum_(plan, field) {
+  const column = plan.index[field];
+  if (column === undefined) return 0;
+  return round2(plan.deleteRows.reduce(function(sum, row) { return sum + num(row[column]); }, 0));
 }
 
 function addRM(data = {}) {

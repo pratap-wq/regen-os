@@ -477,6 +477,9 @@ function validateMonthClosePayload_(data) {
     if (p.fn === "inventoryLedger.audit") return auditInventoryLedger(p);
     if (p.fn === "inventoryLedger.rebuild") return rebuildInventoryLedger(p);
     if (p.fn === "materialNormalization.preview") return output(previewSpreadsheetMaterialNormalization(p));
+    if (p.fn === "materialNormalization.whiteBucketsHistory") {
+      return output(migrateWhiteBucketHistoryToCanonical_(p));
+    }
     if (p.fn === "systemHealth.deepCheck") return output(systemHealthConnectivity(p));
     if (p.fn === "systemHealth.connectivity") return output(systemHealthConnectivity(p));
     if (p.fn === "materialFlow.auditJune2026") return auditJuneMaterialFlowV1(p);
@@ -665,6 +668,7 @@ function debugRoutes() {
       "inventoryLedger.audit",
       "inventoryLedger.rebuild",
       "materialNormalization.preview",
+      "materialNormalization.whiteBucketsHistory",
       "systemHealth.deepCheck",
       "systemHealth.connectivity",
       "materialFlow.auditJune2026",
@@ -7428,32 +7432,248 @@ function productionEntryControlledAvailability_(balances) {
     return summary;
   }, { qtyIn: 0, qtyOut: 0, rowCount: 0 });
 
-  if (bucketAliasSummary.rowCount > 0) {
-    const canonicalBalance = num(processAvailability.whiteBucketsKg);
-    const recordedNetKg = round2(canonicalBalance + bucketAliasSummary.qtyIn - bucketAliasSummary.qtyOut);
-    if (recordedNetKg < 0) {
-      processAvailability.whiteBucketsKg = null;
-      processAvailabilityStatus.whiteBucketsKg = {
-        status: "OPENING_REQUIRED",
-        recordedNetKg,
-        requiredOpeningKg: round2(Math.abs(recordedNetKg)),
-        historicalInKg: round2(bucketAliasSummary.qtyIn),
-        historicalOutKg: round2(bucketAliasSummary.qtyOut),
-        message: "Opening balance required before White Buckets can be consumed.",
-      };
-    } else {
-      processAvailability.whiteBucketsKg = recordedNetKg;
-      processAvailabilityStatus.whiteBucketsKg = {
-        status: "AVAILABLE",
-        recordedNetKg,
-        requiredOpeningKg: 0,
-        historicalInKg: round2(bucketAliasSummary.qtyIn),
-        historicalOutKg: round2(bucketAliasSummary.qtyOut),
-      };
-    }
+  const canonicalBucketBalance = num(processAvailability.whiteBucketsKg);
+  const recordedBucketNetKg = round2(canonicalBucketBalance + bucketAliasSummary.qtyIn - bucketAliasSummary.qtyOut);
+  if (recordedBucketNetKg < 0) {
+    processAvailability.whiteBucketsKg = null;
+    processAvailabilityStatus.whiteBucketsKg = {
+      status: "OPENING_REQUIRED",
+      recordedNetKg: recordedBucketNetKg,
+      requiredOpeningKg: round2(Math.abs(recordedBucketNetKg)),
+      historicalInKg: round2(bucketAliasSummary.qtyIn),
+      historicalOutKg: round2(bucketAliasSummary.qtyOut),
+      message: "Opening balance required before White Buckets can be consumed.",
+    };
+  } else if (bucketAliasSummary.rowCount > 0) {
+    processAvailability.whiteBucketsKg = recordedBucketNetKg;
+    processAvailabilityStatus.whiteBucketsKg = {
+      status: "AVAILABLE",
+      recordedNetKg: recordedBucketNetKg,
+      requiredOpeningKg: 0,
+      historicalInKg: round2(bucketAliasSummary.qtyIn),
+      historicalOutKg: round2(bucketAliasSummary.qtyOut),
+    };
   }
 
   return { processAvailability, processAvailabilityStatus, fieldByMaterialCode };
+}
+
+function migrateWhiteBucketHistoryToCanonical_(data) {
+  const dryRun = String(data && data.dryRun === undefined ? "true" : data.dryRun).toLowerCase() !== "false";
+  const lock = LockService.getScriptLock();
+  if (!dryRun && !lock.tryLock(30000)) {
+    return { ok: false, error: "White Buckets history migration is already running." };
+  }
+
+  try {
+    const spreadsheet = getSpreadsheet_();
+    const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd_HHmmss");
+    const targets = [
+      { sheetName: "RM_Inward", fields: ["material", "materialName", "materialSummary", "materialLines", "materialLinesJson"] },
+      { sheetName: "Wash_Batches", fields: ["inputMaterial", "feedComposition"] },
+      { sheetName: "Inventory_Ledger", ledger: true },
+    ];
+    const plans = targets.map(function(target) {
+      return whiteBucketHistoryMigrationPlanForSheet_(target);
+    });
+    const backups = [];
+
+    if (!dryRun) {
+      plans.filter(function(plan) { return plan.rowsToChange > 0; }).forEach(function(plan) {
+        const sheet = getSheet(plan.sheetName);
+        const backupName = whiteBucketHistoryBackupSheet_(spreadsheet, sheet, timestamp);
+        backups.push(backupName);
+        whiteBucketHistoryApplySheet_(plan.target);
+      });
+    }
+
+    const ledgerPlan = plans.find(function(plan) { return plan.sheetName === "Inventory_Ledger"; }) || {};
+    return {
+      ok: true,
+      route: "materialNormalization.whiteBucketsHistory",
+      dryRun,
+      canonicalMaterial: "White Buckets",
+      sheets: plans.map(function(plan) {
+        return {
+          sheetName: plan.sheetName,
+          rowsScanned: plan.rowsScanned,
+          rowsToChange: plan.rowsToChange,
+          cellsToChange: plan.cellsToChange,
+          originalNameCounts: plan.originalNameCounts,
+        };
+      }),
+      totals: {
+        rowsToChange: plans.reduce(function(sum, plan) { return sum + plan.rowsToChange; }, 0),
+        cellsToChange: plans.reduce(function(sum, plan) { return sum + plan.cellsToChange; }, 0),
+        ledgerQtyInKg: round2(ledgerPlan.ledgerQtyInKg),
+        ledgerQtyOutKg: round2(ledgerPlan.ledgerQtyOutKg),
+        ledgerNetKg: round2(num(ledgerPlan.ledgerQtyInKg) - num(ledgerPlan.ledgerQtyOutKg)),
+      },
+      backupSheets: backups,
+      message: dryRun
+        ? "Dry run only. No Google Sheets data was changed."
+        : "Historical bucket names were canonicalized to White Buckets. Quantities, dates, IDs and statuses were preserved.",
+    };
+  } finally {
+    if (!dryRun) lock.releaseLock();
+  }
+}
+
+function whiteBucketHistoryMigrationPlanForSheet_(target) {
+  const sheet = getSheet(target.sheetName);
+  const values = sheet.getDataRange().getValues();
+  const headers = values.length ? values[0].map(String) : [];
+  const result = {
+    target,
+    sheetName: target.sheetName,
+    rowsScanned: Math.max(0, values.length - 1),
+    rowsToChange: 0,
+    cellsToChange: 0,
+    originalNameCounts: {},
+    ledgerQtyInKg: 0,
+    ledgerQtyOutKg: 0,
+  };
+  const indexes = {};
+  headers.forEach(function(header, index) { indexes[header] = index; });
+
+  for (let rowIndex = 1; rowIndex < values.length; rowIndex += 1) {
+    const row = values[rowIndex];
+    let changed = false;
+    if (target.ledger) {
+      const itemName = indexes.itemName === undefined ? "" : row[indexes.itemName];
+      if (whiteBucketHistoryCanonicalName_(itemName) === "White Buckets" && String(itemName || "").trim() !== "White Buckets") {
+        changed = true;
+        result.cellsToChange += 1;
+        whiteBucketHistoryCountName_(result.originalNameCounts, itemName);
+        result.ledgerQtyInKg += indexes.qtyIn === undefined ? 0 : num(row[indexes.qtyIn]);
+        result.ledgerQtyOutKg += indexes.qtyOut === undefined ? 0 : num(row[indexes.qtyOut]);
+      }
+    } else {
+      (target.fields || []).forEach(function(field) {
+        if (indexes[field] === undefined) return;
+        const transformed = whiteBucketHistoryTransformCell_(row[indexes[field]]);
+        if (!transformed.changed) return;
+        changed = true;
+        result.cellsToChange += 1;
+        transformed.originalNames.forEach(function(name) { whiteBucketHistoryCountName_(result.originalNameCounts, name); });
+      });
+    }
+    if (changed) result.rowsToChange += 1;
+  }
+  return result;
+}
+
+function whiteBucketHistoryApplySheet_(target) {
+  const sheet = getSheet(target.sheetName);
+  if (target.ledger) ensureHeaders_(target.sheetName, ["materialId", "materialCode", "itemType", "itemName", "legacyMaterialName"]);
+  else ensureHeaders_(target.sheetName, ["legacyMaterialSnapshot"]);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const indexes = {};
+  headers.forEach(function(header, index) { indexes[header] = index; });
+  const whiteBuckets = getMaterialMasterRows_().find(function(row) {
+    return String(row.materialCode || "").toUpperCase() === "WHITE_BUCKETS" || String(row.materialName || "").trim() === "White Buckets";
+  });
+  if (!whiteBuckets) throw new Error("White Buckets is missing from Material_Master.");
+
+  for (let rowIndex = 1; rowIndex < values.length; rowIndex += 1) {
+    const row = values[rowIndex];
+    if (target.ledger) {
+      const originalName = indexes.itemName === undefined ? "" : row[indexes.itemName];
+      if (whiteBucketHistoryCanonicalName_(originalName) !== "White Buckets" || String(originalName || "").trim() === "White Buckets") continue;
+      if (!row[indexes.legacyMaterialName]) row[indexes.legacyMaterialName] = originalName;
+      row[indexes.itemName] = "White Buckets";
+      row[indexes.materialId] = whiteBuckets.materialId || "";
+      row[indexes.materialCode] = "WHITE_BUCKETS";
+      row[indexes.itemType] = "RM";
+      continue;
+    }
+
+    const snapshot = {};
+    (target.fields || []).forEach(function(field) {
+      if (indexes[field] === undefined) return;
+      const transformed = whiteBucketHistoryTransformCell_(row[indexes[field]]);
+      if (!transformed.changed) return;
+      snapshot[field] = row[indexes[field]];
+      row[indexes[field]] = transformed.value;
+    });
+    if (Object.keys(snapshot).length && !row[indexes.legacyMaterialSnapshot]) {
+      row[indexes.legacyMaterialSnapshot] = JSON.stringify(snapshot);
+    }
+  }
+  sheet.getRange(1, 1, values.length, headers.length).setValues(values);
+}
+
+function whiteBucketHistoryCanonicalName_(value) {
+  const text = String(value || "").trim().replace(/\s+/g, " ");
+  if (!text) return "";
+  const key = materialAliasKey_(text);
+  if (key === "BUCKET" || key === "BUCKETS") return "White Buckets";
+  return canonicalLegacyMaterialForInventory_(text) === "White Buckets" ? "White Buckets" : text;
+}
+
+function whiteBucketHistoryTransformCell_(value) {
+  if (value === undefined || value === null || value === "") return { changed: false, value, originalNames: [] };
+  const originalText = String(value);
+  try {
+    const parsed = JSON.parse(originalText);
+    const originalNames = [];
+    const changed = whiteBucketHistoryTransformJson_(parsed, originalNames);
+    return { changed, value: changed ? JSON.stringify(parsed) : value, originalNames };
+  } catch (ignore) {}
+
+  const parts = originalText.split(/\s+\+\s+/);
+  const originalNames = [];
+  const updated = parts.map(function(part) {
+    const colonIndex = part.indexOf(":");
+    const label = (colonIndex === -1 ? part : part.slice(0, colonIndex)).trim();
+    const canonical = whiteBucketHistoryCanonicalName_(label);
+    if (canonical !== "White Buckets" || label === canonical) return part;
+    originalNames.push(label);
+    return canonical + (colonIndex === -1 ? "" : part.slice(colonIndex));
+  });
+  return { changed: originalNames.length > 0, value: updated.join(" + "), originalNames };
+}
+
+function whiteBucketHistoryTransformJson_(value, originalNames) {
+  let changed = false;
+  if (Array.isArray(value)) {
+    value.forEach(function(item) { if (whiteBucketHistoryTransformJson_(item, originalNames)) changed = true; });
+    return changed;
+  }
+  if (!value || typeof value !== "object") return false;
+  const materialFields = ["material", "materialName", "materialType", "sourceType", "inputBucket", "itemName", "inputMaterial"];
+  Object.keys(value).forEach(function(key) {
+    if (materialFields.indexOf(key) !== -1) {
+      const original = String(value[key] || "").trim();
+      const canonical = whiteBucketHistoryCanonicalName_(original);
+      if (canonical === "White Buckets" && original !== canonical) {
+        originalNames.push(original);
+        value[key] = canonical;
+        changed = true;
+      }
+    } else if (typeof value[key] === "object" && whiteBucketHistoryTransformJson_(value[key], originalNames)) {
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+function whiteBucketHistoryCountName_(counts, value) {
+  const name = String(value || "").trim();
+  if (name) counts[name] = (counts[name] || 0) + 1;
+}
+
+function whiteBucketHistoryBackupSheet_(spreadsheet, sheet, timestamp) {
+  const base = (sheet.getName() + "_Backup_WhiteBuckets_" + timestamp).slice(0, 95);
+  let name = base;
+  let suffix = 1;
+  while (spreadsheet.getSheetByName(name)) {
+    name = (base.slice(0, 91) + "_" + suffix).slice(0, 95);
+    suffix += 1;
+  }
+  sheet.copyTo(spreadsheet).setName(name);
+  return name;
 }
 
 function addRM(data = {}) {

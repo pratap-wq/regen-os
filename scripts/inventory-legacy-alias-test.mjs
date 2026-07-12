@@ -101,6 +101,15 @@ assert.equal(openingRequired.processAvailability.whiteBucketsKg, null);
 assert.equal(openingRequired.processAvailabilityStatus.whiteBucketsKg.status, "OPENING_REQUIRED");
 assert.equal(openingRequired.processAvailabilityStatus.whiteBucketsKg.requiredOpeningKg, 287771);
 assert.equal(openingRequired.processAvailability.unwashedRegrindKg, 400);
+assert.equal(evaluate('whiteBucketHistoryTransformCell_("Mixed PPCP Buckets").value'), "White Buckets");
+assert.equal(
+  evaluate('whiteBucketHistoryTransformCell_("Flakes - Unwashed: 5000 Kg + Mixed PPCP Buckets: 1611 Kg").value'),
+  "Flakes - Unwashed: 5000 Kg + White Buckets: 1611 Kg"
+);
+assert.equal(
+  evaluate('whiteBucketHistoryTransformCell_(JSON.stringify([{ materialType: "White PPCP Buckets", qtyKg: 500 }])).value'),
+  '[{"materialType":"White Buckets","qtyKg":500}]'
+);
 
 const cutoverPreview = evaluate("getInventoryCutoverPreview({})");
 const previewWhiteBuckets = cutoverPreview.rows.find((row) => row.materialName === "White Buckets");
@@ -138,4 +147,4 @@ assert.throws(
   /canonical Material_Master/
 );
 
-console.log("Inventory legacy material normalization regression checks passed (29/29).");
+console.log("Inventory legacy material normalization regression checks passed (32/32).");

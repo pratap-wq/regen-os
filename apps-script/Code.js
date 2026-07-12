@@ -489,6 +489,9 @@ function validateMonthClosePayload_(data) {
     if (p.fn === "dataCleanup.removeLegacyBulkProductionHistory") {
       return output(removeLegacyBulkProductionHistory_(p));
     }
+    if (p.fn === "dataCleanup.resetMonthCloseTestSnapshots") {
+      return output(resetMonthCloseTestSnapshots_(p));
+    }
     if (p.fn === "systemHealth.deepCheck") return output(systemHealthConnectivity(p));
     if (p.fn === "systemHealth.connectivity") return output(systemHealthConnectivity(p));
     if (p.fn === "materialFlow.auditJune2026") return auditJuneMaterialFlowV1(p);
@@ -8153,6 +8156,97 @@ function cleanupPlanSum_(plan, field) {
   const column = plan.index[field];
   if (column === undefined) return 0;
   return round2(plan.deleteRows.reduce(function(sum, row) { return sum + num(row[column]); }, 0));
+}
+
+function resetMonthCloseTestSnapshots_(data) {
+  const dryRun = String(data && data.dryRun === undefined ? "true" : data.dryRun).toLowerCase() !== "false";
+  const confirmation = String(data && data.confirm || "").trim();
+  if (!dryRun && confirmation !== "RESET_MONTH_CLOSE_TEST_SNAPSHOTS") {
+    return { ok: false, error: "Live cleanup requires confirm=RESET_MONTH_CLOSE_TEST_SNAPSHOTS" };
+  }
+  const lock = LockService.getScriptLock();
+  if (!dryRun && !lock.tryLock(30000)) return { ok: false, error: "Month Close cleanup is already running." };
+  try {
+    const physicalPlan = allDataRowsCleanupPlan_("Physical_Counts");
+    const adjustmentPlan = allDataRowsCleanupPlan_("Inventory_Adjustments");
+    const adjustmentIds = {};
+    const adjustmentIdIndex = adjustmentPlan.index.adjustmentId;
+    adjustmentPlan.deleteRows.forEach(function(row) {
+      const id = String(row[adjustmentIdIndex] || "").trim();
+      if (id) adjustmentIds[id] = true;
+    });
+    const ledgerPlan = ledgerAdjustmentCleanupPlan_(adjustmentIds);
+    const plans = [physicalPlan, adjustmentPlan, ledgerPlan];
+    let archiveSpreadsheet = null;
+    if (!dryRun && plans.some(function(plan) { return plan.deleteRows.length > 0; })) {
+      const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd_HHmmss");
+      archiveSpreadsheet = SpreadsheetApp.create("RegenOS_MonthCloseTestSnapshots_Archive_" + timestamp);
+      preJuneCutoverWriteArchive_(archiveSpreadsheet, plans.filter(function(plan) { return plan.deleteRows.length > 0; }));
+      plans.forEach(function(plan) { if (plan.deleteRows.length) preJuneCutoverApplyPlan_(plan); });
+      resetSpreadsheetRequestCache_();
+    }
+    return {
+      ok: true,
+      route: "dataCleanup.resetMonthCloseTestSnapshots",
+      dryRun,
+      physicalCountRows: physicalPlan.deleteRows.length,
+      adjustmentRows: adjustmentPlan.deleteRows.length,
+      adjustmentLedgerRows: ledgerPlan.deleteRows.length,
+      archiveSpreadsheetId: archiveSpreadsheet ? archiveSpreadsheet.getId() : "",
+      archiveSpreadsheetUrl: archiveSpreadsheet ? archiveSpreadsheet.getUrl() : "",
+      message: dryRun ? "Dry run only. No data was changed." : "Test physical counts and adjustments were archived and removed.",
+    };
+  } finally {
+    if (!dryRun) lock.releaseLock();
+  }
+}
+
+function allDataRowsCleanupPlan_(sheetName) {
+  const sheet = getSheet(sheetName);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const index = {};
+  headers.forEach(function(header, column) { index[header] = column; });
+  return {
+    sheetName,
+    headers,
+    index,
+    rowsScanned: Math.max(0, values.length - 1),
+    rowsToDelete: Math.max(0, values.length - 1),
+    rowsToKeep: 0,
+    deleteRows: values.slice(1),
+    keepRows: [],
+  };
+}
+
+function ledgerAdjustmentCleanupPlan_(adjustmentIds) {
+  const sheet = getSheet("Inventory_Ledger");
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const index = {};
+  headers.forEach(function(header, column) { index[header] = column; });
+  const deleteRows = [];
+  const keepRows = [];
+  values.slice(1).forEach(function(row) {
+    const moduleName = String(row[index.module] || "").trim().toUpperCase();
+    const refs = [row[index.sourceRef], row[index.targetRef], row[index.legacySourceId]].map(function(value) {
+      return String(value || "").trim();
+    });
+    const matches = ["ADJUSTMENT", "INVENTORY_ADJUSTMENT", "MONTH_CLOSE_ADJUSTMENT"].indexOf(moduleName) !== -1 &&
+      refs.some(function(ref) { return Boolean(adjustmentIds[ref]); });
+    if (matches) deleteRows.push(row);
+    else keepRows.push(row);
+  });
+  return {
+    sheetName: "Inventory_Ledger",
+    headers,
+    index,
+    rowsScanned: values.length - 1,
+    rowsToDelete: deleteRows.length,
+    rowsToKeep: keepRows.length,
+    deleteRows,
+    keepRows,
+  };
 }
 
 function addRM(data = {}) {

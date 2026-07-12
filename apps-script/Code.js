@@ -483,6 +483,9 @@ function validateMonthClosePayload_(data) {
     if (p.fn === "dataCutover.deleteBeforeJune2026") {
       return output(deleteOperationalDataBeforeJune2026_(p));
     }
+    if (p.fn === "dataCleanup.removeUnlinkedWhiteBucketWashHistory") {
+      return output(removeUnlinkedWhiteBucketWashHistory_(p));
+    }
     if (p.fn === "systemHealth.deepCheck") return output(systemHealthConnectivity(p));
     if (p.fn === "systemHealth.connectivity") return output(systemHealthConnectivity(p));
     if (p.fn === "materialFlow.auditJune2026") return auditJuneMaterialFlowV1(p);
@@ -7844,6 +7847,143 @@ function preJuneCutoverApplyPlan_(plan) {
   sheet.clearContents();
   sheet.getRange(1, 1, rows.length, plan.headers.length).setValues(rows);
   sheet.setFrozenRows(1);
+}
+
+/**
+ * One-time UAT cleanup for the confirmed bulk-imported Wash history that has no
+ * RM Inward or Grinder source. A separate archive spreadsheet is created before
+ * live rows are removed. The live action requires an explicit confirmation.
+ */
+function removeUnlinkedWhiteBucketWashHistory_(data) {
+  const dryRun = String(data && data.dryRun === undefined ? "true" : data.dryRun).toLowerCase() !== "false";
+  const confirmation = String(data && data.confirm || "").trim();
+  if (!dryRun && confirmation !== "DELETE_UNLINKED_WHITE_BUCKET_WASH") {
+    return {
+      ok: false,
+      route: "dataCleanup.removeUnlinkedWhiteBucketWashHistory",
+      error: "Live cleanup requires confirm=DELETE_UNLINKED_WHITE_BUCKET_WASH",
+    };
+  }
+
+  const lock = LockService.getScriptLock();
+  if (!dryRun && !lock.tryLock(30000)) {
+    return { ok: false, error: "White Buckets Wash cleanup is already running." };
+  }
+
+  try {
+    const washPlan = unlinkedWhiteBucketWashPlan_();
+    const batchIds = {};
+    washPlan.deleteRows.forEach(function(row) {
+      const id = String(row[washPlan.idIndex] || "").trim();
+      if (id) batchIds[id] = true;
+    });
+    const ledgerPlan = ledgerRowsForBatchCleanupPlan_(batchIds);
+    let archiveSpreadsheet = null;
+
+    if (!dryRun && washPlan.deleteRows.length) {
+      const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd_HHmmss");
+      archiveSpreadsheet = SpreadsheetApp.create("RegenOS_UnlinkedWhiteBucketWash_Archive_" + timestamp);
+      preJuneCutoverWriteArchive_(archiveSpreadsheet, [washPlan, ledgerPlan].filter(function(plan) {
+        return plan.deleteRows.length > 0;
+      }));
+      preJuneCutoverApplyPlan_(washPlan);
+      if (ledgerPlan.deleteRows.length) preJuneCutoverApplyPlan_(ledgerPlan);
+      resetSpreadsheetRequestCache_();
+    }
+
+    return {
+      ok: true,
+      route: "dataCleanup.removeUnlinkedWhiteBucketWashHistory",
+      dryRun,
+      washRowsToDelete: washPlan.deleteRows.length,
+      washInputKgToRemove: round2(washPlan.deleteRows.reduce(function(sum, row) {
+        return sum + num(row[washPlan.inputKgIndex]);
+      }, 0)),
+      ledgerRowsToDelete: ledgerPlan.deleteRows.length,
+      ledgerQtyInToRemove: round2(ledgerPlan.deleteRows.reduce(function(sum, row) {
+        return sum + num(row[ledgerPlan.qtyInIndex]);
+      }, 0)),
+      ledgerQtyOutToRemove: round2(ledgerPlan.deleteRows.reduce(function(sum, row) {
+        return sum + num(row[ledgerPlan.qtyOutIndex]);
+      }, 0)),
+      batchIds: Object.keys(batchIds).sort(),
+      archiveSpreadsheetId: archiveSpreadsheet ? archiveSpreadsheet.getId() : "",
+      archiveSpreadsheetUrl: archiveSpreadsheet ? archiveSpreadsheet.getUrl() : "",
+      message: dryRun
+        ? "Dry run only. No data was changed."
+        : "Unlinked bulk Wash rows and only their matching ledger movements were archived and removed.",
+    };
+  } finally {
+    if (!dryRun) lock.releaseLock();
+  }
+}
+
+function unlinkedWhiteBucketWashPlan_() {
+  const sheet = getSheet("Wash_Batches");
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const index = {};
+  headers.forEach(function(header, column) { index[header] = column; });
+  const idIndex = index.washBatchId;
+  const inputKgIndex = index.inputWeightKg;
+  const deleteRows = [];
+  const keepRows = [];
+
+  values.slice(1).forEach(function(row) {
+    const status = String(row[index.status] || "").trim().toUpperCase();
+    const inputMaterial = String(row[index.inputMaterial] || "").trim();
+    const feedComposition = String(row[index.feedComposition] || "");
+    const sourceRm = String(row[index.sourceRmInwardId] || row[index.sourceRMId] || "").trim();
+    const sourceGrinder = String(row[index.sourceGrinderBatchId] || "").trim();
+    const createdAt = normalizeDateOnly_(row[index.createdAt]);
+    const containsWhiteBuckets = inputMaterial === "White Buckets" || /White Buckets/i.test(feedComposition);
+    const isConfirmedBulkWindow = createdAt >= "2026-06-22" && createdAt <= "2026-07-07";
+    const active = ["DELETED", "VOID", "VOIDED", "INACTIVE", "ARCHIVED"].indexOf(status) === -1;
+    if (active && containsWhiteBuckets && !sourceRm && !sourceGrinder && isConfirmedBulkWindow) deleteRows.push(row);
+    else keepRows.push(row);
+  });
+
+  return {
+    sheetName: "Wash_Batches",
+    headers,
+    rowsScanned: values.length - 1,
+    rowsToDelete: deleteRows.length,
+    rowsToKeep: keepRows.length,
+    deleteRows,
+    keepRows,
+    idIndex,
+    inputKgIndex,
+  };
+}
+
+function ledgerRowsForBatchCleanupPlan_(batchIds) {
+  const sheet = getSheet("Inventory_Ledger");
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const index = {};
+  headers.forEach(function(header, column) { index[header] = column; });
+  const deleteRows = [];
+  const keepRows = [];
+  values.slice(1).forEach(function(row) {
+    const moduleName = String(row[index.module] || "").trim().toUpperCase();
+    const refs = [row[index.sourceRef], row[index.targetRef], row[index.legacySourceId]].map(function(value) {
+      return String(value || "").trim();
+    });
+    const matches = moduleName === "WASH" && refs.some(function(ref) { return Boolean(batchIds[ref]); });
+    if (matches) deleteRows.push(row);
+    else keepRows.push(row);
+  });
+  return {
+    sheetName: "Inventory_Ledger",
+    headers,
+    rowsScanned: values.length - 1,
+    rowsToDelete: deleteRows.length,
+    rowsToKeep: keepRows.length,
+    deleteRows,
+    keepRows,
+    qtyInIndex: index.qtyIn,
+    qtyOutIndex: index.qtyOut,
+  };
 }
 
 function addRM(data = {}) {
